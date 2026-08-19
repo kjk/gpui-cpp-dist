@@ -22,7 +22,7 @@ No other dependencies, no build system, no STL containers.
 
 ## This copy
 
-Amalgamated from gpui-cpp [`a91248de04f1`](https://github.com/kjk/gpui-cpp/commit/a91248de04f13e7b5fd2f29e96f120a3c72e9d45) — cmd: the amalgam is published to its own repo, built and proven before it goes
+Amalgamated from gpui-cpp [`d18bdc671e08`](https://github.com/kjk/gpui-cpp/commit/d18bdc671e08ad05316f01140352fbf776979e63) — cmd: the in-repo dist/ target goes with the directory
 
-[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/a91248de04f13e7b5fd2f29e96f120a3c72e9d45...main)
+[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/d18bdc671e08ad05316f01140352fbf776979e63...main)
 shows every commit this copy is behind by; if that page is empty, it is current.
