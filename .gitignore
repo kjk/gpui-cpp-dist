@@ -1,0 +1,9 @@
+.work/
+out/
+.emsdk/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib

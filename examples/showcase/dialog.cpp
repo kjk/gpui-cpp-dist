@@ -1,0 +1,123 @@
+#include "Showcase.h"
+#include "gpui.h"
+
+using namespace gpui;
+
+static void OpenDlg(ShowcaseApp* app, Ctx* cx, const ClickEvent*) {
+    app->dialogOpen = true;
+    app->input.focused = true;
+    Notify(cx);
+}
+
+static void CloseDlg(ShowcaseApp* app, Ctx* cx, const ClickEvent*) {
+    app->dialogOpen = false;
+    app->input.focused = false;
+    Notify(cx);
+}
+
+static void FocusDlgField(ShowcaseApp* app, Ctx* cx, const ClickEvent*) {
+    app->input.focused = true;
+    Notify(cx);
+}
+
+El* ShowcaseDialog(ShowcaseApp* app, Ctx* cx) {
+    Arena* a = cx->a;
+    El* root = Div(a)->FlexCol();
+    root->Child(Button::New(cx, StrL("open-dialog"))
+                    ->OnClick(Listen(cx, &OpenDlg))
+                    ->H(28)
+                    ->PadX(12)
+                    ->ItemsCenter()
+                    ->JustifyCenter()
+                    ->Bg(Rgb(0, 0, 0))
+                    ->Child(TextEl(a, StrL("Edit profile"))
+                                ->Font(12)
+                                ->Fg(Rgb(0xff, 0xff, 0xff))));
+    if (!app->dialogOpen) {
+        return root;
+    }
+    El* panel =
+        Div(a)
+            ->W(288)
+            ->Pad(12)
+            ->FlexCol()
+            ->Bg(Rgb(0xff, 0xff, 0xff))
+            ->Border(1, Rgb(0xd4, 0xd4, 0xd4))
+            ->Child(DialogTitle::New(cx)->Child(TextEl(a, StrL("Edit profile"))
+                                                    ->Font(12)
+                                                    ->Fg(Rgb(0x17, 0x17, 0x17))
+                                                    ->Semibold()))
+            ->Child(DialogDescription::New(cx)->Child(
+                TextEl(a,
+                       StrL("Update the public details shown on your profile."))
+                    ->Font(12)
+                    ->Fg(Rgb(0x73, 0x73, 0x73))
+                    ->Wrap()
+                    ->MaxW(264)))
+            ->Child(Div(a)->PadT(12)->Child(TextEl(a, StrL("Display name"))
+                                                ->Font(14)
+                                                ->Fg(Rgb(0x17, 0x17, 0x17))))
+            ->Child(InputBase::New(cx, StrL("dialog-name"), true)
+                        ->OnClick(Listen(cx, &FocusDlgField))
+                        ->FocusId(0)
+                        ->W(264)
+                        ->H(28)
+                        ->PadX(8)
+                        ->ItemsCenter()
+                        ->Border(1, Rgb(0xd4, 0xd4, 0xd4))
+                        ->Child(Input::New(cx, &app->input)))
+            ->Child(
+                Div(a)
+                    ->PadT(12)
+                    ->FlexRow()
+                    ->JustifyEnd()
+                    ->Gap(8)
+                    // Rust hangs Cancel off DialogClose, which dispatches the
+                    // Cancel action. The button inside carries a click id of
+                    // its own and the hit test takes the innermost rect, so
+                    // it needs the handler too.
+                    ->Child(
+                        DialogClose::New(cx, HashClickId(StrL("dialog-close")))
+                            ->OnClick(Listen(cx, &CloseDlg))
+                            ->Child(
+                                Button::New(cx, StrL("dialog-cancel"), false,
+                                            Listen(cx, &CloseDlg))
+                                    ->H(28)
+                                    ->PadX(12)
+                                    ->ItemsCenter()
+                                    ->Border(1, Rgb(0xd4, 0xd4, 0xd4))
+                                    ->Child(TextEl(a, StrL("Cancel"))
+                                                ->Font(12)
+                                                ->Fg(Rgb(0x17, 0x17, 0x17)))))
+                    ->Child(Button::New(cx, StrL("dialog-save"), false,
+                                        Listen(cx, &CloseDlg))
+                                ->H(28)
+                                ->PadX(12)
+                                ->ItemsCenter()
+                                ->Bg(Rgb(0x17, 0x17, 0x17))
+                                ->Child(TextEl(a, StrL("Save changes"))
+                                            ->Font(12)
+                                            ->Fg(Rgb(0xff, 0xff, 0xff)))));
+    El* backdrop = DialogBackdrop::New(cx)
+                       ->Absolute()
+                       ->Top(0)
+                       ->Left(0)
+                       ->W(kFill)
+                       ->H(kFill)
+                       ->Bg(Rgba8(0, 0, 0, 51))
+                       ->Click(HashClickId(StrL("dialog-backdrop")))
+                       ->OnClick(Listen(cx, &CloseDlg));
+    El* popup = DialogPopup::New(cx)
+                    ->Absolute()
+                    ->Top(0)
+                    ->Left(0)
+                    ->W(kFill)
+                    ->H(kFill)
+                    ->ItemsCenter()
+                    ->JustifyCenter()
+                    ->Child(panel);
+    root->Child(Dialog::New(cx)->Backdrop(backdrop)->Popup(popup)->IntoEl());
+    return root;
+}
+
+SHOWCASE_PAGE(CompDialog, ShowcaseDialog);
