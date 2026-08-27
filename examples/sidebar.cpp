@@ -50,7 +50,7 @@ static void SetActive(SidebarApp* app, Ctx* cx, const ClickEvent*,
 
 El* SidebarApp::Render(SidebarApp* app, Ctx* cx) {
     Arena* frame = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     bool collapsed = app->collapsed;
     bool iconCollapsed =
         collapsed && kModes[app->mode] == component::SidebarCollapsible::Icon;
@@ -124,8 +124,8 @@ El* SidebarApp::Render(SidebarApp* app, Ctx* cx) {
         component::Sidebar::New(cx, StrL("sidebar"))
             ->Collapsible(kModes[app->mode])
             ->Collapsed(collapsed)
-            ->Header(component::SidebarHeader(cx, brand))
-            ->Footer(component::SidebarFooter(cx, user))
+            ->Header(component::SidebarHeader::New(cx)->Child(brand))
+            ->Footer(component::SidebarFooter::New(cx)->Child(user))
             ->Child(component::SidebarGroup::New(cx, StrL("Application"))
                         ->Child(menu))
             ->IntoEl());
@@ -174,6 +174,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     Entity<SidebarApp> view = EntityNew<SidebarApp>(app);
     ThemeSet(app, ThemeMode::Light);
     AssetsClear();

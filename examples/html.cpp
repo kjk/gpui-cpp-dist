@@ -39,7 +39,7 @@ static void OnPreviewScroll(HtmlApp* self, Ctx* cx, const ScrollEvent* ev) {
 
 El* HtmlApp::Render(HtmlApp* self, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     if (!self->seeded) {
         self->seeded = true;
     }
@@ -92,6 +92,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     AssetsClear();
     AssetsAddDefaultRoots(StrL("html"));
     AssetsAddRoot(StrL("assets/html"));

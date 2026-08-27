@@ -7,7 +7,7 @@ using namespace gpui;
 struct Example {
     static El* Render(Example*, Ctx* cx) {
         Arena* a = cx->a;
-        const Theme& th = cx->theme();
+        const Theme& th = ThemeNow(cx->app);
         // Rust Icon default is size_4 / text size = 16px, two icons, gap_2.
         return Div(a)
             ->FlexCol()
@@ -25,6 +25,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     ThemeSet(app, ThemeMode::Light);
     AssetsClear();
     AssetsAddDefaultRoots(StrL("app_assets"));

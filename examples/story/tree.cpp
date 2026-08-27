@@ -35,10 +35,9 @@ void TreeStory::OnRevealRandom(TreeStory* self, Ctx* cx, const ClickEvent*) {
         return;
     }
     int item = (int)((uint64_t)(TimeNow() * 1000.0) % (uint64_t)s->items.len);
-    int ix = TreeRevealItem(s, s->items[item].id);
+    int ix = TreeRevealItem(s, cx, s->items[item].id, ScrollStrategy::Center);
     if (ix >= 0) {
         s->selected = ix;
-        TreeScrollToItem(s, ix, ScrollStrategy::Center);
     }
     Notify(cx);
 }
@@ -115,7 +114,7 @@ static void LoadDir(TreeState* s, const char* path, int parent, int depth) {
 
 El* TreeStory::Render(TreeStory* self, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     if (!self->loaded) {
         self->loaded = true;
         self->tree = EntityNewState<TreeState>(cx->app);

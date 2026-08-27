@@ -17,7 +17,7 @@ struct Example {
 
     static El* Render(Example* self, Ctx* cx) {
         Arena* a = cx->a;
-        const Theme& th = cx->theme();
+        const Theme& th = ThemeNow(cx->app);
         if (!self->subscribed) {
             self->subscribed = true;
             self->inputState.onChange =
@@ -44,6 +44,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     ThemeSet(app, ThemeMode::Light);
     Entity<Example> view = EntityNew<Example>(app);
     Example* self = view.Get(app);

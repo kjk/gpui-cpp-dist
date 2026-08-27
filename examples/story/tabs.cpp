@@ -107,7 +107,7 @@ static const int kTabCount = 8;
 
 El* TabsStory::Render(TabsStory* self, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     El* page = Div(a)->FlexCol()->Gap(12)->W(kFill);
     Listener openMenu = Listen(cx, &TabsMenuOpen);
     Listener act = Listen(cx, &TabsMenuAct);
@@ -172,8 +172,8 @@ El* TabsStory::Render(TabsStory* self, Ctx* cx) {
         const VariantRow& row = kVariants[v];
         El* sec = StorySection(cx, row.title, nullptr);
         StorySectionBody(sec)->W(kFill);
-        component::Tabs* bar =
-            component::Tabs::New(cx, StoryFmt(cx, "tabs-%d", (int)v))
+        component::TabBar* bar =
+            component::TabBar::New(cx, StoryFmt(cx, "tabs-%d", (int)v))
                 ->WFill()
                 ->Variant(row.variant)
                 ->Size(self->toolbar.size)

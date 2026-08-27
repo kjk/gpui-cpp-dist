@@ -3058,6 +3058,8 @@ using namespace base;
 
 namespace gpui {
 
+struct App;
+
 struct Rgba {
     uint8_t r = 0;
     uint8_t g = 0;
@@ -3122,6 +3124,15 @@ struct Background {
     Background(Rgba c) : color(c) {}
 };
 
+struct BoxShadow {
+    float x = 0;
+    float y = 0;
+    float blur = 0;
+    float spread = 0;
+    Rgba color = {};
+    bool inset = false;
+};
+
 Background BackgroundLinear(float angle, ColorStop from, ColorStop to);
 inline ColorStop ColorStopAt(Rgba c, float pct) {
     return ColorStop{c, pct};
@@ -3140,274 +3151,6 @@ constexpr float kAuto = -1.f;
 constexpr float kFill = -2.f;
 constexpr float kPi = 3.14159265358979f;
 
-struct App;
-
-struct ThemeTokens {
-    Background background = {};
-    Background titleBar = {};
-    Background statusBar = {};
-    Background tabBar = {};
-    Background tabActiveBg = {};
-    Background primary = {};
-    Background secondary = {};
-    Background accent = {};
-    Background muted = {};
-    Background popover = {};
-    Background danger = {};
-    Background info = {};
-    Background success = {};
-    Background warning = {};
-    Background progress = {};
-    Background scrollbarThumb = {};
-    Background scrollbarThumbHover = {};
-    Background skeleton = {};
-    Background selection = {};
-    Background listActive = {};
-    Background tableBg = {};
-    Background tableActive = {};
-    Background tableEven = {};
-    Background tableHead = {};
-    Background tableFoot = {};
-    Background sidebarAccent = {};
-    Background sidebarPrimary = {};
-    Background overlay = {};
-    Background switchThumb = {};
-    Background sliderThumb = {};
-
-    Background button = {};
-    Background buttonHover = {};
-    Background buttonActive = {};
-    Background primaryHover = {};
-    Background primaryActive = {};
-    Background buttonPrimary = {};
-    Background buttonPrimaryHover = {};
-    Background buttonPrimaryActive = {};
-    Background secondaryHover = {};
-    Background secondaryActive = {};
-    Background buttonSecondary = {};
-    Background buttonSecondaryHover = {};
-    Background buttonSecondaryActive = {};
-    Background successHover = {};
-    Background successActive = {};
-    Background buttonSuccess = {};
-    Background buttonSuccessHover = {};
-    Background buttonSuccessActive = {};
-    Background infoHover = {};
-    Background infoActive = {};
-    Background buttonInfo = {};
-    Background buttonInfoHover = {};
-    Background buttonInfoActive = {};
-    Background warningHover = {};
-    Background warningActive = {};
-    Background buttonWarning = {};
-    Background buttonWarningHover = {};
-    Background buttonWarningActive = {};
-    Background dangerHover = {};
-    Background dangerActive = {};
-    Background buttonDanger = {};
-    Background buttonDangerHover = {};
-    Background buttonDangerActive = {};
-    Background accordion = {};
-    Background dropTarget = {};
-    Background list = {};
-    Background listEven = {};
-    Background listHead = {};
-    Background listHover = {};
-    Background sliderBar = {};
-    Background switchBg = {};
-    Background tab = {};
-    Background tabBarSegmented = {};
-    Background tableHover = {};
-    Background tiles = {};
-    Background scrollbarBg = {};
-    Background sidebar = {};
-    Background groupBox = {};
-    Background descListLabel = {};
-};
-
-struct Theme {
-    Rgba background;
-    Rgba foreground;
-    Rgba border;
-    Rgba mutedFg;
-
-    Rgba inputBorder;
-    Rgba inputBg;
-
-    Rgba ring;
-    Rgba caret;
-
-    Rgba selection;
-
-    Rgba dragBorder;
-    Rgba titleBar;
-    Rgba titleBarBorder;
-
-    Rgba statusBar;
-
-    Rgba statusBarBorder;
-    Rgba tabBar;
-    Rgba tabActiveBg;
-    Rgba tabActiveFg;
-    Rgba tabFg;
-    Rgba tableBg;
-    Rgba tableHead;
-    Rgba tableHeadFg;
-
-    Rgba tableFoot;
-    Rgba tableFootFg;
-    Rgba tableRowBorder;
-    Rgba tableEven;
-
-    Rgba listActive;
-    Rgba listActiveBorder;
-    Rgba tableActive;
-    Rgba tableActiveBorder;
-    Rgba progress;
-    Rgba red;
-    Rgba green;
-    Rgba blue;
-    Rgba yellow;
-    Rgba cyan;
-    Rgba magenta;
-
-    Rgba redLight;
-    Rgba greenLight;
-    Rgba blueLight;
-    Rgba yellowLight;
-    Rgba cyanLight;
-    Rgba magentaLight;
-
-    Rgba chart1;
-    Rgba chart2;
-    Rgba chart3;
-    Rgba chart4;
-    Rgba chart5;
-    Rgba chartBullish;
-    Rgba chartBearish;
-    Rgba danger;
-    Rgba dangerFg;
-
-    Rgba popover;
-    Rgba popoverFg;
-    Rgba secondaryHover;
-    Rgba secondaryActive;
-    Rgba secondaryFg;
-    Rgba secondary;
-    Rgba muted;
-    Rgba accent;
-
-    Rgba accentFg;
-    Rgba primary;
-    Rgba primaryFg;
-    Rgba primaryHover;
-    Rgba primaryActive;
-    Rgba sidebar;
-    Rgba sidebarFg;
-    Rgba sidebarPrimary;
-    Rgba sidebarPrimaryFg;
-    Rgba sidebarAccent;
-    Rgba sidebarAccentFg;
-    Rgba sidebarBorder;
-    Rgba scrollbarThumb;
-
-    Rgba scrollbarThumbHover;
-
-    Rgba scrollbarBg;
-    Rgba info;
-    Rgba infoFg;
-    Rgba success;
-    Rgba successFg;
-    Rgba warning;
-    Rgba warningFg;
-    Rgba skeleton;
-
-    Rgba switchThumb;
-    Rgba sliderThumb;
-
-    Rgba overlay;
-
-    Rgba groupBox;
-    Rgba groupBoxFg;
-
-    Rgba descListLabel;
-    Rgba descListLabelFg;
-
-    Rgba button;
-    Rgba buttonFg;
-    Rgba buttonHover;
-    Rgba buttonActive;
-    Rgba buttonPrimary;
-    Rgba buttonPrimaryFg;
-    Rgba buttonPrimaryHover;
-    Rgba buttonPrimaryActive;
-    Rgba buttonSecondary;
-    Rgba buttonSecondaryFg;
-    Rgba buttonSecondaryHover;
-    Rgba buttonSecondaryActive;
-    Rgba buttonDanger;
-    Rgba buttonDangerFg;
-    Rgba buttonDangerHover;
-    Rgba buttonDangerActive;
-    Rgba buttonSuccess;
-    Rgba buttonSuccessFg;
-    Rgba buttonSuccessHover;
-    Rgba buttonSuccessActive;
-    Rgba buttonInfo;
-    Rgba buttonInfoFg;
-    Rgba buttonInfoHover;
-    Rgba buttonInfoActive;
-    Rgba buttonWarning;
-    Rgba buttonWarningFg;
-    Rgba buttonWarningHover;
-    Rgba buttonWarningActive;
-
-    Rgba dangerHover;
-    Rgba dangerActive;
-    Rgba successHover;
-    Rgba successActive;
-    Rgba infoHover;
-    Rgba infoActive;
-    Rgba warningHover;
-    Rgba warningActive;
-
-    Rgba accordion;
-
-    Rgba dropTarget;
-
-    Rgba link;
-    Rgba linkActive;
-    Rgba linkHover;
-
-    Rgba list;
-    Rgba listEven;
-    Rgba listHead;
-    Rgba listHover;
-    Rgba tableHover;
-
-    Rgba sliderBar;
-
-    Rgba switchBg;
-
-    Rgba tab;
-    Rgba tabBarSegmented;
-
-    Rgba tiles;
-
-    Rgba windowBorder;
-
-    float radius;
-    float radiusLg;
-
-    float radiusFull;
-
-    ThemeTokens tokens = {};
-};
-
-void ThemeTokensReset(Theme* t);
-
-void ThemeFillDerived(Theme* t, bool dark);
-
 Rgba RgbaTransparent();
 
 Rgba RgbaBlend(Rgba base, Rgba over);
@@ -3418,32 +3161,6 @@ Rgba RgbaDarken(Rgba c, float amount);
 Str RgbaToHex(Arena* a, Rgba c, bool upper = true);
 
 Rgba RgbaMixOklab(Rgba a, Rgba b, float factor);
-
-enum class ThemeMode : uint8_t {
-    Light,
-    Dark
-};
-
-const Theme& ThemeDark();
-const Theme& ThemeLight();
-
-const Theme& ThemeDefaultDark();
-const Theme& ThemeDefaultLight();
-
-void ThemeInstall(ThemeMode mode, const Theme& t);
-
-void ThemeSetRadius(float radius);
-
-float ThemeFontSize();
-
-float WheelNotchPixels();
-void ThemeSetFontSize(float px);
-
-bool ThemeFocusRing();
-void ThemeSetFocusRing(bool on);
-const Theme& ThemeNow();
-void ThemeSet(App* app, ThemeMode mode);
-ThemeMode ThemeGet();
 
 enum class Axis : uint8_t {
     Horizontal,
@@ -3563,6 +3280,13 @@ enum class TouchPhase : uint8_t {
     Moved,
     Ended,
     Cancelled
+};
+
+struct OngoingScroll {
+    Axis axis = Axis::Horizontal;
+    bool active = false;
+
+    void Filter(Point* delta, TouchPhase phase);
 };
 
 enum class DispatchPhase : uint8_t {
@@ -3810,7 +3534,8 @@ enum class FlexDir : uint8_t {
     RowReverse,
     ColReverse
 };
-enum class Align : uint8_t {
+
+enum class FlexAlign : uint8_t {
     Start,
     Center,
     End,
@@ -3836,6 +3561,38 @@ enum class ScrollbarMode : uint8_t {
     Scrolling
 };
 
+struct RuntimeStyle {
+    Rgba background = Rgb(0xfa, 0xfa, 0xfa);
+    Rgba foreground = Rgb(0x17, 0x17, 0x17);
+    Rgba mutedForeground = Rgb(0x73, 0x73, 0x73);
+    Rgba border = Rgb(0xe5, 0xe5, 0xe5);
+    Rgba ring = Rgb(0x17, 0x17, 0x17);
+    Rgba inspectorAccent = Rgb(0x3b, 0x82, 0xf6);
+    Rgba popover = Rgb(0xfa, 0xfa, 0xfa);
+    Rgba popoverForeground = Rgb(0x17, 0x17, 0x17);
+    Background progress = Background(Rgb(0x17, 0x17, 0x17));
+    Background scrollbarThumb = Background(Rgba8(0x17, 0x17, 0x17, 0x33));
+    Background scrollbarThumbHover = Background(Rgba8(0x17, 0x17, 0x17, 0x66));
+    Background scrollbarTrack = Background(Rgba8(0, 0, 0, 0));
+
+    Background legacyPrimary = Background(Rgb(0x17, 0x17, 0x17));
+    Rgba legacyPrimaryForeground = Rgb(0xfa, 0xfa, 0xfa);
+    Rgba legacyPrimaryHover = Rgb(0x35, 0x35, 0x35);
+    Background legacyMuted = Background(Rgb(0xf5, 0xf5, 0xf5));
+    Background legacySecondary = Background(Rgb(0xf5, 0xf5, 0xf5));
+    Rgba legacySecondaryForeground = Rgb(0x17, 0x17, 0x17);
+    Rgba legacySecondaryHover = Rgb(0xe5, 0xe5, 0xe5);
+    Rgba legacySecondaryActive = Rgb(0xd4, 0xd4, 0xd4);
+
+    float radius = 6.f;
+    float fontSize = 16.f;
+    ScrollbarMode scrollbarMode = ScrollbarMode::Scrolling;
+    bool focusRing = true;
+};
+
+const RuntimeStyle& RuntimeStyleNow(const App* app);
+void RuntimeStyleInstall(App* app, const RuntimeStyle& style);
+
 const double kInactiveFrameInterval = 0.5;
 
 const float kRadiusFull = 9999.f;
@@ -3857,15 +3614,46 @@ enum class ScrollbarEntrance : uint8_t {
 
 struct ScrollbarMotion {
 
-    float idle = 2.f;
+    float idle = 2;
 
-    float enter = 0.3f;
+    float enter = 0;
 
-    float exit = 0.5f;
+    float exit = 0;
 
-    float expand = 0.3f;
+    float expand = 0;
     ScrollbarEntrance entrance = ScrollbarEntrance::Fade;
     ScrollbarEntrance thumbHoverEntrance = ScrollbarEntrance::Fade;
+
+    ScrollbarMotion WithIdle(float value) const {
+        ScrollbarMotion out = *this;
+        out.idle = value;
+        return out;
+    }
+    ScrollbarMotion WithEnter(float value) const {
+        ScrollbarMotion out = *this;
+        out.enter = value;
+        return out;
+    }
+    ScrollbarMotion WithExit(float value) const {
+        ScrollbarMotion out = *this;
+        out.exit = value;
+        return out;
+    }
+    ScrollbarMotion WithExpand(float value) const {
+        ScrollbarMotion out = *this;
+        out.expand = value;
+        return out;
+    }
+    ScrollbarMotion WithEntrance(ScrollbarEntrance value) const {
+        ScrollbarMotion out = *this;
+        out.entrance = value;
+        return out;
+    }
+    ScrollbarMotion WithThumbHoverEntrance(ScrollbarEntrance value) const {
+        ScrollbarMotion out = *this;
+        out.thumbHoverEntrance = value;
+        return out;
+    }
 };
 
 ScrollbarMotion ScrollbarMotionFor(ScrollbarMode mode);
@@ -3883,92 +3671,111 @@ ScrollbarVisibility ScrollbarVisibilityAt(int scrollId, double now);
 
 float ScrollbarSlideOffset(float trackWidth, float position);
 
-ScrollbarMode ScrollbarModeNow();
-void ScrollbarModeSet(ScrollbarMode m);
-
 void ScrollFadeClear();
 
 enum class IconName : uint8_t {
     None = 0,
-    Inbox,
-    Bot,
-    Cpu,
-    MemoryStick,
-    HardDrive,
-    Battery,
-    BatteryCharging,
-    BatteryMedium,
-    BatteryFull,
-    WindowMinimize,
-    WindowMaximize,
-    WindowRestore,
-    WindowClose,
-    LayoutDashboard,
-    Calendar,
-    Folder,
-    Settings,
-    GalleryVerticalEnd,
-    CircleUser,
-    User,
-    PanelLeft,
-    PanelLeftOpen,
-    PanelLeftClose,
-    PanelRight,
-    PanelRightOpen,
-    PanelRightClose,
-    PanelBottom,
-    PanelBottomOpen,
-    Info,
-    X,
-    CircleCheck,
-    TriangleAlert,
-    CircleX,
-    Loader,
-    LoaderCircle,
-    Ellipsis,
-    ChevronsUpDown,
-    SquareTerminal,
-    BookOpen,
-    Settings2,
-    Frame,
-    ChartPie,
-    File,
-    FolderOpen,
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-
-    CaseSensitive,
-    Replace,
-    ChevronUp,
-    Check,
-    Search,
-    Minus,
-    Plus,
-    Palette,
-    Copy,
-    Bell,
-    Star,
-    StarFill,
-    Eye,
-    EyeOff,
-    Heart,
+    ALargeSmall,
+    ArrowDown,
     ArrowLeft,
     ArrowRight,
     ArrowUp,
-    ArrowDown,
-    Building2,
     Asterisk,
-    Sun,
-    Moon,
-    Play,
-    Maximize,
-    Minimize,
-    Map,
-    Globe,
-    Github,
+    Battery,
+    BatteryCharging,
+    BatteryFull,
+    BatteryLow,
+    BatteryMedium,
+    BatteryWarning,
+    Bell,
+    BookOpen,
+    Bot,
+    Building2,
+    Calendar,
+    CaseSensitive,
+    ChartPie,
+    Check,
+    ChevronDown,
+    ChevronLeft,
+    ChevronRight,
+    ChevronUp,
+    ChevronsUpDown,
+    CircleCheck,
+    CircleUser,
+    CircleX,
+    Close,
+    Copy,
+    Cpu,
+    Dash,
+    Delete,
+    Ellipsis,
+    EllipsisVertical,
     ExternalLink,
+    EyeOff,
+    Eye,
+    File,
+    Folder,
+    FolderClosed,
+    FolderOpen,
+    Frame,
+    GalleryVerticalEnd,
+    Github,
+    Globe,
+    HardDrive,
+    Heart,
     HeartOff,
+    Inbox,
+    Info,
+    Inspector,
+    LayoutDashboard,
+    Loader,
+    LoaderCircle,
+    Map,
+    Maximize,
+    MemoryStick,
+    Menu,
+    Minimize,
+    Minus,
+    Moon,
+    Network,
+    Palette,
+    PanelBottom,
+    PanelBottomOpen,
+    PanelLeft,
+    PanelLeftClose,
+    PanelLeftOpen,
+    PanelRight,
+    PanelRightClose,
+    PanelRightOpen,
+    Pause,
+    Play,
+    Plus,
+    Redo,
+    Redo2,
+    Replace,
+    ResizeCorner,
+    Search,
+    Settings,
+    Settings2,
+    SortAscending,
+    SortDescending,
+    SquareTerminal,
+    Star,
+    StarFill,
+    StarOff,
+    Sun,
+    ThumbsDown,
+    ThumbsUp,
+    TriangleAlert,
+    Undo,
+    Undo2,
+    User,
+    WindowClose,
+    WindowMaximize,
+    WindowMinimize,
+    WindowRestore,
+
+    X,
 };
 
 struct PaintCtx;
@@ -4083,10 +3890,44 @@ struct Corners {
     bool IsUniform() const { return tl == tr && tr == br && br == bl; }
 };
 
+enum class FontWeight : uint16_t {
+    Thin = 100,
+    ExtraLight = 200,
+    Light = 300,
+    Normal = 400,
+    Medium = 500,
+    Semibold = 600,
+    Bold = 700,
+    ExtraBold = 800,
+    Black = 900
+};
+
+enum class Anchor : uint8_t {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    LeftCenter,
+    RightCenter
+};
+
+struct AnchoredPosition {
+    Bounds bounds = {};
+    int8_t placement = -1;
+};
+
+AnchoredPosition AnchoredSideResolve(Bounds trigger, Size popup, Size view,
+                                     float margin, int preferred,
+                                     int align, float offset);
+AnchoredPosition AnchoredCornerResolve(Anchor anchor, Point at, Size popup,
+                                       Size view, float margin);
+
 struct Style {
     Display display = Display::Block;
     FlexDir dir = FlexDir::Row;
-    Align align = Align::Stretch;
+    FlexAlign align = FlexAlign::Stretch;
     Justify justify = Justify::Start;
     Overflow overflowY = Overflow::Visible;
     Overflow overflowX = Overflow::Visible;
@@ -4108,6 +3949,7 @@ struct Style {
 
     float flexBasisFrac = 0;
     Edges pad = {};
+    Edges margin = {};
 
     float gapX = 0;
     float gapY = 0;
@@ -4124,6 +3966,9 @@ struct Style {
     Rgba borderColor = {};
     Rgba color = {};
 
+    const BoxShadow* shadows = nullptr;
+    int shadowCount = 0;
+
     float rotate = 0;
 
     float opacity = 1;
@@ -4139,6 +3984,7 @@ struct Style {
     bool fontBold = false;
     bool fontSemibold = false;
     bool fontMedium = false;
+    uint16_t fontWeight = 0;
     bool fontMono = false;
     bool underline = false;
 
@@ -4153,11 +3999,24 @@ struct Style {
 
     bool deferred = false;
 
+    uint8_t deferredLayer = 0;
+
     bool anchorFlip = false;
     bool anchorBelow = false;
     bool anchorAbove = false;
     bool anchorCenterX = false;
+
+    bool anchorCorner = false;
+    Anchor anchor = Anchor::TopLeft;
     float anchorGap = 0;
+    float anchorMargin = 4;
+
+    bool explicitPositioner = false;
+    bool positionerCorner = false;
+    Bounds positionerTrigger = {};
+    Point positionerPoint = {};
+    int8_t positionerPlacement = -1;
+    uint8_t positionerAlign = 1;
     float absTop = kAuto, absLeft = kAuto, absBottom = kAuto, absRight = kAuto;
 
     float absLeftRel = 0, absRightRel = 0;
@@ -4236,6 +4095,120 @@ struct FocusHandle {
     bool operator!=(const FocusHandle& o) const { return id != o.id; }
 };
 
+enum class AccessibilityRole : uint8_t {
+    None,
+    Alert,
+    AlertDialog,
+    Button,
+    Cell,
+    CheckBox,
+    ColumnHeader,
+    ComboBox,
+    DateInput,
+    DateTimeInput,
+    Dialog,
+    EmailInput,
+    GenericContainer,
+    Group,
+    Heading,
+    Link,
+    List,
+    ListBox,
+    ListBoxOption,
+    ListItem,
+    Menu,
+    MenuBar,
+    MenuItem,
+    MultilineTextInput,
+    Navigation,
+    PasswordInput,
+    PhoneNumberInput,
+    ProgressIndicator,
+    RadioButton,
+    RadioGroup,
+    Region,
+    Row,
+    RowGroup,
+    Slider,
+    SpinButton,
+    Switch,
+    Tab,
+    Table,
+    TabList,
+    TextInput,
+    Toolbar,
+    Tooltip,
+    UrlInput
+};
+
+enum class AccessibilityToggled : uint8_t {
+    Unset,
+    False,
+    True,
+    Mixed
+};
+
+enum class AccessibilityOrientation : uint8_t {
+    Unset,
+    Horizontal,
+    Vertical
+};
+
+enum AccessibilityActionBits : uint8_t {
+    AccessibilityActionNone = 0,
+    AccessibilityActionDefault = 1 << 0,
+    AccessibilityActionFocus = 1 << 1,
+    AccessibilityActionIncrement = 1 << 2,
+    AccessibilityActionDecrement = 1 << 3,
+    AccessibilityActionSetValue = 1 << 4
+};
+
+enum class AccessibilityAction : uint8_t {
+    Default,
+    Focus,
+    Increment,
+    Decrement,
+    SetValue
+};
+
+struct AccessibilityInfo {
+    AccessibilityRole role = AccessibilityRole::None;
+
+    Str authorId = {};
+    Str label = {};
+    Str value = {};
+    Str placeholder = {};
+    AccessibilityToggled toggled = AccessibilityToggled::Unset;
+    AccessibilityOrientation orientation = AccessibilityOrientation::Unset;
+    float numericValue = 0;
+    float minNumericValue = 0;
+    float maxNumericValue = 0;
+    float numericValueStep = 0;
+    int positionInSet = 0;
+    int sizeOfSet = 0;
+    int rowCount = 0;
+    int columnCount = 0;
+    int rowIndex = 0;
+    int columnIndex = 0;
+    int level = 0;
+    bool hasNumericValue = false;
+    bool hasMinNumericValue = false;
+    bool hasMaxNumericValue = false;
+    bool hasNumericValueStep = false;
+    bool hasPositionInSet = false;
+    bool hasSizeOfSet = false;
+    bool hasRowCount = false;
+    bool hasColumnCount = false;
+    bool hasRowIndex = false;
+    bool hasColumnIndex = false;
+    bool hasLevel = false;
+    bool selected = false;
+    bool hasSelected = false;
+    bool expanded = false;
+    bool hasExpanded = false;
+    bool disabled = false;
+};
+
 struct El {
     ElKind kind = ElKind::Div;
 
@@ -4245,6 +4218,7 @@ struct El {
     Str text;
     IconName icon = IconName::None;
     Str iconPath;
+    AccessibilityInfo accessibility = {};
 
     Str imgSrc;
     ChartSeries chart = {};
@@ -4256,8 +4230,19 @@ struct El {
     bool clickFromPath = false;
 
     bool stopClick = false;
+
+    bool stopMouseDown = false;
+
+    bool suppressTextSelection = false;
     Func0 onClick;
     Listener listener;
+
+    Listener accessibilityDefault;
+    Listener accessibilityIncrement;
+    Listener accessibilityDecrement;
+
+    Func0 accessibilityIncrementDirect;
+    Func0 accessibilityDecrementDirect;
 
     uint32_t clickAction = 0;
     intptr_t clickActionArg = 0;
@@ -4272,6 +4257,8 @@ struct El {
     DispatchPhase mouseUpPhase = DispatchPhase::Bubble;
 
     Listener onDragMove;
+
+    Listener onMouseDownOut;
 
     Style refine = {};
     uint32_t refineSet = 0;
@@ -4314,10 +4301,37 @@ struct El {
     ScrollbarMode scrollMode = ScrollbarMode::Always;
     bool scrollModeSet = false;
 
+    ScrollbarMotion scrollMotion = {};
+    Background scrollTrack = {};
+    Background scrollTrackHover = {};
+    Background scrollTrackActive = {};
+    Background scrollThumb = {};
+    Background scrollThumbHover = {};
+    Background scrollThumbActive = {};
+    Rgba scrollTrackBorder = {};
+    Rgba scrollTrackHoverBorder = {};
+    Rgba scrollTrackActiveBorder = {};
+    float scrollTrackWidth = 16;
+    float scrollThumbWidth = 6;
+    float scrollThumbHoverWidth = 8;
+    float scrollThumbActiveWidth = 8;
+    float scrollThumbInset = 4;
+    float scrollThumbHoverInset = 4;
+    float scrollThumbActiveInset = 4;
+    float scrollThumbRadius = 0;
+    float scrollThumbHoverRadius = 0;
+    float scrollThumbActiveRadius = 0;
+    float scrollThumbMinLength = 48;
+    float scrollThumbHoverMinLength = 48;
+    float scrollThumbActiveMinLength = 48;
+    bool scrollThemeSet = false;
+
     bool noScrollbar = false;
 
     bool noScrollbarX = false;
     bool noScrollbarY = false;
+
+    uint8_t scrollMaskAxes = 0;
     int scrollId = 0;
 
     bool scrollFromPath = false;
@@ -4391,6 +4405,8 @@ struct El {
     El* HideScrollbarX();
     El* HideScrollbarY();
 
+    El* ScrollMask(Axis axis);
+
     El* Opacity(float f);
     El* H(float v);
     El* SizeFull();
@@ -4408,6 +4424,13 @@ struct El {
     El* PadR(float v);
     El* PadT(float v);
     El* PadB(float v);
+    El* Margin(float v);
+    El* MarginX(float v);
+    El* MarginY(float v);
+    El* MarginL(float v);
+    El* MarginR(float v);
+    El* MarginT(float v);
+    El* MarginB(float v);
     El* ItemsCenter();
     El* ItemsStart();
     El* ItemsEnd();
@@ -4423,6 +4446,7 @@ struct El {
     El* BorderB(float width, Rgba c);
     El* BorderL(float width, Rgba c);
     El* BorderR(float width, Rgba c);
+    El* Shadows(const BoxShadow* values, int count);
     El* Radius(float r);
 
     El* Corners(float tl, float tr, float br, float bl);
@@ -4437,6 +4461,32 @@ struct El {
     El* ScrollMode(ScrollbarMode m);
     El* ScrollId(int v);
     El* Click(int v);
+    El* Role(AccessibilityRole role);
+    El* AccessibilityId(Str authorId);
+    El* AriaLabel(Str label);
+    El* AriaValue(Str value);
+    El* AriaPlaceholder(Str placeholder);
+    El* AriaDisabled(bool disabled = true);
+    El* AriaToggled(AccessibilityToggled toggled);
+    El* AriaSelected(bool selected);
+    El* AriaExpanded(bool expanded);
+    El* AriaNumericValue(float value);
+    El* AriaMinNumericValue(float value);
+    El* AriaMaxNumericValue(float value);
+    El* AriaNumericValueStep(float value);
+    El* AriaOrientation(AccessibilityOrientation orientation);
+    El* AriaPositionInSet(int position);
+    El* AriaSizeOfSet(int size);
+    El* AriaRowCount(int count);
+    El* AriaColumnCount(int count);
+    El* AriaRowIndex(int index);
+    El* AriaColumnIndex(int index);
+    El* AriaLevel(int level);
+    El* OnAccessibilityDefault(Listener fn);
+    El* OnAccessibilityIncrement(Listener fn);
+    El* OnAccessibilityDecrement(Listener fn);
+    El* OnAccessibilityIncrement(Func0 fn);
+    El* OnAccessibilityDecrement(Func0 fn);
 
     El* PathId(Str name);
 
@@ -4454,9 +4504,12 @@ struct El {
     El* OnMouseUp(Listener l, DispatchPhase phase = DispatchPhase::Bubble);
     El* OnDragMove(Listener l);
     El* OnDrag(Str dragKind, int ix = 0, void* data = nullptr);
+    El* OnMouseDownOut(Listener l);
     El* OnMouseUpOut(Listener l);
+    El* StopMouseDown();
 
     El* StopClick();
+    El* SuppressTextSelection();
     El* OnDrop(Str acceptKind, Listener l);
 
     El* Refine(const Style& s, uint32_t fields);
@@ -4485,6 +4538,7 @@ struct El {
     El* Bold();
     El* Semibold();
     El* Medium();
+    El* Weight(FontWeight value);
     El* Mono();
     El* Underline();
     El* Strikethrough();
@@ -4498,11 +4552,13 @@ struct El {
     El* Absolute();
     El* Fixed();
     El* Deferred();
+    El* DeferredLayer(int layer);
     El* AnchorBelow(float gap = 0);
 
     El* AnchorFlip(bool on = true);
     El* AnchorAbove(float gap = 0);
     El* AnchorCenterX();
+    El* AnchorCorner(Anchor anchor, float margin = 4, float offsetY = 0);
     El* Top(float v);
     El* Left(float v);
     El* Bottom(float v);
@@ -4573,6 +4629,7 @@ struct HitRect {
     int parent = -1;
     Listener onDragMove;
     DragPayload drag = {};
+    Listener onMouseDownOut;
     Listener onMouseUpOut;
     Str dropKind = {};
     Listener onDrop;
@@ -4587,6 +4644,29 @@ struct HitRect {
     intptr_t clickActionArg = 0;
 
     bool stopClick = false;
+    bool stopMouseDown = false;
+    bool suppressTextSelection = false;
+};
+
+struct AccessibilityNode {
+    uint32_t id = 0;
+    int parent = -1;
+    Bounds bounds = {};
+    AccessibilityInfo info = {};
+    uint8_t actions = AccessibilityActionNone;
+    int clickId = 0;
+    int focusId = 0;
+    Func0 onClick = {};
+    Listener listener = {};
+    Listener accessibilityDefault = {};
+    Listener accessibilityIncrement = {};
+    Listener accessibilityDecrement = {};
+    Func0 accessibilityIncrementDirect = {};
+    Func0 accessibilityDecrementDirect = {};
+    uint32_t clickAction = 0;
+    intptr_t clickActionArg = 0;
+    SliderState* slider = nullptr;
+    InputState* input = nullptr;
 };
 
 struct ScrollRect {
@@ -4602,6 +4682,19 @@ struct ScrollRect {
     bool barY = true;
 
     bool barVisible = true;
+    float trackWidth = 16;
+    float thumbWidth = 6;
+    float thumbHoverWidth = 8;
+    float thumbActiveWidth = 8;
+    float thumbInset = 4;
+    float thumbHoverInset = 4;
+    float thumbActiveInset = 4;
+    float thumbMinLength = 48;
+    float thumbHoverMinLength = 48;
+    float thumbActiveMinLength = 48;
+    uint8_t maskAxes = 0;
+
+    int maskHit = -1;
     Listener onScroll;
 
     InputState* input = nullptr;
@@ -4667,7 +4760,8 @@ enum StyleField : uint32_t {
     StyleFieldBorderT = 1u << 14,
     StyleFieldBorderB = 1u << 15,
     StyleFieldBorderL = 1u << 16,
-    StyleFieldBorderR = 1u << 17
+    StyleFieldBorderR = 1u << 17,
+    StyleFieldMargin = 1u << 18
 };
 
 void StyleApplyFields(Style* into, const Style& over, uint32_t fields);
@@ -4711,6 +4805,7 @@ struct InspectorState {
 };
 
 struct PaintCtx {
+    App* app = nullptr;
     PaintApp* pa = nullptr;
     PaintTarget* rt = nullptr;
 
@@ -4718,6 +4813,8 @@ struct PaintCtx {
     float dpi = 96;
     float viewW = 0;
     float viewH = 0;
+
+    float clientInset = 0;
     int hoverId = 0;
 
     int dragOverId = 0;
@@ -4773,6 +4870,11 @@ struct FocusRect {
 
     int dispatchIx = 0;
     Bounds bounds = {};
+
+    Listener accessibilityIncrement = {};
+    Listener accessibilityDecrement = {};
+    Func0 accessibilityIncrementDirect = {};
+    Func0 accessibilityDecrementDirect = {};
 };
 
 struct DispatchNode {
@@ -5166,6 +5268,8 @@ struct DocumentColor {
 using DocumentColorFn = int (*)(void* data, Str text, DocumentColor* out,
                                 int cap);
 
+const int kMaxDocumentColors = 10000;
+
 struct CodeActionItem {
     Str title = {};
 
@@ -5183,6 +5287,12 @@ using CodeActionPerformFn = bool (*)(void* data, InputState* s, App* app,
 
 using CodeActionFn = int (*)(void* data, Arena* a, Str text, Selection sel,
                              CodeActionItem* out, int cap);
+
+struct CodeActionProviderEntry {
+    CodeActionFn provide = nullptr;
+    void* data = nullptr;
+    CodeActionPerformFn perform = nullptr;
+};
 
 struct CodeActionSession {
     bool open = false;
@@ -5399,12 +5509,7 @@ struct InputState {
 
     CodeActionSession codeActions;
 
-    static const int kMaxCodeActionProviders = 4;
-    CodeActionFn codeActionProviders[kMaxCodeActionProviders] = {};
-    void* codeActionDatas[kMaxCodeActionProviders] = {};
-
-    CodeActionPerformFn codeActionPerform[kMaxCodeActionProviders] = {};
-    int nCodeActionProviders = 0;
+    Vec<CodeActionProviderEntry> codeActionProviders;
 
     CodeActionFn codeActionProvider = nullptr;
     void* codeActionData = nullptr;
@@ -5831,8 +5936,9 @@ void PaintTextRange(PaintCtx* ctx, Str s, float fontSize, float maxW, bool wrap,
                     uint8_t weight, float lineH, float x, float y, int u8a,
                     int u8b, Rgba color);
 void PaintTextUnderline(PaintCtx* ctx, Str s, float fontSize, float maxW,
-                        bool wrap, float x, float y, int u8a, int u8b,
-                        Rgba color, bool wavy = false);
+                        bool wrap, uint8_t weight, float lineH, float x,
+                        float y, int u8a, int u8b, Rgba color,
+                        bool wavy = false);
 
 struct LayoutCache;
 
@@ -5905,6 +6011,16 @@ enum {
 struct App;
 struct Window;
 
+struct Tiling {
+    bool top = false;
+    bool bottom = false;
+    bool left = false;
+    bool right = false;
+
+    bool IsTiled() const { return top || bottom || left || right; }
+    bool AllTiled() const { return top && bottom && left && right; }
+};
+
 struct WinOpts {
     bool borderless = false;
 
@@ -5927,9 +6043,54 @@ struct EntitySub {
     Listener handler = {};
 };
 
+using AppGlobalFreeFn = void (*)(void* value);
+
+struct AppGlobalSlot {
+    const void* key = nullptr;
+    void* value = nullptr;
+    AppGlobalFreeFn freeValue = nullptr;
+};
+
+void* AppGlobalGetRaw(const App* app, const void* key);
+void AppGlobalSetRaw(App* app, const void* key, void* value,
+                     AppGlobalFreeFn freeValue);
+bool AppGlobalRemoveRaw(App* app, const void* key);
+void AppGlobalClear(App* app);
+
+template <typename T>
+const void* AppGlobalKey() {
+    static const uint8_t key = 0;
+    return &key;
+}
+
+template <typename T>
+T* AppGlobalGet(const App* app) {
+    return (T*)AppGlobalGetRaw(app, AppGlobalKey<T>());
+}
+
+template <typename T>
+void AppGlobalDelete(void* value) {
+    delete (T*)value;
+}
+
+template <typename T>
+T* AppGlobalEnsure(App* app) {
+    T* value = AppGlobalGet<T>(app);
+    if (value || !app) {
+        return value;
+    }
+    value = new T();
+    AppGlobalSetRaw(app, AppGlobalKey<T>(), value, &AppGlobalDelete<T>);
+    return value;
+}
+
+template <typename T>
+bool AppGlobalRemove(App* app) {
+    return AppGlobalRemoveRaw(app, AppGlobalKey<T>());
+}
+
 struct App {
     PaintApp* paint = nullptr;
-    ThemeMode themeMode = ThemeMode::Light;
     Vec<Window*> windows;
 
     Vec<EntitySlot> entities;
@@ -5938,6 +6099,8 @@ struct App {
     Vec<EntitySub> subs;
 
     Vec<EntitySub> observers;
+
+    Vec<AppGlobalSlot> globals;
     int nextSubId = 1;
     int exitCode = 0;
 
@@ -5961,6 +6124,10 @@ struct Window {
     EntityId root = {};
 
     Vec<EntityId> rendered;
+
+    Vec<AccessibilityNode> accessibility;
+
+    uint64_t accessibilityHash = 0;
     int hoverId = 0;
     int focusId = 0;
 
@@ -5973,6 +6140,11 @@ struct Window {
     CursorKind cursor = CursorKind::Arrow;
     bool maximized = false;
 
+    float clientInset = -1;
+    Tiling tiling = {};
+
+    float resizeHitSize = 4;
+
     bool active = true;
     bool running = true;
     bool anim = false;
@@ -5983,6 +6155,11 @@ struct Window {
     bool mouseDown = false;
 
     bool stopPropagation = false;
+
+    int scrollLockHorizontalId = 0;
+    int scrollLockVerticalId = 0;
+    OngoingScroll scrollLockHorizontal = {};
+    OngoingScroll scrollLockVertical = {};
 
     double lastDownAt = 0;
     float lastDownX = 0;
@@ -6063,9 +6240,6 @@ struct Ctx {
     EntityId self = {};
 
     uint32_t path = 0;
-
-    const Theme& theme() const;
-    ThemeMode themeMode() const;
 };
 
 uint32_t IdFoldName(uint32_t parent, Str name);
@@ -6263,7 +6437,7 @@ void ListenerCall(App* app, Window* win, const Listener& l, const void* ev);
 
 El* EntityRender(App* app, Window* win, Arena* a, EntityId id);
 
-void* WindowKeyedState(Window* win, uint32_t key, int size, DropFn drop);
+void* WindowKeyedState(Window* win, uint32_t key, void* fresh, DropFn drop);
 void WindowKeyedFree(Window* win);
 
 void* WindowMotionState(Window* win, uint32_t key, int size);
@@ -6273,7 +6447,7 @@ void WindowMotionFree(Window* win);
 
 template <typename T>
 T* KeyedState(Ctx* cx, uint32_t key) {
-    void* p = WindowKeyedState(cx->win, key, (int)sizeof(T), &EntityDropT<T>);
+    void* p = WindowKeyedState(cx->win, key, new T(), &EntityDropT<T>);
     return (T*)p;
 }
 
@@ -6349,27 +6523,6 @@ struct BlinkCursor {
     static void OnFlip(BlinkCursor* self, Ctx* cx, const TickEvent* ev);
     static void OnResume(BlinkCursor* self, Ctx* cx, const TickEvent* ev);
 };
-
-struct TooltipOverlay {
-
-    Str text = {};
-    Bounds triggerBounds = {};
-    bool visible = false;
-    bool hadRecent = false;
-    int showTimer = 0;
-    int hideTimer = 0;
-
-    ~TooltipOverlay();
-
-    static void OnShow(TooltipOverlay* self, Ctx* cx, const TickEvent* ev);
-    static void OnHide(TooltipOverlay* self, Ctx* cx, const TickEvent* ev);
-};
-
-void TooltipRequestShow(Window* win, Str text, Bounds triggerBounds);
-void TooltipRequestHide(Window* win);
-
-const TooltipOverlay* TooltipShowing(Window* win);
-void TooltipPaint(PaintCtx* ctx, const TooltipOverlay* tip);
 
 void BlinkStart(App* app, Window* win, EntityId* handle);
 void BlinkStop(App* app, Window* win, EntityId* handle);
@@ -6462,6 +6615,14 @@ void WindowRequestAnimationFrame(Window* win);
 
 void FocusCollect(Window* win, El* root);
 void IdsCollect(El* root);
+void AccessibilityCollect(El* root, Vec<AccessibilityNode>* out);
+const AccessibilityNode* WindowAccessibilityNode(const Window* win,
+                                                 uint32_t nodeId);
+bool WindowAccessibilityPerform(Window* win, uint32_t nodeId,
+                                AccessibilityAction action, Str value = {});
+
+bool WindowAccessibilitySetNumericValue(Window* win, uint32_t nodeId,
+                                        float value);
 int FocusNext(Window* win, int trapId, bool backward);
 
 FocusHandle FocusHandleNew(App* app);
@@ -6540,6 +6701,9 @@ bool AppHasMenuBar();
 void AppSetMenus(App* app, const MenuDef* menus, int n);
 
 bool AppMenuRowForId(int id, uint32_t* action, intptr_t* arg);
+bool AppMenuRowForId(const App* app, int id, uint32_t* action, intptr_t* arg);
+
+void AppMenuClear(App* app);
 
 void AppActivate(Window* win);
 void AppMinimize(Window* win);
@@ -6699,11 +6863,12 @@ struct AccordionTrigger {
 };
 
 struct AccordionHeader {
-    static El* New(Ctx* cx, El* trigger);
+    static El* New(Ctx* cx, El* trigger, Str id = {}, int level = 3);
 };
 
 struct AccordionPanel {
-    static El* New(Ctx* cx);
+
+    static El* New(Ctx* cx, Str id = {});
 };
 
 struct AccordionItem {
@@ -6720,6 +6885,42 @@ struct AccordionItem {
 };
 }
 
+#line 1 "src/base/actions.h"
+
+namespace gpui {
+
+namespace action {
+
+uint32_t Confirm();
+
+constexpr intptr_t kConfirmSecondary = 1;
+uint32_t Cancel();
+uint32_t SelectUp();
+uint32_t SelectDown();
+uint32_t SelectLeft();
+uint32_t SelectRight();
+uint32_t SelectFirst();
+uint32_t SelectLast();
+uint32_t SelectPrevColumn();
+uint32_t SelectNextColumn();
+uint32_t SelectPageUp();
+uint32_t SelectPageDown();
+
+}
+
+struct CancelKeys {
+    Listener onCancel = {};
+
+    static void OnAction(CancelKeys* self, Ctx* cx, const ActionEvent* ev);
+};
+
+void CancelInitKeys(const char* context);
+
+void CancelBindKeys(Ctx* cx, El* root, const char* context, Str name,
+                    Listener onCancel);
+
+}
+
 #line 1 "src/base/dialog.h"
 
 namespace gpui {
@@ -6730,6 +6931,29 @@ enum class DialogChangeReason : uint8_t {
     Cancel,
     Confirm,
     Imperative
+};
+
+struct DialogOpenChangeEvent {
+    bool open = false;
+    DialogChangeReason reason = DialogChangeReason::Imperative;
+};
+
+struct DialogHandleState {
+    EntityId self = {};
+    bool open = false;
+    Listener onOpenChange = {};
+};
+
+struct DialogHandle {
+    Entity<DialogHandleState> state = {};
+
+    static DialogHandle New(Ctx* cx, bool open = false);
+    bool IsValid() const { return state.IsValid(); }
+    bool IsOpen(App* app, bool fallback = false) const;
+    void OnOpenChange(App* app, Listener listener) const;
+    bool SetOpen(Ctx* cx, bool open, DialogChangeReason reason) const;
+    bool Open(Ctx* cx) const;
+    bool Close(Ctx* cx) const;
 };
 
 enum class DialogAction : uint8_t {
@@ -6776,7 +7000,9 @@ struct DialogClose {
 };
 
 struct DialogTrigger {
-    static El* New(Ctx* cx, Listener onOpen = {});
+    static El* New(Ctx* cx, Listener onOpen = {},
+                   DialogHandle handle = {},
+                   Str id = StrL("dialog-trigger"));
 };
 
 struct Dialog {
@@ -6784,8 +7010,12 @@ struct Dialog {
     El* root = nullptr;
 
     Str trap = {};
+    bool open = true;
+    DialogHandle handle = {};
 
     static Dialog* New(Ctx* cx);
+    Dialog* Open(bool value);
+    Dialog* Handle(DialogHandle value);
     Dialog* Trap(Str name);
     Dialog* Backdrop(El* backdrop);
     Dialog* Popup(El* popup);
@@ -6819,7 +7049,8 @@ struct AlertDialogAction {
     static El* New(Ctx* cx);
 };
 struct AlertDialogTrigger {
-    static El* New(Ctx* cx, Listener onOpen = {});
+    static El* New(Ctx* cx, Listener onOpen = {},
+                   DialogHandle handle = {});
 };
 
 struct AlertDialog {
@@ -6827,13 +7058,95 @@ struct AlertDialog {
     El* root = nullptr;
 
     Str trap = {};
+    bool open = true;
+    DialogHandle handle = {};
 
     static AlertDialog* New(Ctx* cx);
+    AlertDialog* Open(bool value);
+    AlertDialog* Handle(DialogHandle value);
     AlertDialog* Trap(Str name);
     AlertDialog* Backdrop(El* backdrop);
     AlertDialog* Popup(El* popup);
     El* IntoEl();
 };
+}
+
+#line 1 "src/base/animation.h"
+
+namespace gpui {
+
+float CubicBezier(float x1, float y1, float x2, float y2, float t);
+
+using EaseFn = float (*)(float);
+
+float EaseLinear(float t);
+
+float EaseOutCubic(float t);
+
+float EaseInCubic(float t);
+
+float EaseInOutCubic(float t);
+
+float EaseQuadratic(float t);
+
+float EaseInOutQuad(float t);
+float EaseOutQuint(float t);
+
+float EaseBounce(EaseFn e, float t);
+
+float EaseBounceInOut(float t);
+
+float ClampF01(float t);
+
+float Lerp(float a, float b, float t);
+Point Lerp(Point a, Point b, float t);
+
+Rgba Lerp(Rgba a, Rgba b, float t);
+
+struct EffectTransition {
+    float durationMs = 0;
+
+    static EffectTransition* New(Ctx* cx, float durationMs);
+    EffectTransition* Ease(EaseFn fn);
+    EffectTransition* SlideY(float from, float to);
+    EffectTransition* SlideX(float from, float to);
+    EffectTransition* Fade(float from, float to);
+    EffectTransition* Width(float from, float to);
+    EffectTransition* Height(float from, float to);
+    El* Apply(El* element, Str id);
+
+  private:
+
+    enum class EffectKind : uint8_t {
+        SlideY,
+        SlideX,
+        Fade,
+        Width,
+        Height
+    };
+    struct Effect {
+        EffectKind kind = EffectKind::Fade;
+        float from = 0;
+        float to = 0;
+    };
+
+    Ctx* cx = nullptr;
+    EaseFn easing = EaseOutCubic;
+    ArenaVec<Effect> effects;
+
+    EffectTransition* Add(EffectKind kind, float from, float to);
+};
+
+using Transition = EffectTransition;
+
+}
+
+#line 1 "src/base/auto_scroll.h"
+
+namespace gpui {
+
+bool AutoScrollComputeDelta(float y, Bounds bounds, float* out);
+
 }
 
 #line 1 "src/base/avatar.h"
@@ -6899,7 +7212,10 @@ struct StateStyle {
     StateStyle& ActiveBg(Background c);
     StateStyle& Opacity(float v);
 
-    bool Has(StateField f) const { return (set & (uint32_t)f) != 0; }
+    bool Has(StateField f) const {
+        uint32_t bits = (uint32_t)f;
+        return (set & bits) == bits;
+    }
 };
 
 void StateStyleRefine(StateStyle* into, const StateStyle& over);
@@ -6927,76 +7243,6 @@ struct Button {
 };
 }
 
-#line 1 "src/base/date_picker.h"
-
-namespace gpui {
-
-enum class DatePickerAction : uint8_t {
-    None,
-    Open,
-    Dismiss,
-
-    Clear
-};
-
-void DatePickerInitKeys();
-Str DatePickerContext();
-
-DatePickerAction DatePickerActionOf(uint32_t id, bool open, bool disabled);
-
-struct DatePickerKeys {
-
-    Listener onToggle = {};
-
-    Listener onClear = {};
-    bool open = false;
-    bool disabled = false;
-
-    static void OnAction(DatePickerKeys* self, Ctx* cx, const ActionEvent* ev);
-};
-
-void DatePickerBindKeys(Ctx* cx, El* root, Str name, Listener onToggle,
-                        Listener onClear, bool open, bool disabled);
-
-enum class DateMatcherKind : uint8_t {
-    None,
-    Weekdays,
-    Interval,
-    Range,
-    Custom
-};
-
-struct DateMatcher {
-    DateMatcherKind kind = DateMatcherKind::None;
-    uint8_t weekdayMask = 0;
-    LocalDate from = {};
-    LocalDate to = {};
-    bool (*custom)(LocalDate date) = nullptr;
-};
-
-DateMatcher DateMatcherWeekdays(uint8_t weekdayMask);
-DateMatcher DateMatcherInterval(LocalDate before, LocalDate after);
-DateMatcher DateMatcherRange(LocalDate from, LocalDate to);
-DateMatcher DateMatcherCustom(bool (*fn)(LocalDate date));
-bool DateMatcherMatches(const DateMatcher& matcher, LocalDate date);
-intptr_t DatePickerDateKey(LocalDate date);
-LocalDate DatePickerDateFromKey(intptr_t key);
-
-enum class DateSelectionResult : uint8_t {
-    Rejected,
-    Partial,
-    Complete
-};
-
-DateSelectionResult DatePickerSelectDate(bool range, LocalDate value,
-                                         LocalDate* start, LocalDate* end,
-                                         const DateMatcher& disabled);
-
-struct DatePicker {
-    static El* New(Ctx* cx, Str id, bool disabled = false);
-};
-}
-
 #line 1 "src/base/calendar.h"
 
 namespace gpui {
@@ -7007,7 +7253,80 @@ enum class CalendarView : uint8_t {
     Year
 };
 
+enum class DateKind : uint8_t {
+    Single,
+    Range
+};
+
+struct Date {
+    DateKind kind = DateKind::Single;
+    LocalDate start = {};
+    LocalDate end = {};
+
+    static Date Single(LocalDate value = {});
+    static Date Range(LocalDate start = {}, LocalDate end = {});
+    bool IsSome() const;
+    bool IsComplete() const;
+    bool IsSingle() const { return kind == DateKind::Single; }
+    bool IsActive(LocalDate value) const;
+    bool IsInRange(LocalDate value) const;
+};
+
+struct IntervalMatcher {
+    LocalDate before = {};
+    LocalDate after = {};
+};
+
+struct RangeMatcher {
+    LocalDate from = {};
+    LocalDate to = {};
+};
+
+enum class MatcherKind : uint8_t {
+    None,
+    DayOfWeek,
+
+    Weekdays = DayOfWeek,
+    Interval,
+    Range,
+    Custom
+};
+
+struct Matcher {
+    MatcherKind kind = MatcherKind::None;
+    uint8_t weekdayMask = 0;
+    IntervalMatcher interval = {};
+    RangeMatcher range = {};
+
+    LocalDate from = {};
+    LocalDate to = {};
+    bool (*custom)(LocalDate date) = nullptr;
+};
+
+using DateMatcher = Matcher;
+using DateMatcherKind = MatcherKind;
+
+Matcher DateMatcherWeekdays(uint8_t weekdayMask);
+Matcher DateMatcherInterval(LocalDate before, LocalDate after);
+Matcher DateMatcherRange(LocalDate from, LocalDate to);
+Matcher DateMatcherCustom(bool (*fn)(LocalDate date));
+bool DateMatcherMatches(const Matcher& matcher, LocalDate date);
+bool MatcherMatches(const Matcher& matcher, Date date);
+
+enum class CalendarEventKind : uint8_t {
+    Selected
+};
+
+struct CalendarEvent {
+    CalendarEventKind kind = CalendarEventKind::Selected;
+    Date date = {};
+};
+
 struct CalendarState {
+    EntityId self = {};
+    FocusHandle focus = {};
+    CalendarView view = CalendarView::Day;
+    Date date = {};
     int currentYear = 0;
 
     int currentMonth = 1;
@@ -7015,8 +7334,38 @@ struct CalendarState {
 
     int yearPage = 0;
     int yearPageCount = 0;
-    CalendarView view = CalendarView::Day;
+    int yearMin = 0;
+    int yearMax = 0;
+    LocalDate today = {};
+    Matcher disabledMatcher = {};
+
+    static void OnDate(CalendarState* self, Ctx* cx, const ClickEvent* ev,
+                       intptr_t dateKey);
+    static void OnPrev(CalendarState* self, Ctx* cx, const ClickEvent* ev);
+    static void OnNext(CalendarState* self, Ctx* cx, const ClickEvent* ev);
+    static void OnMonthToggle(CalendarState* self, Ctx* cx,
+                              const ClickEvent* ev);
+    static void OnYearToggle(CalendarState* self, Ctx* cx,
+                             const ClickEvent* ev);
+    static void OnMonth(CalendarState* self, Ctx* cx, const ClickEvent* ev,
+                        intptr_t month);
+    static void OnYear(CalendarState* self, Ctx* cx, const ClickEvent* ev,
+                       intptr_t year);
 };
+
+void CalendarStateInit(CalendarState* s, Ctx* cx,
+                       Date date = Date::Single());
+Entity<CalendarState> CalendarStateNew(Ctx* cx,
+                                       Date date = Date::Single());
+bool CalendarStateApplyDate(CalendarState* s, Date date);
+void CalendarStateSetDate(CalendarState* s, Date date, Ctx* cx,
+                          bool emit = false);
+bool CalendarStateSelectDate(CalendarState* s, LocalDate value, Ctx* cx,
+                             bool emit = true);
+void CalendarStateSetDisabledMatcher(CalendarState* s, Matcher matcher,
+                                     Ctx* cx = nullptr);
+void CalendarStateSetYearRange(CalendarState* s, int minYear, int maxYear,
+                               Ctx* cx = nullptr);
 
 void CalendarPrevMonth(CalendarState* s);
 void CalendarNextMonth(CalendarState* s);
@@ -7056,6 +7405,8 @@ struct CalendarItemState {
 
 using CalendarItemFn = El* (*)(void* user, Ctx* cx, El* item,
                                const CalendarItemState& st);
+using CalendarLabelFn =
+    Str (*)(void* user, Ctx* cx, CalendarItemKind kind, int value);
 
 struct CalendarOpts {
     int year = 0;
@@ -7071,6 +7422,8 @@ struct CalendarOpts {
     LocalDate today = {};
     DateMatcher disabledMatcher = {};
 
+    int firstDayOfWeek = 0;
+
     int yearMin = 0;
     int yearMax = 0;
     int yearPageStart = 0;
@@ -7084,9 +7437,26 @@ struct CalendarOpts {
     Listener onYear = {};
     CalendarItemFn item = nullptr;
     void* user = nullptr;
+    CalendarLabelFn label = nullptr;
+    void* labelUser = nullptr;
 };
 
 struct Calendar {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    Str id = {};
+    Entity<CalendarState> state = {};
+    CalendarOpts opts = {};
+    Style style = {};
+    uint32_t styleSet = 0;
+
+    static Calendar* New(Ctx* cx, Str id, Entity<CalendarState> state);
+    Calendar* NumberOfMonths(int count);
+    Calendar* FirstDayOfWeek(int weekday);
+    Calendar* Item(CalendarItemFn fn, void* user = nullptr);
+    Calendar* Label(CalendarLabelFn fn, void* user = nullptr);
+    Calendar* Refine(const Style& v, uint32_t fields);
+    El* IntoEl();
 
     static El* New(Ctx* cx, Str id);
 
@@ -7117,14 +7487,43 @@ enum class CheckboxState : uint8_t {
 
 CheckboxState CheckboxActivated(CheckboxState state);
 
+struct CheckboxStyles {
+    StateStyle checked = {};
+    StateStyle indeterminate = {};
+    StateStyle disabled = {};
+
+    CheckboxStyles& Checked(const StateStyle& style);
+    CheckboxStyles& Indeterminate(const StateStyle& style);
+    CheckboxStyles& Disabled(const StateStyle& style);
+};
+
+struct CheckboxIndicatorStyles {
+    StateStyle checked = {};
+    StateStyle indeterminate = {};
+    StateStyle disabled = {};
+
+    CheckboxIndicatorStyles& Checked(const StateStyle& style);
+    CheckboxIndicatorStyles& Indeterminate(const StateStyle& style);
+    CheckboxIndicatorStyles& Disabled(const StateStyle& style);
+};
+
 struct Checkbox {
     static El* New(Ctx* cx, Str id,
                    CheckboxState state = CheckboxState::Unchecked,
-                   bool disabled = false, Listener onChange = {});
+                   bool disabled = false, Listener onChange = {},
+                   const CheckboxStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr,
+                   Str accessibilityLabel = {}, int tabIndex = 0,
+                   bool tabStop = true, FocusHandle focus = {},
+                   AccessibilityRole role = AccessibilityRole::CheckBox);
 };
 
 struct CheckboxIndicator {
-    static El* New(Ctx* cx);
+    static El* New(Ctx* cx,
+                   CheckboxState state = CheckboxState::Unchecked,
+                   bool disabled = false,
+                   const CheckboxIndicatorStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr);
 };
 }
 
@@ -7150,15 +7549,39 @@ struct Collapsible {
 
 namespace gpui {
 
+enum class ColorPickerEventKind : uint8_t {
+    Change
+};
+
+struct ColorPickerEvent {
+    ColorPickerEventKind kind = ColorPickerEventKind::Change;
+    bool hasColor = false;
+    Hsla color = {};
+};
+
+struct HslaSliders {
+    SliderState hue = {};
+    SliderState saturation = {};
+    SliderState lightness = {};
+    SliderState alpha = {};
+
+    HslaSliders();
+    SliderState* At(int index);
+    const SliderState* At(int index) const;
+    Hsla Read() const;
+    void Write(Hsla color);
+};
+
 struct ColorPickerState {
+    EntityId self = {};
+    FocusHandle focus = {};
     uint32_t value = 0;
     bool hasValue = false;
     uint32_t preview = 0;
     bool hasPreview = false;
     bool open = false;
     int activeTab = 0;
-
-    SliderState sliders[4] = {};
+    HslaSliders sliders;
     InputState hexInput;
 
     bool needsSliderSync = true;
@@ -7168,6 +7591,8 @@ struct ColorPickerState {
     ColorPickerState();
 
     static void OnToggleOpen(ColorPickerState* s, Ctx* cx, const ClickEvent*);
+    static void OnOpenChange(ColorPickerState* s, Ctx* cx,
+                             const ClickEvent*, intptr_t open);
     static void OnTab(ColorPickerState* s, Ctx* cx, const ClickEvent*,
                       intptr_t ix);
     static void OnSwatchClick(ColorPickerState* s, Ctx* cx, const ClickEvent*,
@@ -7178,6 +7603,9 @@ struct ColorPickerState {
     static void OnHexChange(ColorPickerState* s, Ctx* cx, const InputEvent* ev);
     static void OnHexFocus(ColorPickerState* s, Ctx* cx, const ClickEvent*);
 };
+
+void ColorPickerStateInit(ColorPickerState* s, Ctx* cx);
+Entity<ColorPickerState> ColorPickerStateNew(Ctx* cx);
 
 bool ColorPickerShown(const ColorPickerState* s, uint32_t* out);
 
@@ -7203,12 +7631,21 @@ bool ColorPickerParseHex(Str text, uint32_t* out);
 Str ColorPickerHexString(Arena* a, uint32_t color);
 
 struct ColorPicker {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, bool open = false,
+                   bool disabled = false, Str accessibilityLabel = {},
+                   AccessibilityRole role = AccessibilityRole::Button,
+                   Listener onOpenChange = {}, FocusHandle focus = {},
+                   int tabIndex = 0, bool tabStop = true,
+                   const char* keyContext = "ColorPicker");
 };
 
 struct ColorSwatch {
     static El* New(Ctx* cx, Str id, Listener onClick = {},
-                   Listener onHover = {});
+                   Listener onHover = {}, uint32_t color = 0,
+                   bool selected = false, bool disabled = false,
+                   Str accessibilityLabel = {}, int tabIndex = 0,
+                   bool tabStop = true,
+                   AccessibilityRole role = AccessibilityRole::RadioButton);
 };
 }
 
@@ -7233,7 +7670,9 @@ Str SelectContext();
 SelectAction SelectActionOf(uint32_t id, bool open, bool disabled);
 
 struct Select {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, bool open = false,
+                   bool disabled = false, Str accessibilityLabel = {},
+                   Listener onOpenChange = {});
 };
 }
 
@@ -7243,6 +7682,70 @@ namespace gpui {
 
 struct Combobox {
     static El* New(Ctx* cx, Str id);
+};
+}
+
+#line 1 "src/base/component_traits.h"
+
+namespace gpui {
+
+struct ComponentStateFlags {
+    bool selected = false;
+    bool secondarySelected = false;
+    bool disabled = false;
+    bool focusRing = true;
+    bool collapsed = false;
+};
+
+}
+
+#line 1 "src/base/date_picker.h"
+
+namespace gpui {
+
+enum class DatePickerAction : uint8_t {
+    None,
+    Open,
+    Dismiss,
+
+    Clear
+};
+
+void DatePickerInitKeys();
+Str DatePickerContext();
+
+DatePickerAction DatePickerActionOf(uint32_t id, bool open, bool disabled);
+
+struct DatePickerKeys {
+
+    Listener onToggle = {};
+
+    Listener onClear = {};
+    bool open = false;
+    bool disabled = false;
+
+    static void OnAction(DatePickerKeys* self, Ctx* cx, const ActionEvent* ev);
+};
+
+void DatePickerBindKeys(Ctx* cx, El* root, Str name, Listener onToggle,
+                        Listener onClear, bool open, bool disabled);
+
+intptr_t DatePickerDateKey(LocalDate date);
+LocalDate DatePickerDateFromKey(intptr_t key);
+
+enum class DateSelectionResult : uint8_t {
+    Rejected,
+    Partial,
+    Complete
+};
+
+DateSelectionResult DatePickerSelectDate(bool range, LocalDate value,
+                                         LocalDate* start, LocalDate* end,
+                                         const DateMatcher& disabled);
+
+struct DatePicker {
+    static El* New(Ctx* cx, Str id, bool disabled = false,
+                   bool open = false, Listener onOpenChange = {});
 };
 }
 
@@ -7855,9 +8358,25 @@ void TilesFromMetas(TilesState* s, const TileMeta* metas, const int* panels,
 
 }
 
+#line 1 "src/base/event.h"
+
+namespace gpui {
+
+inline bool IsDoubleClick(const ClickEvent* ev) {
+    return ev && ev->clickCount == 2;
+}
+
+}
+
 #line 1 "src/base/focus_trap.h"
 
 namespace gpui {
+
+void FocusTrapInit(App* app);
+
+struct FocusTrapContainer {
+    static El* New(Ctx* cx, Str id, FocusHandle focus, El* child);
+};
 
 int FocusTrapId(Str name);
 
@@ -7895,9 +8414,71 @@ inline bool SideIsLeft(Side s) {
     return s == Side::Left;
 }
 
+inline bool SideIsRight(Side s) {
+    return s == Side::Right;
+}
+
 inline bool AxisIsHorizontal(Axis a) {
     return a == Axis::Horizontal;
 }
+
+inline bool AxisIsVertical(Axis a) {
+    return a == Axis::Vertical;
+}
+
+inline bool PlacementIsHorizontal(Placement p) {
+    return p == Placement::Left || p == Placement::Right;
+}
+
+inline bool PlacementIsVertical(Placement p) {
+    return p == Placement::Top || p == Placement::Bottom;
+}
+
+inline Axis PlacementAxis(Placement p) {
+    return PlacementIsHorizontal(p) ? Axis::Horizontal : Axis::Vertical;
+}
+
+inline Edges EdgesAll(float value) {
+    return Edges::New(value, value, value, value);
+}
+
+}
+
+#line 1 "src/base/global_state.h"
+
+namespace gpui {
+
+struct BaseGlobalState {
+    Vec<EntityId> deferredPopovers;
+
+    Arena* appMenuArena = nullptr;
+    Vec<MenuDef> appMenus;
+    bool suppressTextSelection = false;
+
+    ~BaseGlobalState() {
+        deferredPopovers.Reset();
+        appMenus.Reset();
+        if (appMenuArena) {
+            ArenaDelete(appMenuArena);
+        }
+    }
+};
+
+using GlobalState = BaseGlobalState;
+using DeferredPopover = EntityId;
+
+BaseGlobalState* BaseGlobalStateOf(App* app);
+void BaseGlobalStateInit(App* app);
+void BaseSuppressTextSelection(App* app);
+void BaseResetTextSelectionSuppression(App* app);
+bool BaseIsTextSelectionSuppressed(const App* app);
+
+const MenuDef* BaseAppMenus(const App* app, int* count);
+void BaseSetAppMenus(App* app, const MenuDef* menus, int count);
+
+void BaseDeferredPopoverSet(App* app, EntityId popover, bool open);
+DeferredPopover BaseRegisterDeferredPopover(App* app, EntityId popover);
+bool BaseIsInDeferredContext(App* app);
 
 }
 
@@ -7905,16 +8486,140 @@ inline bool AxisIsHorizontal(Axis a) {
 
 namespace gpui {
 
+template <typename I>
 struct History {
-    Str items[32] = {};
-    int n = 0;
-    int cursor = -1;
+    Vec<I> undos;
+    Vec<I> redos;
+    double lastChangedAt = TimeNow();
+    uint64_t version = 0;
+    bool ignore = false;
+    int maxUndos = 1000;
+    double groupInterval = 0;
+    bool hasGroupInterval = false;
+    bool grouping = false;
+    bool unique = false;
 
-    void Push(Str s);
-    bool CanUndo() const;
-    bool CanRedo() const;
-    Str Undo();
-    Str Redo();
+    History& MaxUndos(int n) {
+        maxUndos = n;
+        return *this;
+    }
+
+    History& Unique(bool on = true) {
+        unique = on;
+        return *this;
+    }
+
+    History& GroupInterval(double seconds) {
+        groupInterval = seconds >= 0 ? seconds : 0;
+        hasGroupInterval = true;
+        return *this;
+    }
+
+    History& GroupIntervalMs(int64_t ms) {
+        return GroupInterval(ms > 0 ? (double)ms / 1000.0 : 0);
+    }
+
+    void StartGrouping() { grouping = true; }
+    void EndGrouping() { grouping = false; }
+
+    uint64_t Version() const { return version; }
+    bool IsIgnoring() const { return ignore; }
+    void SetIgnoring(bool on) { ignore = on; }
+
+    const Vec<I>& Undos() const { return undos; }
+    const Vec<I>& Redos() const { return redos; }
+    bool CanUndo() const { return undos.len > 0; }
+    bool CanRedo() const { return redos.len > 0; }
+
+    void Clear() {
+        undos.Clear();
+        redos.Clear();
+    }
+
+    void Push(I item) {
+        uint64_t nextVersion = IncVersion();
+        if (maxUndos <= 0) {
+            return;
+        }
+        if (undos.len >= maxUndos) {
+            RemoveAt(&undos, 0);
+        }
+        if (unique) {
+            RetainDifferent(&undos, item);
+            RetainDifferent(&redos, item);
+        }
+        item.SetVersion(nextVersion);
+        undos.Append(item);
+
+    }
+
+    Vec<I> Undo() { return MoveVersion(&undos, &redos); }
+    Vec<I> Redo() { return MoveVersion(&redos, &undos); }
+
+  private:
+    uint64_t IncVersion() {
+        double now = TimeNow();
+        if (!grouping &&
+            (!hasGroupInterval || now - lastChangedAt > groupInterval)) {
+            version++;
+        }
+        lastChangedAt = now;
+        return version;
+    }
+
+    static void RemoveAt(Vec<I>* values, int at) {
+        if (!values || at < 0 || at >= values->len) {
+            return;
+        }
+        for (int i = at + 1; i < values->len; i++) {
+            (*values)[i - 1] = (*values)[i];
+        }
+        values->len--;
+    }
+
+    static void RetainDifferent(Vec<I>* values, const I& item) {
+        int out = 0;
+        for (int i = 0; i < values->len; i++) {
+            if ((*values)[i] == item) {
+                continue;
+            }
+            if (out != i) {
+                (*values)[out] = (*values)[i];
+            }
+            out++;
+        }
+        values->len = out;
+    }
+
+    static bool ContainsVersion(const Vec<I>& values, uint64_t version) {
+        for (int i = 0; i < values.len; i++) {
+            if (values[i].Version() == version) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static Vec<I> MoveVersion(Vec<I>* from, Vec<I>* to) {
+        Vec<I> changes;
+        if (!from || from->len <= 0) {
+            return changes;
+        }
+        I first = (*from)[from->len - 1];
+        from->len--;
+        changes.Append(first);
+        uint64_t pickedVersion = first.Version();
+
+        while (ContainsVersion(*from, pickedVersion)) {
+            I change = (*from)[from->len - 1];
+            from->len--;
+            changes.Append(change);
+        }
+        for (int i = 0; i < changes.len; i++) {
+            to->Append(changes[i]);
+        }
+        return changes;
+    }
 };
 
 }
@@ -7963,12 +8668,48 @@ struct HoverCard {
 };
 }
 
+#line 1 "src/base/index_path.h"
+
+namespace gpui {
+
+struct IndexPath {
+    int section = 0;
+    int row = 0;
+    int column = 0;
+
+    IndexPath Section(int v) const { return IndexPath{v, row, column}; }
+    IndexPath Row(int v) const { return IndexPath{section, v, column}; }
+    IndexPath Column(int v) const { return IndexPath{section, row, v}; }
+
+    bool EqRow(IndexPath o) const {
+        return section == o.section && row == o.row;
+    }
+};
+
+inline IndexPath IndexPathNew(int row) {
+    return IndexPath{0, row, 0};
+}
+
+inline bool operator==(IndexPath a, IndexPath b) {
+    return a.section == b.section && a.row == b.row && a.column == b.column;
+}
+inline bool operator!=(IndexPath a, IndexPath b) {
+    return !(a == b);
+}
+
+Str IndexPathIdStr(Arena* a, IndexPath p);
+
+uint32_t IndexPathClickId(IndexPath p);
+
+}
+
 #line 1 "src/base/input.h"
 
 namespace gpui {
 
 struct InputBase {
-    static El* New(Ctx* cx, Str id, bool interactive = false);
+    static El* New(Ctx* cx, Str id, bool interactive = false,
+                   AccessibilityRole role = AccessibilityRole::TextInput);
 };
 
 struct InputEditorStyle {
@@ -8023,6 +8764,131 @@ struct Editor {
 };
 }
 
+#line 1 "src/gpui/keymap.h"
+
+namespace gpui {
+
+struct KeyChord {
+    int vk = 0;
+    bool shift = false;
+    bool ctrl = false;
+    bool alt = false;
+
+    bool platform = false;
+};
+
+bool KeyChordParse(Str spec, KeyChord* out);
+bool KeyChordEq(const KeyChord& a, const KeyChord& b);
+
+const int kMaxContextDepth = 8;
+
+const int kMaxStrokes = 3;
+
+int KeyChordsParse(Str spec, KeyChord* out, int maxChords);
+
+uint32_t ActionOf(Str name);
+
+uint32_t KeyContextOf(Str name);
+
+struct KeyBinding {
+    const char* stroke = nullptr;
+    uint32_t action = 0;
+    const char* context = nullptr;
+
+    intptr_t arg = 0;
+};
+
+void KeymapBind(const KeyBinding* bindings, int n);
+void KeymapClear();
+
+uint32_t KeymapGeneration();
+
+struct KeyMatch {
+    uint32_t action = 0;
+
+    intptr_t arg = 0;
+    bool pending = false;
+};
+
+KeyMatch KeymapMatch(const KeyChord& chord, const uint32_t* contexts,
+                     int nContexts);
+
+bool KeymapBindingForAction(uint32_t action, const uint32_t* contexts,
+                            int nContexts, KeyChord* out);
+
+bool KeymapAnyBindingForAction(uint32_t action, KeyChord* out);
+
+Str KeyName(int vk);
+
+bool KeymapPending();
+
+void KeymapClearPending();
+
+}
+
+#line 1 "src/base/input_keys.h"
+
+namespace gpui {
+
+namespace input {
+
+uint32_t Backspace();
+uint32_t Copy();
+uint32_t Cut();
+uint32_t Delete();
+uint32_t DeleteToBeginningOfLine();
+uint32_t DeleteToEndOfLine();
+uint32_t DeleteToNextWordEnd();
+uint32_t DeleteToPreviousWordStart();
+uint32_t Escape();
+uint32_t Indent();
+uint32_t IndentInline();
+uint32_t MoveDown();
+uint32_t MoveEnd();
+uint32_t MoveHome();
+uint32_t MoveLeft();
+uint32_t MovePageDown();
+uint32_t MovePageUp();
+uint32_t MoveRight();
+uint32_t MoveToEnd();
+uint32_t MoveToNextWord();
+uint32_t MoveToPreviousWord();
+uint32_t MoveToStart();
+uint32_t MoveUp();
+uint32_t Outdent();
+uint32_t OutdentInline();
+uint32_t Paste();
+uint32_t Redo();
+uint32_t Replace();
+uint32_t Search();
+uint32_t SelectAll();
+uint32_t SelectDown();
+uint32_t SelectLeft();
+uint32_t SelectRight();
+uint32_t SelectToEnd();
+uint32_t SelectToEndOfLine();
+uint32_t SelectToNextWordEnd();
+uint32_t SelectToPreviousWordStart();
+uint32_t SelectToStart();
+uint32_t SelectToStartOfLine();
+uint32_t SelectUp();
+uint32_t Undo();
+uint32_t Enter();
+
+}
+
+Str InputContext();
+
+void InputInitKeys();
+
+InputAction InputActionOf(uint32_t id, intptr_t arg = 0);
+
+constexpr bool InputEnterShift(intptr_t arg) {
+    return (arg & 2) != 0;
+}
+
+}
+
 #line 1 "src/base/link.h"
 
 namespace gpui {
@@ -8047,18 +8913,280 @@ struct ListSettings {
     bool activeHighlight = true;
 };
 
-const ListSettings& ListSettingsNow();
-void ListSettingsSet(ListSettings s);
+const ListSettings& ListSettingsNow(App* app);
+void ListSettingsSet(App* app, ListSettings s);
 
 struct ListActiveStyle {
     Background bg = {};
     Rgba border = {};
     bool hasBorder = false;
 };
-ListActiveStyle ListActiveStyleOf(Background active, Rgba activeBorder,
+ListActiveStyle ListActiveStyleOf(const ListSettings& settings,
+                                  Background active, Rgba activeBorder,
                                   Background accent, bool selected);
 
 El* ListActiveOverlay(Arena* a, Rgba border, float radius);
+
+}
+
+#line 1 "src/base/measure.h"
+
+namespace gpui {
+
+bool MeasurementEnabled();
+
+struct Measure {
+    Str name = {};
+    double started = 0;
+    bool active = false;
+};
+
+Measure MeasureBegin(Str name);
+void MeasureEnd(Measure* measure);
+
+using MeasureFn = void (*)(void* user);
+void MeasureRun(Str name, MeasureFn fn, void* user);
+void MeasureRunIf(Str name, bool enabled, MeasureFn fn, void* user);
+
+}
+
+#line 1 "src/base/motion.h"
+
+namespace gpui {
+
+namespace motion {
+
+template <typename T>
+struct Interpolate {
+    static T Between(const T& from, const T& target, float progress) {
+        return Lerp(from, target, progress);
+    }
+};
+
+struct Transition {
+    float durationMs = 0;
+    float delayMs = 0;
+    EaseFn ease = EaseOutCubic;
+
+    static Transition New(float durationMs) {
+        Transition policy;
+        policy.durationMs = durationMs;
+        return policy;
+    }
+
+    Transition Delay(float ms) const {
+        Transition policy = *this;
+        policy.delayMs = ms;
+        return policy;
+    }
+
+    Transition Ease(EaseFn fn) const {
+        Transition policy = *this;
+        policy.ease = fn;
+        return policy;
+    }
+};
+
+struct TransitionId {
+    uint32_t key = 0;
+
+    TransitionId() = default;
+    explicit TransitionId(uint32_t value) : key(value) {}
+    explicit TransitionId(Str id);
+    TransitionId(Str id, Str channel);
+
+    bool operator==(const TransitionId& other) const {
+        return key == other.key;
+    }
+    bool operator!=(const TransitionId& other) const {
+        return key != other.key;
+    }
+};
+
+}
+
+using Motion = motion::Transition;
+
+inline Motion MotionNew(float durationMs) {
+    return motion::Transition::New(durationMs);
+}
+
+uint32_t MotionId(Str id);
+uint32_t MotionId(Str id, Str channel);
+
+uint32_t MotionName(Ctx* cx, Str name);
+
+float MotionProgress(const Motion& m, float elapsedMs);
+
+float MotionSample(const Motion& m, float progress);
+
+bool MotionReduced();
+
+void MotionSetReduced(bool on);
+
+template <typename T>
+struct MotionState {
+    T from = {};
+    T target = {};
+    double startedAt = 0;
+    bool init = false;
+};
+
+template <typename T>
+struct MotionStep {
+    T value = {};
+
+    bool running = false;
+};
+
+inline bool MotionEq(float a, float b) {
+    return a == b;
+}
+inline bool MotionEq(Point a, Point b) {
+    return a.x == b.x && a.y == b.y;
+}
+inline bool MotionEq(Rgba a, Rgba b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
+template <typename T>
+MotionStep<T> MotionAdvance(MotionState<T>* st, T target, const Motion& m,
+                            double now, bool reduced) {
+    MotionStep<T> out;
+    if (!st->init) {
+        st->init = true;
+        st->from = target;
+        st->target = target;
+        st->startedAt = now;
+    }
+    if (reduced || m.durationMs <= 0) {
+        st->from = target;
+        st->target = target;
+        st->startedAt = now;
+        out.value = target;
+        return out;
+    }
+    float elapsedMs = (float)((now - st->startedAt) * 1000.0);
+    float progress = MotionProgress(m, elapsedMs);
+    T sampled = motion::Interpolate<T>::Between(
+        st->from, st->target, MotionSample(m, progress));
+    if (!MotionEq(st->target, target)) {
+
+        st->from = sampled;
+        st->target = target;
+        st->startedAt = now;
+        out.value = sampled;
+        out.running = true;
+        return out;
+    }
+    out.value = sampled;
+    out.running = progress < 1.f && !MotionEq(st->from, st->target);
+    return out;
+}
+
+double MotionNow(Ctx* cx);
+
+void* MotionSlot(Ctx* cx, uint32_t key, int size);
+void MotionWantsFrame(Ctx* cx);
+
+float MotionRepeat(Ctx* cx, uint32_t key, float periodMs,
+                   EaseFn ease = nullptr);
+
+float MotionAppear(Ctx* cx, uint32_t key, float durationMs,
+                   EaseFn ease = nullptr);
+
+template <typename T>
+void MotionSeed(Ctx* cx, uint32_t key, T from) {
+    auto* st =
+        (MotionState<T>*)MotionSlot(cx, key, (int)sizeof(MotionState<T>));
+    if (!st) {
+        return;
+    }
+    st->init = true;
+    st->from = from;
+    st->target = from;
+    st->startedAt = MotionNow(cx);
+}
+
+struct Spring {
+
+    float responseMs = 0;
+
+    float damping = 1.f;
+
+    float epsilon = 0.001f;
+
+    bool travel = true;
+};
+
+inline Spring SpringNew(float responseMs) {
+    Spring s;
+    s.responseMs = responseMs;
+    return s;
+}
+
+struct SpringState {
+    float position = 0;
+    float velocity = 0;
+    float target = 0;
+    double updatedAt = 0;
+    bool init = false;
+};
+
+struct SpringStep {
+    float value = 0;
+    bool running = false;
+};
+
+SpringStep SpringAdvance(SpringState* st, float target, const Spring& s,
+                         double now, bool reduced);
+
+float SpringValue(Ctx* cx, uint32_t key, float target, const Spring& s);
+
+inline void SpringSeed(Ctx* cx, uint32_t key, float from) {
+    auto* st = (SpringState*)MotionSlot(cx, key, (int)sizeof(SpringState));
+    if (!st) {
+        return;
+    }
+    st->init = true;
+    st->position = from;
+    st->velocity = 0;
+    st->target = from;
+    st->updatedAt = MotionNow(cx);
+}
+
+template <typename T>
+T MotionValue(Ctx* cx, uint32_t key, T target, const Motion& m) {
+    auto* st =
+        (MotionState<T>*)MotionSlot(cx, key, (int)sizeof(MotionState<T>));
+    if (!st) {
+        return target;
+    }
+    MotionStep<T> step =
+        MotionAdvance(st, target, m, MotionNow(cx), MotionReduced());
+    if (step.running) {
+        MotionWantsFrame(cx);
+    }
+    return step.value;
+}
+
+namespace motion {
+
+template <typename T>
+T transition(Ctx* cx, TransitionId id, T target, const Transition& policy) {
+    return MotionValue(cx, id.key, target, policy);
+}
+
+using Spring = gpui::Spring;
+using SpringState = gpui::SpringState;
+using SpringStep = gpui::SpringStep;
+
+inline float spring(Ctx* cx, TransitionId id, float target,
+                    const Spring& policy) {
+    return SpringValue(cx, id.key, target, policy);
+}
+
+}
 
 }
 
@@ -8071,14 +9199,69 @@ enum class StepAction : uint8_t {
     Increment
 };
 
+enum class NumberStepKind : uint8_t {
+    Fixed,
+    ByValue
+};
+
+using NumberStepByValueFn = double (*)(double current, StepAction action,
+                                       App* app, intptr_t arg);
+
+struct NumberStep {
+    NumberStepKind kind = NumberStepKind::Fixed;
+    double fixed = 1;
+    NumberStepByValueFn byValue = nullptr;
+    intptr_t arg = 0;
+
+    static NumberStep Fixed(double value);
+    static NumberStep ByValue(NumberStepByValueFn fn, intptr_t arg = 0);
+    double Value(double current, StepAction action, App* app) const;
+};
+
+enum class NumberInputEventKind : uint8_t {
+    Step
+};
+
+struct NumberInputEvent {
+    NumberInputEventKind kind = NumberInputEventKind::Step;
+    StepAction action = StepAction::Increment;
+};
+
 bool NumberStepValue(Str value, StepAction action, double step, bool hasMin,
                      double min, bool hasMax, double max, char* out,
                      int outCap);
 
+bool NumberParseValue(Str value, double* out);
+
 bool NumberStepForKey(int key, StepAction* out);
+
+bool NumberInputApplyStep(InputState* state, App* app, Window* win,
+                          StepAction action, const NumberStep* step,
+                          bool hasMin, double min, bool hasMax, double max,
+                          bool disabled, Listener onStep = {});
+
+Func0 NumberInputStepCallback(Ctx* cx, InputState* state, StepAction action,
+                              const NumberStep* step, bool hasMin, double min,
+                              bool hasMax, double max, bool disabled,
+                              Listener onStep = {});
+
+void NumberInputEnsureMask(InputState* state);
+
+struct NumberInputText {
+    El* root = nullptr;
+
+    static NumberInputText* New(Ctx* cx);
+    NumberInputText* Child(El* el);
+    El* IntoEl();
+};
 
 struct NumberInput {
     static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, InputState* state);
+
+    static El* Compose(Ctx* cx, Str id, InputState* state, bool disabled,
+                       El* decrement, El* input, El* increment,
+                       bool controlsRight = false, El* children = nullptr);
 };
 }
 
@@ -8153,25 +9336,21 @@ struct Pagination {
 
 namespace gpui {
 
-enum class PopupAnchor : uint8_t {
-    TopLeft,
-    TopCenter,
-    TopRight,
-    BottomLeft,
-    BottomCenter,
-    BottomRight,
-    LeftCenter,
-    RightCenter
-};
+using PopupAnchor = Anchor;
+
+constexpr int kPopupPriority = 100;
+constexpr float kPopupWindowMargin = 8.f;
 
 Point PopupResolvedCorner(PopupAnchor anchor, Bounds triggerBounds);
 
-El* PopupPlaceContent(El* content, PopupAnchor anchor, float gap);
+El* PopupPlaceContent(El* content, PopupAnchor anchor, float offsetY = 0);
 
 struct Popup {
     El* root = nullptr;
 
     PopupAnchor anchor = PopupAnchor::TopLeft;
+
+    bool contentReady = false;
 
     static Popup* New(Ctx* cx, Str id, El* trigger,
                       PopupAnchor anchor = PopupAnchor::TopLeft);
@@ -8187,7 +9366,13 @@ struct Popup {
 
 namespace gpui {
 
+struct PopoverOpenChangeEvent {
+    bool open = false;
+};
+
 struct PopoverState {
+
+    EntityId self = {};
     bool open = false;
 
     bool seeded = false;
@@ -8196,6 +9381,10 @@ struct PopoverState {
     FocusHandle trackedFocus = {};
 
     FocusHandle previousFocus = {};
+
+    Listener onOpenChange = {};
+
+    Listener onDismiss = {};
 };
 
 void PopoverSetOpenFocused(PopoverState* s, Ctx* cx, bool open);
@@ -8206,14 +9395,19 @@ void PopoverSetOpen(Ctx* cx, Entity<PopoverState> state, bool open);
 void PopoverToggle(PopoverState* self, Ctx* cx, const MouseDownEvent* ev,
                    intptr_t button);
 void PopoverDismiss(PopoverState* self, Ctx* cx, const ClickEvent* ev);
+void PopoverDismissOnMouseDown(PopoverState* self, Ctx* cx,
+                               const MouseDownEvent* ev);
 
 struct Popover {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    El* root = nullptr;
+    Str id = {};
+    El* trigger = nullptr;
+    El* content = nullptr;
     Entity<PopoverState> state = {};
     FocusHandle focus = {};
     MouseButton button = MouseButton::Left;
+    bool overlayClosable = true;
 
     PopupAnchor anchor = PopupAnchor::TopLeft;
 
@@ -8222,6 +9416,10 @@ struct Popover {
     Popover* Anchor(PopupAnchor v);
 
     Popover* TrackedFocus(FocusHandle tracked);
+    Popover* OverlayClosable(bool closable);
+    Popover* OnOpenChange(Listener fn);
+
+    Popover* OnDismiss(Listener fn);
     Popover* Trigger(El* trigger);
     Popover* Content(El* content);
     El* IntoEl();
@@ -8232,33 +9430,55 @@ struct Popover {
 
 namespace gpui {
 
-enum class PopupAlign : uint8_t {
+enum class Align : uint8_t {
     Start,
     Center,
     End
 };
+using PopupAlign = Align;
 
-enum class Anchor : uint8_t {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight
-};
-
-struct Positioned {
+struct ResolvedPosition {
     Bounds bounds;
-    Placement placement = Placement::Top;
+    gpui::Placement placement = gpui::Placement::Top;
     bool hasPlacement = false;
+};
+using Positioned = ResolvedPosition;
+
+struct PositionerState {};
+
+struct Positioner {
+    enum class Strategy : uint8_t { Side, Corner };
+
+    Arena* a = nullptr;
+    Strategy strategy = Strategy::Side;
+    Bounds trigger = {};
+    Anchor anchor = Anchor::TopLeft;
+    Point point = {};
+    gpui::Placement placement = gpui::Placement::Top;
+    bool hasPlacement = false;
+    gpui::Align align = gpui::Align::Center;
+    float offset = 0;
+    float margin = 4;
+    ArenaVec<El*> children;
+
+    static Positioner* Side(Ctx* cx, Bounds trigger);
+    static Positioner* Corner(Ctx* cx, Anchor anchor, Point point);
+    Positioner* Placement(gpui::Placement value);
+    Positioner* Align(gpui::Align value);
+    Positioner* Offset(float value);
+    Positioner* Margin(float value);
+    Positioner* Child(El* child);
+    El* IntoEl();
 };
 
 constexpr float kPopupMargin = 4.f;
 
-Positioned PositionSide(Bounds trigger, Size popup, Size view, float margin,
-                        const Placement* preferred, PopupAlign align,
-                        float offset);
+ResolvedPosition PositionSide(Bounds trigger, Size popup, Size view,
+                              float margin, const Placement* preferred,
+                              Align align, float offset);
 
-Positioned PositionCorner(Anchor anchor, Point at, Size popup, Size view,
-                          float margin);
+ResolvedPosition PositionCorner(Anchor anchor, Point at, Size popup,
+                                Size view, float margin);
 
 }
 
@@ -8269,7 +9489,8 @@ namespace gpui {
 float ProgressClampValue(float value);
 
 struct Progress {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, float value = 0,
+                   bool indeterminate = false);
 };
 
 struct ProgressTrack {
@@ -8285,9 +9506,18 @@ struct ProgressIndicator {
 
 namespace gpui {
 
+struct RadioStyles {
+    StateStyle checked = {};
+    StateStyle disabled = {};
+
+    RadioStyles& Checked(const StateStyle& style);
+    RadioStyles& Disabled(const StateStyle& style);
+};
+
 struct Radio {
     static El* New(Ctx* cx, Str id, bool checked = false, bool disabled = false,
-                   Listener onChange = {});
+                   Listener onChange = {}, const RadioStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr);
 };
 }
 
@@ -8296,7 +9526,7 @@ struct Radio {
 namespace gpui {
 
 struct RadioGroup {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, Axis axis = Axis::Horizontal);
 };
 }
 
@@ -8304,7 +9534,8 @@ struct RadioGroup {
 
 namespace gpui {
 
-const float kResizablePanelMinSize = 100.f;
+const float PANEL_MIN_SIZE = 100.f;
+const float kResizablePanelMinSize = PANEL_MIN_SIZE;
 
 bool ResizablePanelResize(float* sizes, const float* mins, const float* maxs,
                           int n, int ix, float size, float containerSize);
@@ -8326,6 +9557,40 @@ struct ResizeHandleState {
 };
 
 Entity<ResizeHandleState> ResizeHandleStateFor(Ctx* cx, Str name);
+
+struct ResizeHandleContext {
+    Axis axis = Axis::Horizontal;
+    bool active = false;
+
+    Axis AxisValue() const { return axis; }
+    bool IsActive() const { return active; }
+};
+
+using ResizeHandleRenderer = El* (*)(void* user,
+                                     const ResizeHandleContext* context,
+                                     Ctx* cx);
+
+struct ResizeHandle {
+    Ctx* cx = nullptr;
+    Str id = {};
+    Axis axis = Axis::Horizontal;
+    Side placement = Side::Right;
+    bool hasPlacement = false;
+    Listener onDrag = {};
+    void* appearanceUser = nullptr;
+    ResizeHandleRenderer appearance = nullptr;
+    Rgba color = {};
+    Rgba activeColor = {};
+
+    static ResizeHandle* New(Ctx* cx, Str id, Axis axis);
+    ResizeHandle* Placement(Side value);
+    ResizeHandle* OnDrag(Listener listener);
+    ResizeHandle* WithAppearance(void* user, ResizeHandleRenderer renderer);
+    ResizeHandle* Colors(Rgba rest, Rgba active);
+    El* IntoEl();
+};
+
+ResizeHandle* resize_handle(Ctx* cx, Str id, Axis axis);
 
 struct ResizableState {
     Axis axis = Axis::Horizontal;
@@ -8362,15 +9627,30 @@ struct ResizableState {
                              const DragMoveEvent* ev);
     static void OnHandleUp(ResizableState* self, Ctx* cx,
                            const MouseUpEvent* ev);
+
+    const Vec<float>& Sizes() const { return sizes; }
+    float ContainerSize() const {
+        return AxisIsHorizontal(axis) ? bounds.w : bounds.h;
+    }
+    bool ResizePanel(Ctx* cx, int ix, float size);
+    bool InsertPanel(Ctx* cx, float size = PANEL_MIN_SIZE, int ix = -1);
+    bool RemovePanel(Ctx* cx, int ix);
+    bool ResetPanel(Ctx* cx, int ix);
+    void Clear();
+};
+
+enum class ResizablePanelEvent : uint8_t {
+    Resized,
 };
 
 float ResizablePanelSize(const ResizableState* s, int ix, float declared);
 
-struct Resizable {
+struct ResizablePanelGroup {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
     Entity<ResizableState> state = {};
+    gpui::Axis groupAxis = gpui::Axis::Horizontal;
     float width = kFill;
     float height = kFill;
 
@@ -8383,133 +9663,227 @@ struct Resizable {
     ArenaVec<float> maxs;
     ArenaVec<bool> grows;
     ArenaVec<bool> shown;
+    void* handleAppearanceUser = nullptr;
+    ResizeHandleRenderer handleAppearance = nullptr;
+    Listener onResize = {};
 
-    static Resizable* New(Ctx* cx, Str id, Entity<ResizableState> state = {},
-                          Axis axis = Axis::Horizontal);
-    Resizable* W(float v);
-    Resizable* H(float v);
-    Resizable* HandleColors(Rgba rest, Rgba dragging);
+    static ResizablePanelGroup* New(Ctx* cx, Str id,
+                                    Entity<ResizableState> state = {},
+                                    Axis axis = Axis::Horizontal);
+    ResizablePanelGroup* W(float v);
+    ResizablePanelGroup* H(float v);
+    ResizablePanelGroup* WithState(Entity<ResizableState> value);
+    ResizablePanelGroup* Axis(gpui::Axis value);
+    ResizablePanelGroup* Size(float v);
+    ResizablePanelGroup* HandleColors(Rgba rest, Rgba dragging);
+    ResizablePanelGroup* WithHandleAppearance(void* user,
+                                               ResizeHandleRenderer renderer);
+    ResizablePanelGroup* OnResize(Listener listener);
 
-    Resizable* Panel(El* content, float size,
-                     float min = kResizablePanelMinSize, float max = 0);
+    ResizablePanelGroup* Panel(El* content, float size,
+                               float min = kResizablePanelMinSize,
+                               float max = 0);
 
-    Resizable* Grow(El* content, float min = kResizablePanelMinSize);
+    ResizablePanelGroup* Grow(El* content,
+                              float min = kResizablePanelMinSize);
 
-    Resizable* Flex();
+    ResizablePanelGroup* Flex();
 
-    Resizable* Visible(bool v);
+    ResizablePanelGroup* Visible(bool v);
+    ResizablePanelGroup* Child(struct ResizablePanel* panel);
+    ResizablePanelGroup* Children(struct ResizablePanel** values, int count);
     El* IntoEl();
 };
 
+using Resizable = ResizablePanelGroup;
+
 struct ResizablePanel {
-    static El* New(Ctx* cx);
-};
-}
+    Ctx* cx = nullptr;
+    El* content = nullptr;
+    float size = 0;
+    float min = PANEL_MIN_SIZE;
+    float max = 0;
+    bool grow = true;
+    bool visible = true;
 
-#line 1 "src/base/sankey.h"
-
-namespace gpui {
-
-enum class SankeyAlign : uint8_t {
-    Left,
-    Right,
-    Center,
-    Justify
-};
-
-enum class SankeyValueScale : uint8_t {
-    Linear,
-    Sqrt
+    static ResizablePanel* New(Ctx* cx);
+    ResizablePanel* Child(El* value);
+    ResizablePanel* Size(float value);
+    ResizablePanel* SizeRange(float minValue, float maxValue = 0);
+    ResizablePanel* FlexNone();
+    ResizablePanel* Visible(bool value);
 };
 
-enum class SankeyError : uint8_t {
-    None,
-
-    MissingNode,
-    CircularLink
-};
-
-struct SankeyLink {
-    int source = 0;
-    int target = 0;
-    double value = 0;
-};
-
-struct SankeyNodeLayout {
-    int index = 0;
-
-    double value = 0;
-
-    int depth = 0;
-    int height = 0;
-
-    int layer = 0;
-    float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
-
-    int srcStart = 0, srcCount = 0;
-    int tgtStart = 0, tgtCount = 0;
-};
-
-struct SankeyLinkLayout {
-    int index = 0;
-    int source = 0;
-    int target = 0;
-    double value = 0;
-    float y0 = 0, y1 = 0;
-
-    float width = 0;
-    float sourceWidth = 0;
-    float targetWidth = 0;
-};
-
-struct SankeyGraph {
-    Vec<SankeyNodeLayout> nodes;
-    Vec<SankeyLinkLayout> links;
-
-    Vec<int> srcLinks;
-    Vec<int> tgtLinks;
-
-    int errNode = 0;
-
-    void Reset() {
-        nodes.Reset();
-        links.Reset();
-        srcLinks.Reset();
-        tgtLinks.Reset();
-    }
-};
-
-int SankeyLayerCount(const SankeyGraph* g);
-
-struct Sankey {
-    float nodeWidth = 24.f;
-    float nodePadding = 8.f;
-    SankeyAlign align = SankeyAlign::Justify;
-    int iterations = 6;
-    SankeyValueScale valueScale = SankeyValueScale::Linear;
-
-    float x0 = 0, y0 = 0, x1 = 1, y1 = 1;
-};
-
-SankeyError SankeyTopology(const Sankey* s, int nodeCount,
-                           const SankeyLink* links, int nLinks,
-                           SankeyGraph* out);
-
-void SankeyLayoutFrom(const Sankey* s, SankeyGraph* g);
-
-SankeyError SankeyLayout(const Sankey* s, int nodeCount,
-                         const SankeyLink* links, int nLinks, SankeyGraph* out);
-
+ResizablePanelGroup* h_resizable(Ctx* cx, Str id,
+                                  Entity<ResizableState> state = {});
+ResizablePanelGroup* v_resizable(Ctx* cx, Str id,
+                                  Entity<ResizableState> state = {});
+ResizablePanel* resizable_panel(Ctx* cx);
 }
 
 #line 1 "src/base/scrollbar.h"
 
 namespace gpui {
 
+enum class ScrollbarEntrance : uint8_t;
+struct ScrollbarMotion;
+
+struct ScrollbarHandle {
+    void* user = nullptr;
+    Bounds (*viewportBounds)(void* user) = nullptr;
+    Point (*offset)(void* user) = nullptr;
+    void (*setOffset)(void* user, Point value) = nullptr;
+    Size (*contentSize)(void* user) = nullptr;
+    void (*startDrag)(void* user) = nullptr;
+    void (*endDrag)(void* user) = nullptr;
+
+    bool IsValid() const {
+        return user && viewportBounds && offset && setOffset && contentSize;
+    }
+    Bounds ViewportBounds() const {
+        return viewportBounds ? viewportBounds(user) : Bounds{};
+    }
+    Point Offset() const { return offset ? offset(user) : Point{}; }
+    void SetOffset(Point value) const {
+        if (setOffset) {
+            setOffset(user, value);
+        }
+    }
+    Size ContentSize() const {
+        return contentSize ? contentSize(user) : Size{};
+    }
+    void StartDrag() const {
+        if (startDrag) {
+            startDrag(user);
+        }
+    }
+    void EndDrag() const {
+        if (endDrag) {
+            endDrag(user);
+        }
+    }
+};
+
+struct ScrollbarTrackStyle {
+    Background background = {};
+    Rgba border = {};
+    float width = 0;
+    bool hasBackground = false;
+    bool hasBorder = false;
+    bool hasWidth = false;
+
+    ScrollbarTrackStyle Bg(Background value) const {
+        ScrollbarTrackStyle out = *this;
+        out.background = value;
+        out.hasBackground = true;
+        return out;
+    }
+    ScrollbarTrackStyle BorderColor(Rgba value) const {
+        ScrollbarTrackStyle out = *this;
+        out.border = value;
+        out.hasBorder = true;
+        return out;
+    }
+    ScrollbarTrackStyle Width(float value) const {
+        ScrollbarTrackStyle out = *this;
+        out.width = value;
+        out.hasWidth = true;
+        return out;
+    }
+};
+
+struct ScrollbarThumbStyle {
+    Background background = {};
+    float width = 0;
+    float inset = 0;
+    float radius = 0;
+    float minLength = 0;
+    bool hasBackground = false;
+    bool hasWidth = false;
+    bool hasInset = false;
+    bool hasRadius = false;
+    bool hasMinLength = false;
+
+    ScrollbarThumbStyle Bg(Background value) const {
+        ScrollbarThumbStyle out = *this;
+        out.background = value;
+        out.hasBackground = true;
+        return out;
+    }
+    ScrollbarThumbStyle Width(float value) const {
+        ScrollbarThumbStyle out = *this;
+        out.width = value;
+        out.hasWidth = true;
+        return out;
+    }
+    ScrollbarThumbStyle Inset(float value) const {
+        ScrollbarThumbStyle out = *this;
+        out.inset = value;
+        out.hasInset = true;
+        return out;
+    }
+    ScrollbarThumbStyle Radius(float value) const {
+        ScrollbarThumbStyle out = *this;
+        out.radius = value;
+        out.hasRadius = true;
+        return out;
+    }
+    ScrollbarThumbStyle MinLength(float value) const {
+        ScrollbarThumbStyle out = *this;
+        out.minLength = value;
+        out.hasMinLength = true;
+        return out;
+    }
+};
+
+struct ScrollbarStyles {
+    ScrollbarTrackStyle track = {};
+    ScrollbarTrackStyle trackHover = {};
+    ScrollbarTrackStyle trackActive = {};
+    ScrollbarThumbStyle thumb = {};
+    ScrollbarThumbStyle thumbHover = {};
+    ScrollbarThumbStyle thumbActive = {};
+
+    ScrollbarStyles Track(ScrollbarTrackStyle value) const {
+        ScrollbarStyles out = *this;
+        out.track = value;
+        return out;
+    }
+    ScrollbarStyles TrackHover(ScrollbarTrackStyle value) const {
+        ScrollbarStyles out = *this;
+        out.trackHover = value;
+        return out;
+    }
+    ScrollbarStyles TrackActive(ScrollbarTrackStyle value) const {
+        ScrollbarStyles out = *this;
+        out.trackActive = value;
+        return out;
+    }
+    ScrollbarStyles Thumb(ScrollbarThumbStyle value) const {
+        ScrollbarStyles out = *this;
+        out.thumb = value;
+        return out;
+    }
+    ScrollbarStyles ThumbHover(ScrollbarThumbStyle value) const {
+        ScrollbarStyles out = *this;
+        out.thumbHover = value;
+        return out;
+    }
+    ScrollbarStyles ThumbActive(ScrollbarThumbStyle value) const {
+        ScrollbarStyles out = *this;
+        out.thumbActive = value;
+        return out;
+    }
+};
+
 float ScrollbarThumbSize(float track, float container, float content);
+float ScrollbarThumbSize(float track, float container, float content,
+                         float minLength);
 
 float ScrollbarThumbPos(float track, float thumb, float offset, float container,
                         float content);
+float ScrollbarThumbPos(float track, float thumb, float offset, float container,
+                        float content, float marginEnd);
 
 float ScrollbarOffsetForTrackPress(float pos, float trackOrigin, float track,
                                    float thumb, float container, float content);
@@ -8517,23 +9891,75 @@ float ScrollbarOffsetForTrackPress(float pos, float trackOrigin, float track,
 float ScrollbarOffsetForDrag(float pos, float grab, float trackOrigin,
                              float track, float thumb, float container,
                              float content);
+float ScrollbarOffsetForDrag(float pos, float grab, float trackOrigin,
+                             float track, float thumb, float container,
+                             float content, float marginEnd);
 
-enum class ScrollAxis : uint8_t {
+enum class ScrollbarAxis : uint8_t {
     Vertical,
     Horizontal,
     Both
 };
+
+using ScrollAxis = ScrollbarAxis;
+
+struct AxisPrepaintState {
+    Axis axis = Axis::Vertical;
+
+    Bounds barHitbox = {};
+    Bounds bounds = {};
+    float radius = 0;
+    Rgba bg = {};
+    Rgba border = {};
+    Bounds thumbBounds = {};
+    Bounds thumbFillBounds = {};
+    Background thumbBg = {};
+    float scrollSize = 0;
+    float containerSize = 0;
+    float thumbSize = 0;
+    float marginEnd = 0;
+    float trackWidth = 0;
+    float visibilityOpacity = 0;
+    float visibilityPosition = 0;
+    bool visibilityRequested = false;
+};
+
+struct PrepaintState {
+    Bounds hitbox = {};
+
+    int scrollbarStateId = 0;
+    AxisPrepaintState states[2] = {};
+    int statesLen = 0;
+};
+
+AxisPrepaintState ScrollbarPrepaintAxis(Axis axis, Bounds track,
+                                        float offset, float containerSize,
+                                        float contentSize,
+                                        const ScrollbarThumbStyle& style);
 
 struct Scrollbar {
 
     static El* New(Ctx* cx);
 
     static El* New(Ctx* cx, Str id, float scrollY, float scrollX,
-                   Listener onScroll, ScrollAxis axis = ScrollAxis::Vertical,
-                   ScrollbarMode mode = ScrollbarMode::Always);
+                   Listener onScroll,
+                   ScrollAxis axis = ScrollAxis::Vertical);
+    static El* New(Ctx* cx, Str id, float scrollY, float scrollX,
+                   Listener onScroll, ScrollAxis axis, ScrollbarMode mode);
 
+    static El* Apply(Ctx* cx, El* element, Str id, float scrollY,
+                     float scrollX, Listener onScroll,
+                     ScrollAxis axis = ScrollAxis::Vertical);
+    static El* Apply(Ctx* cx, El* element, Str id, float scrollY,
+                     float scrollX, Listener onScroll, ScrollAxis axis,
+                     ScrollbarMode mode);
+
+    static El* ApplyStyles(Ctx* cx, El* element,
+                           const ScrollbarStyles& styles);
+
+    static El* Vertical(Ctx* cx, Str id, float scrollY, Listener onScroll);
     static El* Vertical(Ctx* cx, Str id, float scrollY, Listener onScroll,
-                        ScrollbarMode mode = ScrollbarMode::Always);
+                        ScrollbarMode mode);
 };
 }
 
@@ -8558,16 +9984,46 @@ SheetOverlayPress SheetOverlayPressAction(bool overlayInteractive,
 
 bool SheetClosesOnKey(int key);
 
+void SheetInitKeys();
+Str SheetContext();
+
+struct SheetState {
+    bool overlayInteractive = true;
+    bool overlayClosable = true;
+    bool hasDismissBefore = false;
+    float dismissBeforeY = 0;
+    Listener requestClose = {};
+    Listener onClose = {};
+
+    void Close(Ctx* cx);
+    static void OnOverlay(SheetState* self, Ctx* cx,
+                          const MouseDownEvent* ev);
+    static void OnAction(SheetState* self, Ctx* cx, const ActionEvent* ev);
+};
+
 struct Sheet {
     Ctx* cx = nullptr;
     El* root = nullptr;
 
     Str trap = {};
+    El* overlay = nullptr;
+    El* surface = nullptr;
+    bool overlayInteractive = true;
+    bool overlayClosable = true;
+    bool hasDismissBefore = false;
+    float dismissBeforeY = 0;
+    Listener requestClose = {};
+    Listener onClose = {};
 
     static Sheet* New(Ctx* cx);
     Sheet* Trap(Str name);
-    Sheet* Overlay(El* overlay);
-    Sheet* Surface(El* surface);
+    Sheet* Overlay(El* element);
+    Sheet* Surface(El* element);
+    Sheet* OverlayInteractive(bool interactive);
+    Sheet* OverlayClosable(bool closable);
+    Sheet* DismissBeforeY(float y);
+    Sheet* RequestClose(Listener handler);
+    Sheet* OnClose(Listener handler);
     El* IntoEl();
 };
 }
@@ -8577,7 +10033,8 @@ struct Sheet {
 namespace gpui {
 
 struct Slider {
-    static El* New(Ctx* cx, int clickId = 0);
+    static El* New(Ctx* cx, SliderState* state = nullptr,
+                   Axis axis = Axis::Horizontal, int clickId = 0);
 };
 
 struct SliderTrack {
@@ -8593,21 +10050,373 @@ struct SliderThumb {
 };
 }
 
+#line 1 "src/base/theme_tokens.h"
+
+namespace gpui {
+
+struct ColorTokens {
+    Rgba background = {};
+    Rgba foreground = {};
+    Rgba surface = {};
+    Rgba surfaceForeground = {};
+    Rgba primary = {};
+    Rgba primaryForeground = {};
+    Rgba secondary = {};
+    Rgba secondaryForeground = {};
+    Rgba muted = {};
+    Rgba mutedForeground = {};
+    Rgba accent = {};
+    Rgba accentForeground = {};
+    Rgba destructive = {};
+    Rgba destructiveForeground = {};
+    Rgba border = {};
+    Rgba input = {};
+    Rgba ring = {};
+};
+
+struct RadiusTokens {
+    float none = 0;
+    float sm = 3;
+    float md = 6;
+    float lg = 8;
+    float xl = 12;
+    float full = 9999;
+};
+
+struct SpacingTokens {
+    float xxs = 2;
+    float xs = 4;
+    float sm = 8;
+    float md = 12;
+    float lg = 16;
+    float xl = 24;
+    float xxl = 32;
+};
+
+struct TextStyleToken {
+    float size = 16;
+    float lineHeight = 24;
+    FontWeight weight = FontWeight::Normal;
+};
+
+struct TypographyTokens {
+    Str sans = Str(".SystemUIFont");
+#if GPUI_OS_MAC
+    Str mono = Str("Menlo");
+#elif GPUI_OS_WINDOWS
+    Str mono = Str("Consolas");
+#else
+    Str mono = Str("DejaVu Sans Mono");
+#endif
+    TextStyleToken xs = {12, 16, FontWeight::Normal};
+    TextStyleToken sm = {14, 20, FontWeight::Normal};
+    TextStyleToken md = {16, 24, FontWeight::Normal};
+    TextStyleToken lg = {18, 28, FontWeight::Normal};
+    TextStyleToken xl = {20, 28, FontWeight::Normal};
+    TextStyleToken monoMd = {13, 20, FontWeight::Normal};
+};
+
+using SemanticShadow = BoxShadow;
+
+struct ShadowTokens {
+    Vec<BoxShadow> sm;
+    Vec<BoxShadow> md;
+    Vec<BoxShadow> lg;
+
+    ShadowTokens() = default;
+    static ShadowTokens Elevations(Rgba color);
+};
+
+const float kMonoFontSize = 13.f;
+
+struct SemanticThemeTokens {
+    ColorTokens colors = {};
+    RadiusTokens radius = {};
+    SpacingTokens spacing = {};
+    TypographyTokens typography = {};
+    ShadowTokens shadow;
+
+    SemanticThemeTokens() = default;
+};
+
+using SemanticColorTokens = ColorTokens;
+using SemanticRadiusTokens = RadiusTokens;
+using SemanticSpacingTokens = SpacingTokens;
+using SemanticTextStyle = TextStyleToken;
+using SemanticTypographyTokens = TypographyTokens;
+using SemanticShadowTokens = ShadowTokens;
+
+SemanticShadowTokens SemanticShadowElevations(Rgba color);
+const BoxShadow* ShadowFirst(const Vec<BoxShadow>& level);
+BoxShadow* ShadowFirst(Vec<BoxShadow>& level);
+
+}
+
+#line 1 "src/base/styled.h"
+
+namespace gpui {
+
+inline El* HFlex(Arena* a) {
+    return Div(a)->FlexRow()->ItemsCenter();
+}
+
+inline El* VFlex(Arena* a) {
+    return Div(a)->FlexCol();
+}
+
+inline BoxShadow box_shadow(float x, float y, float blur, float spread,
+                            Hsla color) {
+    BoxShadow out;
+    out.x = x;
+    out.y = y;
+    out.blur = blur;
+    out.spread = spread;
+    out.color = HslaToRgba(color);
+    out.inset = false;
+    return out;
+}
+
+enum class RoleOverrideKind : uint8_t {
+    Implicit,
+    Presentational,
+    Role
+};
+
+struct RoleOverride {
+    RoleOverrideKind kind = RoleOverrideKind::Implicit;
+    AccessibilityRole role = AccessibilityRole::None;
+
+    static RoleOverride Implicit();
+    static RoleOverride Presentational();
+    static RoleOverride Explicit(AccessibilityRole role);
+    bool Resolve(AccessibilityRole defaultRole,
+                 AccessibilityRole* out) const;
+};
+
+struct StyledExt {
+    static El* RefineStyle(El* element, const Style& style, uint32_t fields);
+    static El* HFlex(El* element);
+    static El* VFlex(El* element);
+    static El* Paddings(El* element, Edges paddings);
+    static El* Margins(El* element, Edges margins);
+    static El* DebugRed(El* element);
+    static El* DebugBlue(El* element);
+    static El* DebugYellow(El* element);
+    static El* DebugGreen(El* element);
+    static El* DebugPink(El* element);
+    static El* DebugFocused(El* element, FocusHandle focus,
+                            const Window* window);
+    static El* FontThin(El* element);
+    static El* FontExtraLight(El* element);
+    static El* FontLight(El* element);
+    static El* FontNormal(El* element);
+    static El* FontMedium(El* element);
+    static El* FontSemibold(El* element);
+    static El* FontBold(El* element);
+    static El* FontExtraBold(El* element);
+    static El* FontBlack(El* element);
+    static El* CornerRadii(El* element, Corners radius);
+};
+
+const char* const* StyledExtReflectionMethods(int* count);
+
+inline RoleOverride RoleOverride::Implicit() {
+    return {};
+}
+
+inline RoleOverride RoleOverride::Presentational() {
+    RoleOverride out;
+    out.kind = RoleOverrideKind::Presentational;
+    return out;
+}
+
+inline RoleOverride RoleOverride::Explicit(AccessibilityRole value) {
+    RoleOverride out;
+    out.kind = RoleOverrideKind::Role;
+    out.role = value;
+    return out;
+}
+
+inline bool RoleOverride::Resolve(AccessibilityRole defaultRole,
+                                  AccessibilityRole* out) const {
+    if (kind == RoleOverrideKind::Presentational) {
+        return false;
+    }
+    if (out) {
+        *out = kind == RoleOverrideKind::Role ? role : defaultRole;
+    }
+    return true;
+}
+
+inline El* StyledExt::RefineStyle(El* element, const Style& style,
+                                  uint32_t fields) {
+    return element ? element->Refine(style, fields) : nullptr;
+}
+
+inline El* StyledExt::HFlex(El* element) {
+    return element ? element->FlexRow()->ItemsCenter() : nullptr;
+}
+
+inline El* StyledExt::VFlex(El* element) {
+    return element ? element->FlexCol() : nullptr;
+}
+
+inline El* StyledExt::Paddings(El* element, Edges value) {
+    return element ? element->PadL(value.left)
+                         ->PadR(value.right)
+                         ->PadT(value.top)
+                         ->PadB(value.bottom)
+                   : nullptr;
+}
+
+inline El* StyledExt::Margins(El* element, Edges value) {
+    return element ? element->MarginL(value.left)
+                         ->MarginR(value.right)
+                         ->MarginT(value.top)
+                         ->MarginB(value.bottom)
+                   : nullptr;
+}
+
+inline El* StyledDebug(El* element, float h, float s, float l) {
+#if defined(DEBUG) || !defined(NDEBUG)
+    return element ? element->Border(1, HslaToRgba(HslaNew(h / 360.f,
+                                                           s / 100.f,
+                                                           l / 100.f, 1.f)))
+                   : nullptr;
+#else
+    (void)h;
+    (void)s;
+    (void)l;
+    return element;
+#endif
+}
+
+inline El* StyledExt::DebugRed(El* element) {
+    return StyledDebug(element, 0.f, 72.2f, 50.6f);
+}
+inline El* StyledExt::DebugBlue(El* element) {
+    return StyledDebug(element, 217.2f, 91.2f, 59.8f);
+}
+inline El* StyledExt::DebugYellow(El* element) {
+    return StyledDebug(element, 47.9f, 95.8f, 53.1f);
+}
+inline El* StyledExt::DebugGreen(El* element) {
+    return StyledDebug(element, 142.1f, 70.6f, 45.3f);
+}
+inline El* StyledExt::DebugPink(El* element) {
+    return StyledDebug(element, 330.4f, 81.2f, 60.4f);
+}
+
+inline El* StyledExt::DebugFocused(El* element, FocusHandle focus,
+                                   const Window* window) {
+#if defined(DEBUG) || !defined(NDEBUG)
+    return FocusHandleContainsFocused(window, focus) ? DebugBlue(element)
+                                                     : element;
+#else
+    (void)focus;
+    (void)window;
+    return element;
+#endif
+}
+
+inline El* StyledExt::FontThin(El* element) {
+    return element ? element->Weight(FontWeight::Thin) : nullptr;
+}
+inline El* StyledExt::FontExtraLight(El* element) {
+    return element ? element->Weight(FontWeight::ExtraLight) : nullptr;
+}
+inline El* StyledExt::FontLight(El* element) {
+    return element ? element->Weight(FontWeight::Light) : nullptr;
+}
+inline El* StyledExt::FontNormal(El* element) {
+    return element ? element->Weight(FontWeight::Normal) : nullptr;
+}
+inline El* StyledExt::FontMedium(El* element) {
+    return element ? element->Weight(FontWeight::Medium) : nullptr;
+}
+inline El* StyledExt::FontSemibold(El* element) {
+    return element ? element->Weight(FontWeight::Semibold) : nullptr;
+}
+inline El* StyledExt::FontBold(El* element) {
+    return element ? element->Weight(FontWeight::Bold) : nullptr;
+}
+inline El* StyledExt::FontExtraBold(El* element) {
+    return element ? element->Weight(FontWeight::ExtraBold) : nullptr;
+}
+inline El* StyledExt::FontBlack(El* element) {
+    return element ? element->Weight(FontWeight::Black) : nullptr;
+}
+
+inline El* StyledExt::CornerRadii(El* element, Corners radius) {
+    return element
+               ? element->Corners(radius.tl, radius.tr, radius.br, radius.bl)
+               : nullptr;
+}
+
+inline const char* const* StyledExtReflectionMethods(int* count) {
+    static const char* methods[] = {
+        "refine_style", "h_flex", "v_flex", "paddings", "margins",
+        "debug_red", "debug_blue", "debug_yellow", "debug_green",
+        "debug_pink", "debug_focused", "font_thin", "font_extralight",
+        "font_light", "font_normal", "font_medium", "font_semibold",
+        "font_bold", "font_extrabold", "font_black", "corner_radii",
+    };
+    if (count) {
+        *count = (int)(sizeof(methods) / sizeof(methods[0]));
+    }
+    return methods;
+}
+
+}
+
 #line 1 "src/base/switch.h"
 
 namespace gpui {
 
+struct SwitchStyles {
+    StateStyle checked = {};
+    StateStyle disabled = {};
+
+    SwitchStyles& Checked(const StateStyle& style);
+    SwitchStyles& Disabled(const StateStyle& style);
+};
+
+struct SwitchTrackStyles {
+    StateStyle checked = {};
+    StateStyle disabled = {};
+
+    SwitchTrackStyles& Checked(const StateStyle& style);
+    SwitchTrackStyles& Disabled(const StateStyle& style);
+};
+
+struct SwitchThumbStyles {
+    StateStyle checked = {};
+    StateStyle disabled = {};
+
+    SwitchThumbStyles& Checked(const StateStyle& style);
+    SwitchThumbStyles& Disabled(const StateStyle& style);
+};
+
 struct Switch {
     static El* New(Ctx* cx, Str id, bool checked = false, bool disabled = false,
-                   Listener onChange = {});
+                   Listener onChange = {},
+                   const SwitchStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr,
+                   Str accessibilityLabel = {}, int tabIndex = 0,
+                   bool tabStop = true, FocusHandle focus = {});
 };
 
 struct SwitchTrack {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, bool checked = false,
+                   bool disabled = false,
+                   const SwitchTrackStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr);
 };
 
 struct SwitchThumb {
-    static El* New(Ctx* cx);
+    static El* New(Ctx* cx, bool checked = false, bool disabled = false,
+                   const SwitchThumbStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr);
 };
 }
 
@@ -8616,7 +10425,8 @@ struct SwitchThumb {
 namespace gpui {
 
 struct Table {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, int rowCount = -1,
+                   int columnCount = -1);
 };
 struct TableHeader {
     static El* New(Ctx* cx, Str id);
@@ -8625,13 +10435,13 @@ struct TableBody {
     static El* New(Ctx* cx, Str id);
 };
 struct TableRow {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, int rowIndex = 0);
 };
 struct TableHead {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, int columnIndex = 0);
 };
 struct TableCell {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, int columnIndex = 0);
 };
 struct TableCaption {
     static El* New(Ctx* cx, Str id);
@@ -8642,13 +10452,24 @@ struct TableCaption {
 
 namespace gpui {
 
+struct TabStyles {
+    StateStyle selected = {};
+    StateStyle disabled = {};
+
+    TabStyles& Selected(const StateStyle& style);
+    TabStyles& Disabled(const StateStyle& style);
+};
+
 struct Tabs {
     static El* New(Ctx* cx, Str id);
 };
 
 struct Tab {
     static El* New(Ctx* cx, Str id, bool disabled = false,
-                   Listener onClick = {});
+                   Listener onClick = {}, bool selected = false,
+                   Str accessibilityLabel = {}, int positionInSet = 0,
+                   int sizeOfSet = 0, const TabStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr);
 };
 }
 
@@ -8670,6 +10491,182 @@ void TextLineRangeAt(Str s, int off, int* outA, int* outB);
 
 namespace gpui {
 
+struct TextSelectionScopeId {
+    uint64_t raw = 0;
+
+    static TextSelectionScopeId New();
+    static TextSelectionScopeId FromRaw(uint64_t value) { return {value}; }
+    uint64_t Value() const { return raw; }
+    int RuntimeScope() const { return (int)(raw & 0x7fffffffU); }
+};
+
+inline bool operator==(TextSelectionScopeId a, TextSelectionScopeId b) {
+    return a.raw == b.raw;
+}
+inline bool operator!=(TextSelectionScopeId a, TextSelectionScopeId b) {
+    return !(a == b);
+}
+
+struct TextSelectionContentKey {
+    uint64_t raw = 0;
+
+    static TextSelectionContentKey New(uint64_t value) { return {value}; }
+    uint64_t Value() const { return raw; }
+};
+
+inline bool operator==(TextSelectionContentKey a,
+                       TextSelectionContentKey b) {
+    return a.raw == b.raw;
+}
+
+enum class TextSelectionCoverage : uint8_t {
+    Bounded,
+    FromStart,
+    ToEnd,
+    Full
+};
+
+struct TextSelectionEndpoint {
+    EntityId entity = {};
+    Point point = {};
+    TextSelectionContentKey contentKey = {};
+    bool hasEntity = false;
+    bool hasContentKey = false;
+
+    static TextSelectionEndpoint New(EntityId entity, Point point);
+    static TextSelectionEndpoint At(Point point);
+    TextSelectionEndpoint WithContentKey(TextSelectionContentKey value) const;
+    EntityId Entity() const { return entity; }
+    Point ContentPoint() const { return point; }
+};
+
+struct TextSelectionWindowPoints {
+    Point anchor = {};
+    Point cursor = {};
+
+    static TextSelectionWindowPoints New(Point anchor, Point cursor) {
+        return {anchor, cursor};
+    }
+    Point Anchor() const { return anchor; }
+    Point Cursor() const { return cursor; }
+};
+
+struct TextSelectionSnapshot {
+    TextSelectionEndpoint anchor = {};
+    TextSelectionEndpoint cursor = {};
+    TextSelectionWindowPoints windowPoints = {};
+    TextSelectionCoverage coverage = TextSelectionCoverage::Bounded;
+    bool selecting = false;
+    bool hasWindowPoints = false;
+
+    static TextSelectionSnapshot New(TextSelectionEndpoint anchor,
+                                     TextSelectionEndpoint cursor);
+    TextSelectionSnapshot WithSelecting(bool value) const;
+    TextSelectionSnapshot WithWindowPoints(
+        TextSelectionWindowPoints value) const;
+    TextSelectionSnapshot WithCoverage(TextSelectionCoverage value) const;
+    TextSelectionEndpoint Anchor() const { return anchor; }
+    TextSelectionEndpoint Cursor() const { return cursor; }
+    bool IsSelecting() const { return selecting; }
+    TextSelectionCoverage Coverage() const { return coverage; }
+};
+
+struct TextSelectionRegistration {
+    Bounds hitbox = {};
+    Bounds bounds = {};
+    Point scrollOffset = {};
+    TextSelectionScopeId scope = {};
+    uint64_t documentOrder = 0;
+    const Bounds* textBounds = nullptr;
+    int textBoundsCount = 0;
+
+    static TextSelectionRegistration New(Bounds hitbox, Bounds bounds);
+    TextSelectionRegistration WithScrollOffset(Point value) const;
+    TextSelectionRegistration WithScope(TextSelectionScopeId value) const;
+    TextSelectionRegistration WithDocumentOrder(uint64_t value) const;
+    TextSelectionRegistration WithTextBounds(const Bounds* values,
+                                             int count) const;
+};
+
+struct TextSelectionRun {
+    uint64_t documentOrder = 0;
+    Str text = {};
+    TextLayout* layout = nullptr;
+    Bounds bounds = {};
+
+    static TextSelectionRun New(Str text, TextLayout* layout, Bounds bounds);
+    TextSelectionRun WithDocumentOrder(uint64_t value) const;
+};
+
+struct TextSelectionRange {
+    int start = 0;
+    int end = 0;
+    bool selected = false;
+};
+
+struct TextSelectionProjection {
+    Vec<TextSelectionRange> ranges;
+    bool active = false;
+
+    int Len() const { return ranges.len; }
+    const TextSelectionRange* Ranges() const { return ranges.els; }
+    bool IsActive() const { return active; }
+    void Reset() { ranges.Reset(); }
+};
+
+enum class TextSelectionEventKind : uint8_t {
+    SelectionChanged,
+    AutoScroll,
+    Cleared
+};
+
+struct TextSelectionEvent {
+    TextSelectionEventKind kind = TextSelectionEventKind::SelectionChanged;
+    TextSelectionSnapshot snapshot = {};
+    float autoScroll = 0;
+    bool hasSnapshot = false;
+    bool hasAutoScroll = false;
+};
+
+using TextSelectionFocusFn = void (*)(void* user, Window* window, App* app);
+using TextSelectionClearFn = void (*)(void* user, App* app);
+using TextSelectionCopyFn = int (*)(void* user, App* app, char* out, int cap);
+using TextSelectionContentKeyFn = bool (*)(
+    void* user, Point point, const App* app, TextSelectionContentKey* out);
+
+struct TextSelectionParticipantState;
+
+struct TextSelectionHandle {
+    gpui::Entity<TextSelectionParticipantState> state = {};
+
+    static TextSelectionHandle New(Str fallbackCopyText, App* app);
+    EntityId Entity() const { return state.id; }
+    bool Snapshot(const App* app, TextSelectionSnapshot* out) const;
+    void SetFallbackCopyText(Str text, App* app) const;
+    void SetLocalSelection(bool active, App* app) const;
+    bool HasLocalSelection(const App* app) const;
+    void Register(TextSelectionRegistration registration, Window* window,
+                  App* app) const;
+    TextSelectionProjection UpdateRuns(const TextSelectionRun* runs, int count,
+                                       App* app) const;
+    Subscription RefreshWindowOnChange(App* app) const;
+    void FocusWith(TextSelectionFocusFn fn, void* user, App* app) const;
+    void ClearWith(TextSelectionClearFn fn, void* user, App* app) const;
+    void CopyWith(TextSelectionCopyFn fn, void* user, App* app) const;
+    void ResolveContentKeyWith(TextSelectionContentKeyFn fn, void* user,
+                               App* app) const;
+
+    template <typename S>
+    Subscription Subscribe(Ctx* cx,
+                           void (*fn)(S*, Ctx*,
+                                      const TextSelectionEvent*)) const {
+        Listener listener;
+        listener.fn = (void*)fn;
+        listener.view = cx->self;
+        return EntitySubscribeRaw(cx->app, state.id, listener);
+    }
+};
+
 struct TextSelectionGesture {
     bool selecting = false;
     bool didHitText = false;
@@ -8686,8 +10683,26 @@ bool TextSelectionPublishes(const TextSelectionGesture* g);
 void TextSelectionClear(TextSelectionGesture* g);
 
 struct TextSelection {
+
     static El* New(Ctx* cx, Str id, int clickId = 0);
+    static int SelectedText(Window* window, App* app, char* out, int cap);
+    static bool HasSelection(Window* window, const App* app);
+    static void Clear(Window* window, App* app);
+    static void ClearForWindow(Window* window, App* app);
+    static void End(Window* window, App* app);
+    static void ActivateScope(TextSelectionScopeId scope, Window* window,
+                              App* app);
 };
+
+struct TextSelectionLayerPrepaintState {
+    WindowSelection* selection = nullptr;
+};
+
+struct TextSelectionLayer {
+    static El* New(Ctx* cx);
+};
+
+El* TextSelectionScope(El* element, TextSelectionScopeId scope);
 
 struct WindowSelection {
     TextSelectionGesture gesture;
@@ -8696,6 +10711,15 @@ struct WindowSelection {
     int cursor = -1;
 
     int scope = 0;
+    TextSelectionScopeId activeScope = {};
+    Point anchorPoint = {};
+    Point cursorPoint = {};
+    bool hasWindowPoints = false;
+    bool publishing = false;
+    bool clearing = false;
+    uint64_t frameGeneration = 0;
+
+    Vec<EntityId> participants;
 
     SelectionFormat format = SelectionFormat::Plain;
 };
@@ -8723,99 +10747,65 @@ SelectionFormat WindowSelectionFormat(Window* win);
 bool WindowSelectionCopy(Window* win);
 
 void WindowSelectionApply(Window* win);
+
+void WindowSelectionFinishFrame(Window* win);
 }
 
-#line 1 "src/base/theme_tokens.h"
+#line 1 "src/base/theme.h"
 
 namespace gpui {
 
-struct SemanticColorTokens {
-    Rgba background = {};
-    Rgba foreground = {};
-    Rgba surface = {};
-    Rgba surfaceForeground = {};
-    Rgba primary = {};
-    Rgba primaryForeground = {};
-    Rgba secondary = {};
-    Rgba secondaryForeground = {};
-    Rgba muted = {};
-    Rgba mutedForeground = {};
-    Rgba accent = {};
-    Rgba accentForeground = {};
-    Rgba destructive = {};
-    Rgba destructiveForeground = {};
-    Rgba border = {};
-    Rgba input = {};
-    Rgba ring = {};
+namespace base_theme {
+
+struct ScrollbarTheme {
+    ScrollbarMode mode = ScrollbarMode::Scrolling;
+    ScrollbarMotion motion = {};
+    ScrollbarStyles styles = {};
+
+    static ScrollbarTheme New() { return {}; }
+    ScrollbarTheme WithMode(ScrollbarMode value) const {
+        ScrollbarTheme copy = *this;
+        copy.mode = value;
+        return copy;
+    }
+    ScrollbarTheme WithMotion(ScrollbarMotion value) const {
+        ScrollbarTheme copy = *this;
+        copy.motion = value;
+        return copy;
+    }
+    ScrollbarTheme WithStyles(const ScrollbarStyles& value) const {
+        ScrollbarTheme copy = *this;
+        copy.styles = value;
+        return copy;
+    }
+    ScrollbarMode Mode() const { return mode; }
+    ScrollbarMotion Motion() const { return motion; }
+    const ScrollbarStyles& Styles() const { return styles; }
 };
 
-struct SemanticRadiusTokens {
-    float none = 0;
-    float sm = 3;
-    float md = 6;
-    float lg = 8;
-    float xl = 12;
-    float full = 9999;
+struct ResizableTheme {
+    Rgba handle = {};
+    Rgba activeHandle = {};
 };
 
-struct SemanticSpacingTokens {
-    float xxs = 2;
-    float xs = 4;
-    float sm = 8;
-    float md = 12;
-    float lg = 16;
-    float xl = 24;
-    float xxl = 32;
+struct Theme {
+    SemanticThemeTokens tokens;
+    ScrollbarTheme scrollbar = {};
+    ResizableTheme resizable = {};
+
+    static Theme Global(const App* app);
+    static Theme* GlobalMut(App* app);
 };
 
-struct SemanticTextStyle {
-    float size = 16;
-    float lineHeight = 24;
-    float weight = 400;
-};
+}
 
-struct SemanticTypographyTokens {
-    Str sans = {};
-    Str mono = {};
-    SemanticTextStyle xs = {12, 16, 400};
-    SemanticTextStyle sm = {14, 20, 400};
-    SemanticTextStyle md = {16, 24, 400};
-    SemanticTextStyle lg = {18, 28, 400};
-    SemanticTextStyle xl = {20, 28, 400};
-    SemanticTextStyle monoMd = {13, 20, 400};
-};
+using BaseScrollbarTheme = base_theme::ScrollbarTheme;
+using BaseResizableTheme = base_theme::ResizableTheme;
+using BaseTheme = base_theme::Theme;
 
-struct SemanticShadow {
-    float x = 0;
-    float y = 0;
-    float blur = 0;
-    float spread = 0;
-    Rgba color = {};
-};
-
-struct SemanticShadowTokens {
-
-    bool has = false;
-    SemanticShadow sm = {};
-    SemanticShadow md = {};
-    SemanticShadow lg = {};
-};
-
-const float kMonoFontSize = 13.f;
-
-SemanticShadowTokens SemanticShadowElevations(Rgba color);
-
-struct SemanticThemeTokens {
-    SemanticColorTokens colors = {};
-    SemanticRadiusTokens radius = {};
-    SemanticSpacingTokens spacing = {};
-    SemanticTypographyTokens typography = {};
-    SemanticShadowTokens shadow = {};
-};
-
-SemanticThemeTokens ThemeSemanticTokens(const Theme& t);
-
-void ThemeApplySemanticTokens(Theme* t, const SemanticThemeTokens& tokens);
+BaseTheme* BaseThemeGlobal(App* app);
+const BaseTheme* BaseThemeGlobal(const App* app);
+void BaseThemeSet(App* app, const BaseTheme& theme);
 
 }
 
@@ -8823,42 +10813,274 @@ void ThemeApplySemanticTokens(Theme* t, const SemanticThemeTokens& tokens);
 
 namespace gpui {
 
-enum class ToastStatus : uint8_t {
-
+enum class ToastTransitionStatus : uint8_t {
     Starting,
-
     Present,
-
     Ending
+};
+
+using ToastStatus = ToastTransitionStatus;
+
+struct ToastMotion {
+    int durationMs = 400;
+    int exitDurationMs = 200;
+    float collapsedPeek = 14.f;
+    float expandedGap = 14.f;
+    float collapsedScaleStep = 0.05f;
+    int collapsedVisible = 3;
+
+    static ToastMotion Sonner();
+};
+
+struct ToastOptions {
+    bool hasTimeout = false;
+    int timeoutMs = 0;
+
+    static ToastOptions Timeout(int milliseconds);
+    static ToastOptions Persistent();
+};
+
+template <typename I, typename T>
+struct ManagedToast {
+    I id = {};
+    T value = {};
+    ToastTransitionStatus status = ToastTransitionStatus::Starting;
+    bool hasTimeout = false;
+    int timeoutRemainingMs = 0;
+    int transitionElapsedMs = 0;
+    int64_t lastAdvanceMs = 0;
+};
+
+template <typename I, typename T>
+struct ToastRemoved {
+    I id = {};
+    T value = {};
+};
+
+template <typename I, typename T>
+struct ToastAdvance {
+    bool changed = false;
+    Vec<I> presented;
+    Vec<I> ending;
+    Vec<ToastRemoved<I, T>> removed;
+};
+
+template <typename I, typename T>
+struct ToastVisible {
+    const I* id = nullptr;
+    const T* value = nullptr;
+    ToastTransitionStatus status = ToastTransitionStatus::Starting;
+};
+
+template <typename I, typename T>
+struct ToastManager {
+    Vec<ManagedToast<I, T>> entries;
+    int transitionDurationMs = 400;
+    int exitDurationMs = 200;
+
+    static ToastManager New(ToastMotion motion) {
+        ToastManager out;
+        out.transitionDurationMs = motion.durationMs;
+        out.exitDurationMs = motion.exitDurationMs;
+        return out;
+    }
+
+    int Len() const { return entries.len; }
+    bool IsEmpty() const { return entries.len == 0; }
+
+    const ManagedToast<I, T>* At(int index) const {
+        return index >= 0 && index < entries.len ? &entries[index] : nullptr;
+    }
+
+    const T* Get(const I& id) const {
+        for (int i = 0; i < entries.len; i++) {
+            if (entries[i].id == id) {
+                return &entries[i].value;
+            }
+        }
+        return nullptr;
+    }
+
+    int Visible(int limit, ToastVisible<I, T>* out, int cap) const {
+        int active = 0;
+        for (int i = 0; i < entries.len; i++) {
+            if (entries[i].status != ToastTransitionStatus::Ending) {
+                active++;
+            }
+        }
+        int first = active > limit ? active - limit : 0;
+        int activeIndex = 0;
+        int count = 0;
+        for (int i = 0; i < entries.len; i++) {
+            const ManagedToast<I, T>& entry = entries[i];
+            bool ending = entry.status == ToastTransitionStatus::Ending;
+            bool visible = ending || activeIndex >= first;
+            if (!ending) {
+                activeIndex++;
+            }
+            if (!visible) {
+                continue;
+            }
+            if (out && count < cap) {
+                out[count] = {&entry.id, &entry.value, entry.status};
+            }
+            count++;
+        }
+        return count;
+    }
+
+    bool Push(const I& id, const T& value, ToastOptions options,
+              int64_t nowMs, T* replaced = nullptr,
+              bool* hadReplaced = nullptr) {
+        if (hadReplaced) {
+            *hadReplaced = false;
+        }
+        for (int i = 0; i < entries.len; i++) {
+            if (!(entries[i].id == id)) {
+                continue;
+            }
+            if (replaced) {
+                *replaced = entries[i].value;
+            }
+            if (hadReplaced) {
+                *hadReplaced = true;
+            }
+            EraseAt(i);
+            break;
+        }
+        ManagedToast<I, T> entry;
+        entry.id = id;
+        entry.value = value;
+        entry.hasTimeout = options.hasTimeout;
+        entry.timeoutRemainingMs = options.timeoutMs;
+        entry.lastAdvanceMs = nowMs;
+        return entries.Append(entry);
+    }
+
+    bool Dismiss(const I& id, int64_t nowMs) {
+        for (int i = 0; i < entries.len; i++) {
+            ManagedToast<I, T>& entry = entries[i];
+            if (!(entry.id == id) ||
+                entry.status == ToastTransitionStatus::Ending) {
+                continue;
+            }
+            entry.status = ToastTransitionStatus::Ending;
+            entry.transitionElapsedMs = 0;
+            entry.lastAdvanceMs = nowMs;
+            return true;
+        }
+        return false;
+    }
+
+    Vec<I> DismissAll(int64_t nowMs) {
+        Vec<I> changed;
+        for (int i = 0; i < entries.len; i++) {
+            ManagedToast<I, T>& entry = entries[i];
+            if (entry.status == ToastTransitionStatus::Ending) {
+                continue;
+            }
+            entry.status = ToastTransitionStatus::Ending;
+            entry.transitionElapsedMs = 0;
+            entry.lastAdvanceMs = nowMs;
+            changed.Append(entry.id);
+        }
+        return changed;
+    }
+
+    ToastAdvance<I, T> Advance(int64_t nowMs, bool paused) {
+        ToastAdvance<I, T> out;
+        for (int i = 0; i < entries.len; i++) {
+            ManagedToast<I, T>& entry = entries[i];
+            int64_t elapsed = nowMs - entry.lastAdvanceMs;
+            int delta = elapsed > 0x7fffffffLL
+                            ? 0x7fffffff
+                            : elapsed > 0 ? (int)elapsed : 0;
+            entry.lastAdvanceMs = nowMs;
+            switch (entry.status) {
+                case ToastTransitionStatus::Starting:
+                    entry.transitionElapsedMs += delta;
+                    if (entry.transitionElapsedMs >= transitionDurationMs) {
+                        entry.status = ToastTransitionStatus::Present;
+                        entry.transitionElapsedMs = 0;
+                        out.presented.Append(entry.id);
+                        out.changed = true;
+                    }
+                    break;
+                case ToastTransitionStatus::Present:
+                    if (!paused && entry.hasTimeout) {
+                        entry.timeoutRemainingMs -= delta;
+                        if (entry.timeoutRemainingMs <= 0) {
+                            entry.timeoutRemainingMs = 0;
+                            entry.status = ToastTransitionStatus::Ending;
+                            entry.transitionElapsedMs = 0;
+                            out.ending.Append(entry.id);
+                            out.changed = true;
+                        }
+                    }
+                    break;
+                case ToastTransitionStatus::Ending:
+                    entry.transitionElapsedMs += delta;
+                    break;
+            }
+        }
+        int index = 0;
+        while (index < entries.len) {
+            ManagedToast<I, T>& entry = entries[index];
+            if (entry.status != ToastTransitionStatus::Ending ||
+                entry.transitionElapsedMs < exitDurationMs) {
+                index++;
+                continue;
+            }
+            ToastRemoved<I, T> removed = {entry.id, entry.value};
+            if (!out.removed.Append(removed)) {
+                index++;
+                continue;
+            }
+            EraseAt(index);
+            out.changed = true;
+        }
+        return out;
+    }
+
+private:
+    void EraseAt(int index) {
+        for (int i = index; i < entries.len - 1; i++) {
+            entries[i] = entries[i + 1];
+        }
+        entries.len--;
+        if (entries.els) {
+            entries.els[entries.len] = {};
+        }
+    }
 };
 
 struct ToastEntry {
     int id = 0;
-    ToastStatus status = ToastStatus::Starting;
-
+    ToastTransitionStatus status = ToastTransitionStatus::Starting;
     bool hasTimeout = false;
     int timeoutRemainingMs = 0;
-
     int elapsedMs = 0;
 };
 
-const int kToastStackCap = 16;
+constexpr int kToastTransitionMs = 400;
+constexpr int kToastExitMs = 200;
+constexpr float kToastCollapsedPeek = 14.f;
+constexpr float kToastExpandedGap = 14.f;
+constexpr float kToastCollapsedScaleStep = 0.05f;
+constexpr int kToastCollapsedVisible = 3;
 
-const int kToastTransitionMs = 400;
-const int kToastExitMs = 200;
-
-const float kToastCollapsedPeek = 14.f;
-const float kToastExpandedGap = 14.f;
-const float kToastCollapsedScaleStep = 0.05f;
-const int kToastCollapsedVisible = 3;
+struct ToastMeasurement {
+    uint32_t id = 0;
+    Bounds bounds = {};
+};
 
 struct ToastStackState {
-    ToastEntry entries[kToastStackCap] = {};
-    int n = 0;
 
+    Vec<ToastEntry> entries;
+    Vec<ToastMeasurement> heights;
+    Bounds bounds = {};
     int transitionMs = kToastTransitionMs;
     int exitMs = kToastExitMs;
-
     bool hovered = false;
     bool focused = false;
 
@@ -8869,24 +11091,70 @@ float ToastStackGeometry(const float* heights, int n, float peek, float gap,
                          bool anchoredBottom, float* collapsedOffsets,
                          float* expandedOffsets, float* expandedHeight);
 
-bool ToastPush(ToastStackState* s, int id, int timeoutMs);
+bool ToastPush(ToastStackState* state, int id, int timeoutMs);
+bool ToastRemove(ToastStackState* state, int id);
+bool ToastStackAdvance(ToastStackState* state, int deltaMs, bool paused);
 
-bool ToastRemove(ToastStackState* s, int id);
+struct ToastStackItem {
+    Str id = {};
+    uint32_t key = 0;
+    El* child = nullptr;
+};
 
-bool ToastAdvance(ToastStackState* s, int deltaMs, bool paused);
+struct ToastStack {
+    Arena* arena = nullptr;
+    Ctx* cx = nullptr;
+    Str id = {};
+    ToastStackState* state = nullptr;
+    ToastMotion motion = {};
+    Anchor placement = Anchor::TopRight;
+    FocusHandle focus = {};
+    bool hasFocus = false;
+    Style style = {};
+    uint32_t styleFields = 0;
+    ArenaVec<ToastStackItem> children;
+
+    static ToastStack* New(Ctx* cx, Str id, ToastStackState* state);
+    ToastStack* Item(Str id, El* child);
+    ToastStack* Child(El* child);
+    ToastStack* Motion(ToastMotion value);
+    ToastStack* Placement(Anchor value);
+    ToastStack* Focus(FocusHandle value);
+    ToastStack* Refine(const Style& value, uint32_t fields);
+    El* IntoEl();
+};
 
 struct Toast {
-    static El* New(Ctx* cx, Str id);
+    El* root = nullptr;
+    ToastTransitionStatus transitionStatus =
+        ToastTransitionStatus::Starting;
+
+    static Toast* New(Ctx* cx, Str id);
+    Toast* TransitionStatus(ToastTransitionStatus value);
+    ToastTransitionStatus Status() const;
+    Toast* Child(El* child);
+    Toast* Refine(const Style& value, uint32_t fields);
+    El* IntoEl();
 };
+
 }
 
 #line 1 "src/base/toggle.h"
 
 namespace gpui {
 
+struct ToggleStyles {
+    StateStyle pressed = {};
+    StateStyle disabled = {};
+
+    ToggleStyles& Pressed(const StateStyle& style);
+    ToggleStyles& Disabled(const StateStyle& style);
+};
+
 struct Toggle {
     static El* New(Ctx* cx, Str id, bool pressed = false, bool disabled = false,
-                   Listener onChange = {});
+                   Listener onChange = {}, const ToggleStyles* styles = nullptr,
+                   const StateStyle* instance = nullptr);
 };
 }
 
@@ -8895,7 +11163,7 @@ struct Toggle {
 namespace gpui {
 
 struct ToggleGroup {
-    static El* New(Ctx* cx, Str id);
+    static El* New(Ctx* cx, Str id, Axis axis = Axis::Horizontal);
 };
 }
 
@@ -8903,9 +11171,94 @@ struct ToggleGroup {
 
 namespace gpui {
 
+constexpr int kTooltipPriority = 200;
+constexpr float kTooltipWindowMargin = 4.f;
+constexpr int kTooltipGracePeriodMs = 300;
+constexpr int kTooltipShowDelayMs = 500;
+
 struct Tooltip {
     static El* New(Ctx* cx, Str id);
 };
+
+using TooltipBuilder = El* (*)(Ctx* cx, void* data);
+
+enum class TooltipTransitionKind : uint8_t {
+    Enter,
+    Switch
+};
+
+struct TooltipTransition {
+    TooltipTransitionKind kind = TooltipTransitionKind::Enter;
+    uint64_t epoch = 0;
+    Bounds previous = {};
+    Bounds current = {};
+
+    static TooltipTransition Enter(uint64_t epoch);
+    static TooltipTransition Switch(uint64_t epoch, Bounds previous,
+                                    Bounds current);
+};
+
+using TooltipRenderer = El* (*)(Ctx* cx, El* view,
+                                const TooltipTransition& transition,
+                                void* data);
+
+struct TooltipRequest {
+    TooltipBuilder build = nullptr;
+    void* buildData = nullptr;
+    Bounds triggerBounds = {};
+    gpui::Placement preferredPlacement = gpui::Placement::Top;
+    bool hasPreferredPlacement = false;
+    Str text = {};
+
+    static TooltipRequest New(Bounds triggerBounds, TooltipBuilder build,
+                              void* data = nullptr);
+    static TooltipRequest Text(Bounds triggerBounds, Str text);
+    TooltipRequest& Placement(gpui::Placement value);
+};
+
+struct TooltipOverlay {
+    TooltipRequest content = {};
+    TooltipRequest pending = {};
+    Bounds previousBounds = {};
+    bool hasContent = false;
+    bool hasPending = false;
+    bool hasPreviousBounds = false;
+    bool hadRecentTooltip = false;
+    bool isSwitching = false;
+    uint64_t epoch = 0;
+    uint64_t animationEpoch = 0;
+    int showTask = 0;
+    int hideTask = 0;
+    TooltipRenderer renderer = nullptr;
+    void* rendererData = nullptr;
+
+    ~TooltipOverlay();
+
+    TooltipOverlay* RenderWith(TooltipRenderer renderer,
+                               void* data = nullptr);
+    uint64_t NextEpoch();
+    void RequestShow(const TooltipRequest& request, Window* window, Ctx* cx);
+    void RequestHide(Window* window, Ctx* cx);
+    void Hide(Ctx* cx);
+    static El* Render(TooltipOverlay* self, Ctx* cx);
+    static void OnShow(TooltipOverlay* self, Ctx* cx, const TickEvent* ev);
+    static void OnHide(TooltipOverlay* self, Ctx* cx, const TickEvent* ev);
+};
+
+struct TooltipPositioner {
+    Positioner* positioner = nullptr;
+
+    static TooltipPositioner* New(Ctx* cx, Bounds triggerBounds);
+    TooltipPositioner* Placement(gpui::Placement value);
+    TooltipPositioner* Child(El* child);
+    El* IntoEl();
+};
+
+void TooltipRequestShow(Window* win, Str text, Bounds triggerBounds);
+void TooltipRequestHide(Window* win);
+void TooltipHide(Window* win);
+const TooltipOverlay* TooltipShowing(Window* win);
+
 }
 
 #line 1 "src/base/virtual_list.h"
@@ -8974,12 +11327,39 @@ VirtualRange VirtualListHandleRange(const VirtualListScrollHandle* h,
                                     const float* sizes, int count,
                                     float itemSize);
 
+struct ItemSizeLayout {
+    Vec<float> sizes;
+    Vec<float> origins;
+    Size contentSize = {};
+    Bounds lastLayoutBounds = {};
+
+    ~ItemSizeLayout() {
+        sizes.Reset();
+        origins.Reset();
+    }
+};
+
+void ItemSizeLayoutBuild(ItemSizeLayout* layout, Axis axis,
+                         const float* itemSizes, int count,
+                         float uniformItemSize, float gap,
+                         float crossSize);
+
+struct VirtualListFrameState {
+    VirtualRange visible = {};
+    ItemSizeLayout sizeLayout;
+    float scrollOffset = 0;
+    float before = 0;
+    float after = 0;
+};
+
 using VirtualRowFn = El* (*)(void* user, Ctx* cx, int ix);
 
 struct VirtualListOpts {
     int count = 0;
     float rowH = 32;
     float viewH = 192;
+
+    float viewW = 192;
     const float* sizes = nullptr;
 
     float scrollY = 0;
@@ -8990,6 +11370,10 @@ struct VirtualListOpts {
     Listener onScroll = {};
 
     ScrollAxis axis = ScrollAxis::Both;
+
+    Axis layoutAxis = Axis::Vertical;
+
+    float gap = 0;
 
     float pad = 0;
     VirtualRowFn row = nullptr;
@@ -9002,6 +11386,10 @@ struct VirtualList {
 
     static El* New(Ctx* cx, Str id, const VirtualListOpts& o);
 };
+
+El* virtual_list(Ctx* cx, Str id, Axis axis, const VirtualListOpts& opts);
+El* v_virtual_list(Ctx* cx, Str id, const VirtualListOpts& opts);
+El* h_virtual_list(Ctx* cx, Str id, const VirtualListOpts& opts);
 }
 
 #line 1 "src/base/tree.h"
@@ -9021,6 +11409,11 @@ void TreeInitKeys();
 Str TreeContext();
 TreeAction TreeActionOf(uint32_t id);
 
+namespace tree {
+
+void init();
+}
+
 int TreeSelectPrev(int selected, int count);
 int TreeSelectNext(int selected, int count);
 
@@ -9036,6 +11429,25 @@ struct TreeItem {
     bool folder = false;
     bool expanded = false;
     bool disabled = false;
+};
+
+struct TreeEntry {
+    const TreeItem* item = nullptr;
+    int itemIx = -1;
+    int depth = 0;
+
+    bool IsRoot() const { return depth == 0; }
+    bool IsFolder() const { return item && item->folder; }
+    bool IsExpanded() const { return item && item->expanded; }
+    bool IsDisabled() const { return item && item->disabled; }
+};
+
+struct TreeEntryState {
+    bool selected = false;
+    bool rightClicked = false;
+
+    bool IsSelected() const { return selected; }
+    bool IsRightClicked() const { return rightClicked; }
 };
 
 enum class TreeEventKind : uint8_t {
@@ -9085,14 +11497,20 @@ void TreeRebuild(TreeState* s);
 int TreeIndexOf(const TreeState* s, Str id);
 
 const TreeItem* TreeEntryItem(const TreeState* s, int entryIx);
+TreeEntry TreeEntryAt(const TreeState* s, int entryIx);
+
+void TreeSetItems(TreeState* s, Ctx* cx, const TreeItem* items, int count);
 
 bool TreeToggleExpandAt(TreeState* s, int entryIx, bool* expandedOut);
 void TreeToggleExpand(TreeState* s, Ctx* cx, int entryIx);
 
 int TreeRevealItem(TreeState* s, Str id);
 
+int TreeRevealItem(TreeState* s, Ctx* cx, Str id, ScrollStrategy strategy);
+
 void TreeScrollToItem(TreeState* s, int entryIx, ScrollStrategy strategy);
 void TreeSetSelected(TreeState* s, Ctx* cx, int entryIx);
+void TreeSetSelectedItem(TreeState* s, Ctx* cx, Str id);
 
 void TreeClickEntry(TreeState* s, Ctx* cx, int entryIx);
 void TreePerform(TreeState* s, Ctx* cx, TreeAction act);
@@ -9104,7 +11522,8 @@ struct Tree {
     static El* New(Ctx* cx);
 };
 
-using TreeRowFn = El* (*)(void* user, Ctx* cx, int entryIx);
+using TreeRowFn = El* (*)(void* user, Ctx* cx, int entryIx,
+                          const TreeEntry& entry, TreeEntryState state);
 
 struct TreeList {
 
@@ -9119,19 +11538,807 @@ struct TreeItemEl {
 
 #line 1 "src/base/lib.h"
 
+namespace gpui {
+
+void BaseInit(App* app);
+
+}
+
+#line 1 "src/ui/notification_settings.h"
+
+namespace gpui {
+namespace component {
+
+enum class NotificationType : uint8_t {
+    Info,
+    Success,
+    Warning,
+    Error
+};
+
+enum class NotificationDelivery : uint8_t {
+    InApp,
+    System,
+    InAppAndSystem
+};
+
+struct NotificationSettings {
+    Anchor placement = Anchor::TopRight;
+
+    Edges margins = Edges::New(16.f, 16.f, 50.f, 16.f);
+    int maxItems = 10;
+    float width = 382.f;
+    NotificationDelivery delivery = NotificationDelivery::InApp;
+};
+
+}
+}
+
+#line 1 "src/ui/sheet_settings.h"
+
+namespace gpui {
+namespace component {
+
+constexpr float kSheetDefaultMarginTop = 34.f;
+
+struct SheetSettings {
+
+    float marginTop = kSheetDefaultMarginTop;
+};
+
+}
+}
+
+#line 1 "src/ui/theme.h"
+
+namespace gpui {
+
+struct App;
+
+enum class ThemeMode : uint8_t {
+    Light,
+    Dark
+};
+
+struct ThemeToken {
+    Rgba color = {};
+    Background background = {};
+
+    static ThemeToken New(Rgba color, Background background);
+    static ThemeToken Solid(Rgba color);
+};
+
+struct ThemeTokens {
+    Background background = {};
+    Background titleBar = {};
+    Background statusBar = {};
+    Background tabBar = {};
+    Background tabActiveBg = {};
+    Background primary = {};
+    Background secondary = {};
+    Background accent = {};
+    Background muted = {};
+    Background popover = {};
+    Background danger = {};
+    Background info = {};
+    Background success = {};
+    Background warning = {};
+    Background progress = {};
+    Background scrollbarThumb = {};
+    Background scrollbarThumbHover = {};
+    Background skeleton = {};
+    Background selection = {};
+    Background listActive = {};
+    Background tableBg = {};
+    Background tableActive = {};
+    Background tableEven = {};
+    Background tableHead = {};
+    Background tableFoot = {};
+    Background sidebarAccent = {};
+    Background sidebarPrimary = {};
+    Background overlay = {};
+    Background switchThumb = {};
+    Background sliderThumb = {};
+
+    Background button = {};
+    Background buttonHover = {};
+    Background buttonActive = {};
+    Background primaryHover = {};
+    Background primaryActive = {};
+    Background buttonPrimary = {};
+    Background buttonPrimaryHover = {};
+    Background buttonPrimaryActive = {};
+    Background secondaryHover = {};
+    Background secondaryActive = {};
+    Background buttonSecondary = {};
+    Background buttonSecondaryHover = {};
+    Background buttonSecondaryActive = {};
+    Background successHover = {};
+    Background successActive = {};
+    Background buttonSuccess = {};
+    Background buttonSuccessHover = {};
+    Background buttonSuccessActive = {};
+    Background infoHover = {};
+    Background infoActive = {};
+    Background buttonInfo = {};
+    Background buttonInfoHover = {};
+    Background buttonInfoActive = {};
+    Background warningHover = {};
+    Background warningActive = {};
+    Background buttonWarning = {};
+    Background buttonWarningHover = {};
+    Background buttonWarningActive = {};
+    Background dangerHover = {};
+    Background dangerActive = {};
+    Background buttonDanger = {};
+    Background buttonDangerHover = {};
+    Background buttonDangerActive = {};
+    Background accordion = {};
+    Background dropTarget = {};
+    Background list = {};
+    Background listEven = {};
+    Background listHead = {};
+    Background listHover = {};
+    Background sliderBar = {};
+    Background switchBg = {};
+    Background tab = {};
+    Background tabBarSegmented = {};
+    Background tableHover = {};
+    Background tiles = {};
+    Background scrollbarBg = {};
+    Background sidebar = {};
+    Background groupBox = {};
+    Background descListLabel = {};
+};
+
+struct Theme {
+    Rgba background;
+    Rgba foreground;
+    Rgba border;
+    Rgba mutedFg;
+
+    Rgba inputBorder;
+    Rgba inputBg;
+
+    Rgba ring;
+    Rgba caret;
+
+    Rgba selection;
+
+    Rgba dragBorder;
+    Rgba titleBar;
+    Rgba titleBarBorder;
+
+    Rgba statusBar;
+
+    Rgba statusBarBorder;
+    Rgba tabBar;
+    Rgba tabActiveBg;
+    Rgba tabActiveFg;
+    Rgba tabFg;
+    Rgba tableBg;
+    Rgba tableHead;
+    Rgba tableHeadFg;
+
+    Rgba tableFoot;
+    Rgba tableFootFg;
+    Rgba tableRowBorder;
+    Rgba tableEven;
+
+    Rgba listActive;
+    Rgba listActiveBorder;
+    Rgba tableActive;
+    Rgba tableActiveBorder;
+    Rgba progress;
+    Rgba red;
+    Rgba green;
+    Rgba blue;
+    Rgba yellow;
+    Rgba cyan;
+    Rgba magenta;
+
+    Rgba redLight;
+    Rgba greenLight;
+    Rgba blueLight;
+    Rgba yellowLight;
+    Rgba cyanLight;
+    Rgba magentaLight;
+
+    Rgba chart1;
+    Rgba chart2;
+    Rgba chart3;
+    Rgba chart4;
+    Rgba chart5;
+    Rgba chartBullish;
+    Rgba chartBearish;
+    Rgba danger;
+    Rgba dangerFg;
+
+    Rgba popover;
+    Rgba popoverFg;
+    Rgba secondaryHover;
+    Rgba secondaryActive;
+    Rgba secondaryFg;
+    Rgba secondary;
+    Rgba muted;
+    Rgba accent;
+
+    Rgba accentFg;
+    Rgba primary;
+    Rgba primaryFg;
+    Rgba primaryHover;
+    Rgba primaryActive;
+    Rgba sidebar;
+    Rgba sidebarFg;
+    Rgba sidebarPrimary;
+    Rgba sidebarPrimaryFg;
+    Rgba sidebarAccent;
+    Rgba sidebarAccentFg;
+    Rgba sidebarBorder;
+    Rgba scrollbarThumb;
+
+    Rgba scrollbarThumbHover;
+
+    Rgba scrollbarBg;
+    Rgba info;
+    Rgba infoFg;
+    Rgba success;
+    Rgba successFg;
+    Rgba warning;
+    Rgba warningFg;
+    Rgba skeleton;
+
+    Rgba switchThumb;
+    Rgba sliderThumb;
+
+    Rgba overlay;
+
+    Rgba groupBox;
+    Rgba groupBoxFg;
+
+    Rgba descListLabel;
+    Rgba descListLabelFg;
+
+    Rgba button;
+    Rgba buttonFg;
+    Rgba buttonHover;
+    Rgba buttonActive;
+    Rgba buttonPrimary;
+    Rgba buttonPrimaryFg;
+    Rgba buttonPrimaryHover;
+    Rgba buttonPrimaryActive;
+    Rgba buttonSecondary;
+    Rgba buttonSecondaryFg;
+    Rgba buttonSecondaryHover;
+    Rgba buttonSecondaryActive;
+    Rgba buttonDanger;
+    Rgba buttonDangerFg;
+    Rgba buttonDangerHover;
+    Rgba buttonDangerActive;
+    Rgba buttonSuccess;
+    Rgba buttonSuccessFg;
+    Rgba buttonSuccessHover;
+    Rgba buttonSuccessActive;
+    Rgba buttonInfo;
+    Rgba buttonInfoFg;
+    Rgba buttonInfoHover;
+    Rgba buttonInfoActive;
+    Rgba buttonWarning;
+    Rgba buttonWarningFg;
+    Rgba buttonWarningHover;
+    Rgba buttonWarningActive;
+
+    Rgba dangerHover;
+    Rgba dangerActive;
+    Rgba successHover;
+    Rgba successActive;
+    Rgba infoHover;
+    Rgba infoActive;
+    Rgba warningHover;
+    Rgba warningActive;
+
+    Rgba accordion;
+
+    Rgba dropTarget;
+
+    Rgba link;
+    Rgba linkActive;
+    Rgba linkHover;
+
+    Rgba list;
+    Rgba listEven;
+    Rgba listHead;
+    Rgba listHover;
+    Rgba tableHover;
+
+    Rgba sliderBar;
+
+    Rgba switchBg;
+
+    Rgba tab;
+    Rgba tabBarSegmented;
+
+    Rgba tiles;
+
+    Rgba windowBorder;
+
+    float radius;
+    float radiusLg;
+
+    float radiusFull;
+    ThemeMode mode = ThemeMode::Light;
+    Str fontFamily = Str(".SystemUIFont");
+    float fontSize = 16.f;
+#if GPUI_OS_MAC
+    Str monoFontFamily = Str("Menlo");
+#elif GPUI_OS_WINDOWS
+    Str monoFontFamily = Str("Consolas");
+#else
+    Str monoFontFamily = Str("DejaVu Sans Mono");
+#endif
+    float monoFontSize = kMonoFontSize;
+    bool shadow = true;
+    bool focusRing = true;
+    ScrollbarMode scrollbarMode = ScrollbarMode::Scrolling;
+    Rgba transparent = {};
+    float tileGridSize = 8.f;
+    bool tileShadow = true;
+    float tileRadius = 0.f;
+
+    ListSettings listSettings = {};
+
+    component::NotificationSettings notification = {};
+    component::SheetSettings sheet = {};
+
+    ThemeTokens tokens = {};
+};
+
+using ThemeColor = Theme;
+
+void ThemeTokensReset(Theme* t);
+
+void ThemeFillDerived(Theme* t, bool dark);
+
+const Theme& ThemeDark();
+const Theme& ThemeLight();
+const Theme& ThemeDark(const App* app);
+const Theme& ThemeLight(const App* app);
+
+const Theme& ThemeDefaultDark();
+const Theme& ThemeDefaultLight();
+
+void ThemeInstall(App* app, ThemeMode mode, const Theme& t);
+
+void ThemeSetRadius(App* app, float radius);
+
+float ThemeFontSize(const App* app);
+
+float WheelNotchPixels(const App* app);
+void ThemeSetFontSize(App* app, float px);
+
+bool ThemeFocusRing(const App* app);
+void ThemeSetFocusRing(App* app, bool on);
+const Theme& ThemeNow(const App* app);
+void ThemeSet(App* app, ThemeMode mode);
+ThemeMode ThemeGet(const App* app);
+
+ScrollbarMode ScrollbarModeNow(const App* app);
+void ScrollbarModeSet(App* app, ScrollbarMode mode);
+
+SemanticThemeTokens ThemeSemanticTokens(const Theme& theme,
+                                        float fontSize = 0.f);
+void ThemeApplySemanticTokens(Theme* theme,
+                              const SemanticThemeTokens& tokens);
+
+const int kNumShadcnColumns = 11;
+
+struct ShadcnScale {
+    const char* name;
+    uint32_t hex[kNumShadcnColumns];
+};
+
+extern const ShadcnScale kShadcnScales[];
+extern const int kNumShadcnScales;
+extern const int kShadcnScaleNums[kNumShadcnColumns];
+
+extern const uint32_t kShadcnStone[kNumShadcnColumns];
+extern const uint32_t kShadcnBlack;
+extern const uint32_t kShadcnWhite;
+
+extern const char* const kDefaultThemeJson;
+
+bool ThemeParseColor(Str s, Rgba* out);
+
+bool ThemeParseBackground(Str s, Background* out);
+
+enum class ColorName : uint8_t {
+    White,
+    Black,
+    Neutral,
+    Gray,
+    Red,
+    Orange,
+    Amber,
+    Yellow,
+    Lime,
+    Green,
+    Emerald,
+    Teal,
+    Cyan,
+    Sky,
+    Blue,
+    Indigo,
+    Violet,
+    Purple,
+    Fuchsia,
+    Pink,
+    Rose
+};
+
+const ColorName* ColorNameAll(int* count);
+bool ColorNameParse(Str value, ColorName* out);
+Rgba ColorNameScale(ColorName name, int scale = 500);
+Rgba ThemeHsl(float hueDegrees, float saturationPercent,
+              float lightnessPercent);
+Rgba ThemeBlack();
+Rgba ThemeWhite();
+
+inline const Theme& ActiveTheme(const App* app) { return ThemeNow(app); }
+
+template <typename T>
+struct ThemeConfigValue {
+    T value = {};
+    bool has = false;
+
+    static ThemeConfigValue Some(const T& value) {
+        ThemeConfigValue out;
+        out.value = value;
+        out.has = true;
+        return out;
+    }
+};
+
+struct SemanticColorConfig {
+    ThemeConfigValue<Str> background;
+    ThemeConfigValue<Str> foreground;
+    ThemeConfigValue<Str> surface;
+    ThemeConfigValue<Str> surfaceForeground;
+    ThemeConfigValue<Str> primary;
+    ThemeConfigValue<Str> primaryForeground;
+    ThemeConfigValue<Str> secondary;
+    ThemeConfigValue<Str> secondaryForeground;
+    ThemeConfigValue<Str> muted;
+    ThemeConfigValue<Str> mutedForeground;
+    ThemeConfigValue<Str> accent;
+    ThemeConfigValue<Str> accentForeground;
+    ThemeConfigValue<Str> destructive;
+    ThemeConfigValue<Str> destructiveForeground;
+    ThemeConfigValue<Str> border;
+    ThemeConfigValue<Str> input;
+    ThemeConfigValue<Str> ring;
+};
+
+struct SemanticRadiusConfig {
+    ThemeConfigValue<float> none;
+    ThemeConfigValue<float> sm;
+    ThemeConfigValue<float> md;
+    ThemeConfigValue<float> lg;
+    ThemeConfigValue<float> xl;
+    ThemeConfigValue<float> full;
+};
+
+struct SemanticSpacingConfig {
+    ThemeConfigValue<float> xxs;
+    ThemeConfigValue<float> xs;
+    ThemeConfigValue<float> sm;
+    ThemeConfigValue<float> md;
+    ThemeConfigValue<float> lg;
+    ThemeConfigValue<float> xl;
+    ThemeConfigValue<float> xxl;
+};
+
+struct SemanticTextStyleConfig {
+    ThemeConfigValue<float> size;
+    ThemeConfigValue<float> lineHeight;
+    ThemeConfigValue<FontWeight> weight;
+};
+
+struct SemanticTypographyConfig {
+    ThemeConfigValue<Str> sans;
+    ThemeConfigValue<Str> mono;
+    SemanticTextStyleConfig xs;
+    SemanticTextStyleConfig sm;
+    SemanticTextStyleConfig md;
+    SemanticTextStyleConfig lg;
+    SemanticTextStyleConfig xl;
+    SemanticTextStyleConfig monoMd;
+};
+
+struct SemanticShadowConfig {
+
+    const JsonValue* sm = nullptr;
+    const JsonValue* md = nullptr;
+    const JsonValue* lg = nullptr;
+};
+
+struct SemanticThemeConfig {
+    SemanticColorConfig colors;
+    SemanticRadiusConfig radius;
+    SemanticSpacingConfig spacing;
+    SemanticTypographyConfig typography;
+    SemanticShadowConfig shadow;
+
+    bool ApplyTo(SemanticThemeTokens* tokens) const;
+};
+
+struct SemanticThemeConfigFile {
+    SemanticThemeConfig tokens;
+};
+
+bool SemanticThemeConfigParse(const JsonValue* value,
+                              SemanticThemeConfig* out);
+bool SemanticThemeConfigFileParse(const JsonValue* value,
+                                  SemanticThemeConfigFile* out);
+
+struct ThemeConfigColors {
+    const JsonValue* value = nullptr;
+
+    ThemeConfigColors& operator=(const JsonValue* json) {
+        value = json;
+        return *this;
+    }
+    operator const JsonValue*() const { return value; }
+    explicit operator bool() const { return value != nullptr; }
+};
+
+struct ThemeSetConfig {
+    Str name = {};
+    Str author = {};
+    Str url = {};
+    const JsonValue* themes = nullptr;
+
+    int Count() const;
+};
+
+bool ThemeSetConfigParse(const JsonValue* value, ThemeSetConfig* out);
+
+struct ThemeConfig {
+    Str name = {};
+    Str author = {};
+    Str url = {};
+    ThemeMode mode = ThemeMode::Light;
+    bool isDefault = false;
+
+    ThemeConfigColors colors;
+
+    float fontSize = 0;
+    Str fontFamily = {};
+    Str monoFontFamily = {};
+    float monoFontSize = 0;
+    float radius = -1;
+    float radiusLg = -1;
+    bool shadow = true;
+    bool hasShadow = false;
+
+    const JsonValue* highlight = nullptr;
+};
+
+bool ThemeConfigNames(const ThemeConfig* cfg, const char* key);
+
+void ThemeConfigResolve(Theme* out, const ThemeConfig* cfg, const Theme& base);
+
+struct ThemeRegistry {
+    Arena* arena = nullptr;
+    Vec<ThemeConfig> themes;
+    Vec<Str> loadedDirs;
+    Str active[2] = {};
+    bool initialized = false;
+
+    ~ThemeRegistry();
+    static ThemeRegistry* Global(App* app);
+    static const ThemeRegistry* Global(const App* app);
+    int Count() const { return themes.len; }
+};
+
+void ThemeRegistryInit(App* app);
+
+void ThemeSyncBase(App* app);
+
+int ThemeRegistryLoadStr(App* app, Str json);
+
+int ThemeRegistryLoadDir(App* app, Str dir);
+
+bool ThemeApplySemanticConfigStr(App* app, ThemeMode mode, Str json,
+                                 SemanticThemeTokens* out = nullptr);
+
+bool ThemeSemanticConfigApply(const JsonValue* doc, SemanticThemeTokens* io);
+
+int ThemeRegistryCount(const App* app);
+const ThemeConfig* ThemeRegistryAt(const App* app, int ix);
+const ThemeConfig* ThemeRegistryFind(const App* app, Str name);
+
+Str ThemeRegistryActive(const App* app, ThemeMode mode);
+
+bool ThemeRegistryApply(App* app, const ThemeConfig* cfg);
+bool ThemeRegistryApply(App* app, Str name);
+
+void ThemeRegistryReset(App* app);
+
+void ThemeRegistryFree(App* app);
+
+}
+
 #line 1 "src/ui/sizing.h"
 
 namespace gpui {
 
-enum class UiSize : uint8_t {
-    XSmall,
-    Small,
-    Medium,
-    Large
+struct UiSize {
+    enum class Kind : uint8_t {
+        Size,
+        XSmall,
+        Small,
+        Medium,
+        Large
+    };
+
+    struct Constant {
+        Kind kind;
+        constexpr operator Kind() const { return kind; }
+    };
+
+    static constexpr Constant Size{Kind::Size};
+    static constexpr Constant XSmall{Kind::XSmall};
+    static constexpr Constant Small{Kind::Small};
+    static constexpr Constant Medium{Kind::Medium};
+    static constexpr Constant Large{Kind::Large};
+
+    Kind kind = Kind::Medium;
+    float pixels = 0;
+
+    constexpr UiSize() = default;
+    constexpr UiSize(Kind value) : kind(value) {}
+    constexpr UiSize(Constant value) : kind(value.kind) {}
+    static constexpr UiSize Custom(float value) {
+        UiSize out(Kind::Size);
+        out.pixels = value;
+        return out;
+    }
+    constexpr operator Kind() const { return kind; }
+    UiSize& operator=(Kind value) {
+        kind = value;
+        pixels = 0;
+        return *this;
+    }
+    UiSize& operator=(Constant value) { return *this = value.kind; }
 };
+
+constexpr bool operator==(UiSize a, UiSize b) {
+    return a.kind == b.kind &&
+           (a.kind != UiSize::Kind::Size || a.pixels == b.pixels);
+}
+constexpr bool operator!=(UiSize a, UiSize b) { return !(a == b); }
+constexpr bool operator==(UiSize a, UiSize::Constant b) {
+    return a.kind == b.kind;
+}
+constexpr bool operator==(UiSize::Constant a, UiSize b) { return b == a; }
+constexpr bool operator!=(UiSize a, UiSize::Constant b) { return !(a == b); }
+constexpr bool operator!=(UiSize::Constant a, UiSize b) { return !(a == b); }
+constexpr bool operator<(UiSize a, UiSize::Constant b) {
+    return (uint8_t)a.kind < (uint8_t)b.kind;
+}
+constexpr bool operator<(UiSize::Constant a, UiSize b) {
+    return (uint8_t)a.kind < (uint8_t)b.kind;
+}
+constexpr bool operator>(UiSize a, UiSize::Constant b) {
+    return (uint8_t)a.kind > (uint8_t)b.kind;
+}
+constexpr bool operator>(UiSize::Constant a, UiSize b) {
+    return (uint8_t)a.kind > (uint8_t)b.kind;
+}
+
+inline float UiSizeAsF32(UiSize s) {
+    switch (s) {
+        case UiSize::Size:
+            return s.pixels;
+        case UiSize::XSmall:
+            return 0;
+        case UiSize::Small:
+            return 1;
+        case UiSize::Large:
+            return 3;
+        default:
+            return 2;
+    }
+}
+
+inline Str UiSizeAsStr(UiSize s) {
+    switch (s) {
+        case UiSize::Size:
+            return StrL("custom");
+        case UiSize::XSmall:
+            return StrL("xs");
+        case UiSize::Small:
+            return StrL("sm");
+        case UiSize::Large:
+            return StrL("lg");
+        default:
+            return StrL("md");
+    }
+}
+
+inline UiSize UiSizeFromStr(Str text) {
+    if (StrEqI(text, StrL("xs")) || StrEqI(text, StrL("xsmall"))) {
+        return UiSize::XSmall;
+    }
+    if (StrEqI(text, StrL("sm")) || StrEqI(text, StrL("small"))) {
+        return UiSize::Small;
+    }
+    if (StrEqI(text, StrL("lg")) || StrEqI(text, StrL("large"))) {
+        return UiSize::Large;
+    }
+    return UiSize::Medium;
+}
+
+inline UiSize UiSizeSmaller(UiSize s) {
+    switch (s) {
+        case UiSize::Size:
+            return UiSize::Custom(s.pixels * 0.2f);
+        case UiSize::Small:
+            return UiSize::XSmall;
+        case UiSize::Medium:
+            return UiSize::Small;
+        case UiSize::Large:
+            return UiSize::Medium;
+        default:
+            return UiSize::XSmall;
+    }
+}
+
+inline UiSize UiSizeLarger(UiSize s) {
+    switch (s) {
+        case UiSize::Size:
+            return UiSize::Custom(s.pixels * 1.2f);
+        case UiSize::XSmall:
+            return UiSize::Small;
+        case UiSize::Small:
+            return UiSize::Medium;
+        case UiSize::Medium:
+            return UiSize::Large;
+        default:
+            return UiSize::Large;
+    }
+}
+
+inline UiSize UiSizeMax(UiSize a, UiSize b) {
+    if (a.kind == UiSize::Kind::Size && b.kind == UiSize::Kind::Size) {
+        return UiSize::Custom(std::min(a.pixels, b.pixels));
+    }
+    if (a.kind == UiSize::Kind::Size) {
+        return a;
+    }
+    if (b.kind == UiSize::Kind::Size) {
+        return b;
+    }
+    return UiSizeAsF32(a) < UiSizeAsF32(b) ? a : b;
+}
+
+inline UiSize UiSizeMin(UiSize a, UiSize b) {
+    if (a.kind == UiSize::Kind::Size && b.kind == UiSize::Kind::Size) {
+        return UiSize::Custom(std::max(a.pixels, b.pixels));
+    }
+    if (a.kind == UiSize::Kind::Size) {
+        return a;
+    }
+    if (b.kind == UiSize::Kind::Size) {
+        return b;
+    }
+    return UiSizeAsF32(a) > UiSizeAsF32(b) ? a : b;
+}
 
 inline float UiSizePx(UiSize s) {
     switch (s) {
+        case UiSize::Size:
+            return s.pixels;
         case UiSize::XSmall:
             return 20;
         case UiSize::Small:
@@ -9145,6 +12352,8 @@ inline float UiSizePx(UiSize s) {
 
 inline float UiIconPx(UiSize s) {
     switch (s) {
+        case UiSize::Size:
+            return s.pixels;
         case UiSize::XSmall:
             return 12;
         case UiSize::Small:
@@ -9172,6 +12381,8 @@ inline Edges UiTableCellPadding(UiSize s) {
 
 inline float UiTableRowHeight(UiSize s) {
     switch (s) {
+        case UiSize::Size:
+            return s.pixels;
         case UiSize::XSmall:
             return 26;
         case UiSize::Small:
@@ -9185,6 +12396,8 @@ inline float UiTableRowHeight(UiSize s) {
 
 inline float UiFontPx(UiSize s) {
     switch (s) {
+        case UiSize::Size:
+            return s.pixels * 0.875f;
         case UiSize::XSmall:
             return 11;
         case UiSize::Small:
@@ -9194,6 +12407,131 @@ inline float UiFontPx(UiSize s) {
         default:
             return 14;
     }
+}
+
+inline float UiInputPadX(UiSize s) {
+    switch (s) {
+        case UiSize::Large:
+            return 12;
+        case UiSize::Medium:
+            return 10;
+        case UiSize::Small:
+            return 8;
+        case UiSize::XSmall:
+            return 4;
+        default:
+            return 8;
+    }
+}
+
+inline float UiInputFontPx(UiSize s) {
+    switch (s) {
+        case UiSize::Size:
+            return s.pixels * 0.875f;
+        case UiSize::XSmall:
+            return 12;
+        case UiSize::Small:
+        case UiSize::Medium:
+            return 14;
+        default:
+            return 16;
+    }
+}
+
+inline float UiInputPadY(UiSize s) {
+    switch (s) {
+        case UiSize::Large:
+            return 10;
+        case UiSize::Medium:
+            return 8;
+        case UiSize::Small:
+            return 2;
+        case UiSize::XSmall:
+            return 0;
+        default:
+            return 2;
+    }
+}
+
+inline float UiInputHeight(UiSize s) {
+    switch (s) {
+        case UiSize::Large:
+            return 44;
+        case UiSize::Medium:
+            return 32;
+        case UiSize::Small:
+            return 24;
+        case UiSize::XSmall:
+            return 20;
+        default:
+            return 24;
+    }
+}
+
+inline float UiListPadX(UiSize s) {
+    return s == UiSize::Small ? 8.f : 12.f;
+}
+
+inline float UiListPadY(UiSize s) {
+    switch (s) {
+        case UiSize::Large:
+            return 8;
+        case UiSize::Small:
+            return 2;
+        default:
+            return 4;
+    }
+}
+
+inline float UiSizeWithPx(UiSize s) {
+    switch (s) {
+        case UiSize::Size:
+            return s.pixels;
+        case UiSize::Large:
+            return 44;
+        case UiSize::Medium:
+            return 32;
+        case UiSize::Small:
+            return 20;
+        default:
+            return 16;
+    }
+}
+
+inline El* UiInputTextSize(El* e, UiSize s) {
+    return e->Font(UiInputFontPx(s));
+}
+inline El* UiInputPadL(El* e, UiSize s) { return e->PadL(UiInputPadX(s)); }
+inline El* UiInputPadR(El* e, UiSize s) { return e->PadR(UiInputPadX(s)); }
+inline El* UiInputPadX(El* e, UiSize s) { return e->PadX(UiInputPadX(s)); }
+inline El* UiInputPadY(El* e, UiSize s) { return e->PadY(UiInputPadY(s)); }
+inline El* UiInputH(El* e, UiSize s) { return e->H(UiInputHeight(s)); }
+inline El* UiInputSize(El* e, UiSize s) {
+    return UiInputH(UiInputPadY(UiInputPadX(e, s), s), s);
+}
+inline El* UiListPadX(El* e, UiSize s) { return e->PadX(UiListPadX(s)); }
+inline El* UiListPadY(El* e, UiSize s) { return e->PadY(UiListPadY(s)); }
+inline El* UiListSize(El* e, UiSize s) {
+    return UiInputTextSize(UiListPadY(UiListPadX(e, s), s), s);
+}
+inline El* UiSizeWith(El* e, UiSize s) {
+    float px = UiSizeWithPx(s);
+    return e->W(px)->H(px);
+}
+inline El* UiTableCellSize(El* e, UiSize s) {
+    Edges pad = UiTableCellPadding(s);
+    if (s == UiSize::XSmall || s == UiSize::Small) {
+        e->Font(14);
+    }
+    return e->PadL(pad.left)
+        ->PadR(pad.right)
+        ->PadT(pad.top)
+        ->PadB(pad.bottom);
+}
+inline El* UiButtonTextSize(El* e, UiSize s) {
+    float font = s == UiSize::XSmall ? 12.f :
+                 (s == UiSize::Small ? 14.f : 16.f);
+    return e->Font(font);
 }
 
 namespace component {
@@ -9258,8 +12596,7 @@ struct Accordion {
     bool bordered = true;
     bool disabled = false;
     UiSize size = UiSize::Medium;
-    AccordionItem* items[8] = {};
-    int nItems = 0;
+    ArenaVec<AccordionItem*> items;
     Listener onToggle;
 
     static Accordion* New(Ctx* cx, Str id);
@@ -9369,8 +12706,7 @@ struct Avatar {
 struct AvatarGroup {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    Avatar* avatars[16] = {};
-    int n = 0;
+    ArenaVec<Avatar*> avatars;
     UiSize size = UiSize::Medium;
     int limit = 3;
     bool ellipsis = false;
@@ -9449,8 +12785,7 @@ struct BreadcrumbItem {
 struct Breadcrumb {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    BreadcrumbItem* items[8] = {};
-    int n = 0;
+    ArenaVec<BreadcrumbItem*> items;
 
     static Breadcrumb* New(Ctx* cx);
     Breadcrumb* Child(BreadcrumbItem* item);
@@ -9468,6 +12803,29 @@ namespace gpui {
 
 namespace component {
 
+enum class ButtonRounded : uint8_t {
+    None,
+    Small,
+    Medium,
+    Large,
+    Size
+};
+
+struct ButtonCustomVariant {
+    Rgba color = {};
+    Rgba foreground = {};
+    bool shadow = false;
+    Rgba hover = {};
+    Rgba active = {};
+
+    static ButtonCustomVariant New(const App* app);
+    ButtonCustomVariant Color(Rgba value) const;
+    ButtonCustomVariant Foreground(Rgba value) const;
+    ButtonCustomVariant Hover(Rgba value) const;
+    ButtonCustomVariant Active(Rgba value) const;
+    ButtonCustomVariant Shadow(bool value = true) const;
+};
+
 enum class ButtonVariant : uint8_t {
     Default,
     Primary,
@@ -9478,7 +12836,72 @@ enum class ButtonVariant : uint8_t {
     Warning,
     Ghost,
     Link,
-    Text
+    Text,
+
+    Custom
+};
+
+inline bool ButtonVariantIsLink(ButtonVariant value) {
+    return value == ButtonVariant::Link;
+}
+inline bool ButtonVariantIsText(ButtonVariant value) {
+    return value == ButtonVariant::Text;
+}
+inline bool ButtonVariantIsGhost(ButtonVariant value) {
+    return value == ButtonVariant::Ghost;
+}
+
+enum class ButtonIconVariant : uint8_t {
+    Icon,
+    Spinner,
+    Progress
+};
+
+struct Icon;
+struct Spinner;
+struct ProgressCircle;
+
+struct ButtonIcon {
+    Ctx* cx = nullptr;
+    ButtonIconVariant variant = ButtonIconVariant::Icon;
+    IconName iconName = IconName::None;
+    component::Icon* icon = nullptr;
+    component::Spinner* spinner = nullptr;
+    component::ProgressCircle* progress = nullptr;
+    IconName loadingIconName = IconName::None;
+    component::Icon* loadingIcon = nullptr;
+    bool loading = false;
+    UiSize size = UiSize::Medium;
+    float sizePx = 0;
+
+    static ButtonIcon* New(Ctx* cx, IconName icon);
+    static ButtonIcon* New(Ctx* cx, component::Icon* icon);
+    static ButtonIcon* New(Ctx* cx, component::Spinner* spinner);
+    static ButtonIcon* New(Ctx* cx, component::ProgressCircle* progress);
+    ButtonIcon* LoadingIcon(IconName value);
+    ButtonIcon* LoadingIcon(component::Icon* value);
+    ButtonIcon* Loading(bool value);
+    ButtonIcon* WithSize(UiSize value);
+    ButtonIcon* Size(float value);
+    bool IsSpinner() const { return variant == ButtonIconVariant::Spinner; }
+    bool IsProgress() const { return variant == ButtonIconVariant::Progress; }
+    El* IntoEl();
+};
+
+struct Button;
+
+struct ButtonVariants {
+    static Button* WithVariant(Button* button, ButtonVariant variant);
+    static Button* Primary(Button* button);
+    static Button* Secondary(Button* button);
+    static Button* Danger(Button* button);
+    static Button* Warning(Button* button);
+    static Button* Success(Button* button);
+    static Button* Info(Button* button);
+    static Button* Ghost(Button* button);
+    static Button* Link(Button* button);
+    static Button* Text(Button* button);
+    static Button* Custom(Button* button, const ButtonCustomVariant& variant);
 };
 
 struct Button {
@@ -9492,7 +12915,11 @@ struct Button {
     Rgba iconColor = {};
 
     IconName iconRight = IconName::None;
+    ButtonIcon* buttonIcon = nullptr;
     ButtonVariant variant = ButtonVariant::Default;
+    ButtonCustomVariant customVariant = {};
+    ButtonRounded rounded = ButtonRounded::Medium;
+    float roundedPx = 0;
     UiSize size = UiSize::Medium;
     bool outline = false;
     bool disabled = false;
@@ -9507,14 +12934,24 @@ struct Button {
     bool hasCustom = false;
     Rgba custom = {};
     Str tooltip = {};
+    Str accessibilityId = {};
+    AccessibilityRole accessibilityRole = AccessibilityRole::None;
+    bool hasAccessibilityRole = false;
+    bool accessibilityToggled = false;
+    bool hasAccessibilityToggled = false;
     El* extra = nullptr;
+    ArenaVec<El*> children;
 
     float sizePx = 0;
-    IconName loadingIcon = IconName::Loader;
+    IconName loadingIcon = IconName::None;
 
     bool joined = false;
     bool edgeT = true, edgeB = true, edgeL = true, edgeR = true;
+    bool cornerTL = true, cornerTR = true, cornerBL = true, cornerBR = true;
     Listener onClick;
+    Listener onHover;
+    uint32_t clickAction = 0;
+    intptr_t clickActionArg = 0;
 
     StateStyle selectedStyle = {};
     StateStyle disabledStyle = {};
@@ -9522,6 +12959,8 @@ struct Button {
     static Button* New(Ctx* cx, Str id);
     Button* Label(Str s);
     Button* Icon(IconName n);
+    Button* Icon(ButtonIcon* value);
+    Button* WithVariant(ButtonVariant value);
     Button* IconColor(Rgba c);
     Button* IconRight(IconName n);
     Button* Primary();
@@ -9534,6 +12973,8 @@ struct Button {
     Button* Link();
     Button* Text();
     Button* Outline();
+    Button* Rounded(ButtonRounded value);
+    Button* Rounded(float px);
     Button* Compact();
 
     Button* JustifyStart(bool v = true);
@@ -9542,7 +12983,10 @@ struct Button {
     Button* DisabledStyle(const StateStyle& s);
     Button* DropdownCaret(bool v = true);
     Button* Custom(Rgba c);
+    Button* Custom(const ButtonCustomVariant& value);
     Button* Extra(El* e);
+    Button* Child(El* e);
+    Button* Children(El** values, int count);
     Button* Loading(bool v);
     Button* Disabled(bool v);
     Button* WithSize(UiSize s);
@@ -9555,7 +12999,93 @@ struct Button {
     Button* TabStop(bool v);
     Button* FocusRing(bool v);
     Button* Tooltip(Str s);
+    Button* AccessibilityId(Str s);
+    Button* Role(AccessibilityRole role);
+
+    Button* Toggled(bool v = true);
     Button* OnClick(Listener l);
+    Button* OnHover(Listener l);
+    Button* OnClickAction(uint32_t action, intptr_t arg = 0);
+    El* IntoEl();
+};
+
+enum class ToggleVariant : uint8_t {
+    Ghost,
+    Outline
+};
+
+struct Toggle;
+struct ToggleGroup;
+
+struct ToggleVariants {
+    static Toggle* WithVariant(Toggle* toggle, ToggleVariant variant);
+    static Toggle* Ghost(Toggle* toggle);
+    static Toggle* Outline(Toggle* toggle);
+    static ToggleGroup* WithVariant(ToggleGroup* group,
+                                    ToggleVariant variant);
+    static ToggleGroup* Ghost(ToggleGroup* group);
+    static ToggleGroup* Outline(ToggleGroup* group);
+};
+
+struct Toggle {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    Str id = {};
+    Str label = {};
+    Str tooltip = {};
+    IconName icon = IconName::None;
+    ArenaVec<El*> children;
+    bool checked = false;
+    UiSize size = UiSize::Medium;
+    ToggleVariant variant = ToggleVariant::Ghost;
+    bool disabled = false;
+    bool cornerTL = true, cornerTR = true, cornerBL = true, cornerBR = true;
+    bool edgeT = true, edgeB = true, edgeL = true, edgeR = true;
+    Listener onClick = {};
+
+    static Toggle* New(Ctx* cx, Str id);
+    Toggle* Tooltip(Str value);
+    Toggle* Label(Str value);
+    Toggle* Icon(IconName value);
+    Toggle* Child(El* value);
+    Toggle* Checked(bool value);
+    Toggle* OnClick(Listener value);
+    Toggle* BorderCorners(bool tl, bool tr, bool br, bool bl);
+    Toggle* BorderEdges(bool top, bool right, bool bottom, bool left);
+    Toggle* WithVariant(ToggleVariant value);
+    Toggle* Ghost();
+    Toggle* Outline();
+    Toggle* Disabled(bool value);
+    Toggle* WithSize(UiSize value);
+    El* IntoEl();
+};
+
+struct ToggleGroupEvent {
+    const bool* checked = nullptr;
+    int count = 0;
+};
+
+struct ToggleGroup {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    Str id = {};
+    ArenaVec<Toggle*> items;
+    UiSize size = UiSize::Medium;
+    ToggleVariant variant = ToggleVariant::Ghost;
+    bool disabled = false;
+    bool segmented = false;
+    Listener onClick = {};
+
+    static ToggleGroup* New(Ctx* cx, Str id);
+    ToggleGroup* Child(Toggle* value);
+    ToggleGroup* Children(Toggle** values, int count);
+    ToggleGroup* OnClick(Listener value);
+    ToggleGroup* Segmented(bool value = true);
+    ToggleGroup* WithSize(UiSize value);
+    ToggleGroup* WithVariant(ToggleVariant value);
+    ToggleGroup* Ghost();
+    ToggleGroup* Outline();
+    ToggleGroup* Disabled(bool value);
     El* IntoEl();
 };
 
@@ -9574,6 +13104,7 @@ struct DropdownButton {
 
     bool hasVariant = false;
     ButtonVariant variant = ButtonVariant::Default;
+    ButtonCustomVariant customVariant = {};
     bool hasSize = false;
     UiSize size = UiSize::Medium;
 
@@ -9586,16 +13117,39 @@ struct DropdownButton {
     DropdownButton* Disabled(bool v);
     DropdownButton* Outline();
     DropdownButton* WithVariant(ButtonVariant v);
+    DropdownButton* Primary();
+    DropdownButton* Secondary();
+    DropdownButton* Danger();
+    DropdownButton* Warning();
+    DropdownButton* Success();
+    DropdownButton* Info();
+    DropdownButton* Ghost();
+    DropdownButton* Link();
+    DropdownButton* Text();
+    DropdownButton* Custom(const ButtonCustomVariant& value);
     DropdownButton* WithSize(UiSize s);
     El* IntoEl();
+};
+
+struct ButtonGroupEvent {
+    const int* selected = nullptr;
+    int count = 0;
+
+    bool Contains(int index) const {
+        for (int i = 0; i < count; i++) {
+            if (selected[i] == index) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 struct ButtonGroup {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
-    Button* children[8] = {};
-    int n = 0;
+    ArenaVec<Button*> children;
     bool multiple = false;
     bool disabled = false;
     bool vertical = false;
@@ -9603,6 +13157,7 @@ struct ButtonGroup {
     bool outline = false;
     bool hasVariant = false;
     ButtonVariant variant = ButtonVariant::Default;
+    ButtonCustomVariant customVariant = {};
     bool hasSize = false;
     UiSize size = UiSize::Medium;
 
@@ -9610,12 +13165,24 @@ struct ButtonGroup {
 
     static ButtonGroup* New(Ctx* cx, Str id);
     ButtonGroup* Child(Button* b);
+    ButtonGroup* Children(Button** values, int count);
     ButtonGroup* Multiple(bool v);
     ButtonGroup* Disabled(bool v);
     ButtonGroup* Vertical(bool v = true);
+    ButtonGroup* Layout(Axis value);
     ButtonGroup* Compact();
     ButtonGroup* Outline();
     ButtonGroup* WithVariant(ButtonVariant v);
+    ButtonGroup* Primary();
+    ButtonGroup* Secondary();
+    ButtonGroup* Danger();
+    ButtonGroup* Warning();
+    ButtonGroup* Success();
+    ButtonGroup* Info();
+    ButtonGroup* Ghost();
+    ButtonGroup* Link();
+    ButtonGroup* Text();
+    ButtonGroup* Custom(const ButtonCustomVariant& value);
     ButtonGroup* WithSize(UiSize s);
     ButtonGroup* OnClick(Listener l);
     El* IntoEl();
@@ -9624,155 +13191,103 @@ struct ButtonGroup {
 }
 }
 
-#line 1 "src/ui/time.h"
+#line 1 "src/base/sankey.h"
 
 namespace gpui {
 
-namespace component {
-
-struct Calendar {
-    Arena* a = nullptr;
-    Ctx* cx = nullptr;
-    int year = 2026;
-    int month = 1;
-    int day = 1;
-    int selectedYear = 0;
-    int selectedMonth = 0;
-    LocalDate rangeEnd = {};
-    UiSize size = UiSize::Medium;
-    int numberOfMonths = 1;
-    CalendarView view = CalendarView::Day;
-    int yearMin = 0;
-    int yearMax = 0;
-    int yearPageStart = 0;
-    DateMatcher disabledMatcher = {};
-
-    bool bare = false;
-    Listener onDay;
-    Listener onDate;
-    Listener onPrev;
-    Listener onNext;
-    Listener onMonthToggle;
-    Listener onYearToggle;
-    Listener onMonth;
-    Listener onYear;
-
-    static Calendar* New(Ctx* cx);
-    Calendar* Year(int y);
-    Calendar* Month(int m);
-    Calendar* Day(int d);
-    Calendar* Selection(int y, int m, int d);
-    Calendar* RangeEnd(int y, int m, int d);
-    Calendar* WithSize(UiSize s);
-    Calendar* NumberOfMonths(int count);
-    Calendar* View(CalendarView value);
-    Calendar* YearRange(int minYear, int maxYear, int pageStart);
-    Calendar* DisabledMatcher(DateMatcher matcher);
-    Calendar* Bare();
-    Calendar* OnDay(Listener fn);
-    Calendar* OnDate(Listener fn);
-    Calendar* OnPrev(Listener fn);
-    Calendar* OnNext(Listener fn);
-    Calendar* OnMonthToggle(Listener fn);
-    Calendar* OnYearToggle(Listener fn);
-    Calendar* OnMonth(Listener fn);
-    Calendar* OnYear(Listener fn);
-    El* IntoEl();
+enum class SankeyAlign : uint8_t {
+    Left,
+    Right,
+    Center,
+    Justify
 };
 
-struct DateRangePreset {
-    Str label = {};
-    LocalDate start = {};
-    LocalDate end = {};
-    intptr_t arg = 0;
+enum class SankeyValueScale : uint8_t {
+    Linear,
+    Sqrt
 };
 
-enum class DateFormat : uint8_t {
-    Slash,
-    Dash
+enum class SankeyError : uint8_t {
+    None,
+
+    MissingNode,
+    CircularLink
 };
 
-struct DatePicker {
-    Arena* a = nullptr;
-    Ctx* cx = nullptr;
-    Str id = {};
-    int year = 2026;
-    int month = 1;
-    int day = 1;
-    int viewYear = 0;
-    int viewMonth = 0;
-
-    int year2 = 0;
-    int month2 = 0;
-    int day2 = 0;
-    Str placeholder = {};
-    DateFormat format = DateFormat::Slash;
-    UiSize size = UiSize::Medium;
-    float width = kFill;
-
-    bool cleanable = false;
-    bool appearance = true;
-    bool focusRing = true;
-    bool range = false;
-    bool open = false;
-    int numberOfMonths = 1;
-    CalendarView calendarView = CalendarView::Day;
-    int yearMin = 0;
-    int yearMax = 0;
-    int yearPageStart = 0;
-    DateMatcher disabledMatcher = {};
-    const DateRangePreset* presets = nullptr;
-    int presetsCount = 0;
-    Listener onToggle;
-    Listener onDay;
-    Listener onDate;
-    Listener onClear;
-    Listener onPrev;
-    Listener onNext;
-    Listener onMonthToggle;
-    Listener onYearToggle;
-    Listener onMonth;
-    Listener onYear;
-    Listener onPreset;
-
-    static DatePicker* New(Ctx* cx);
-    DatePicker* Id(Str value);
-    DatePicker* Year(int y);
-    DatePicker* Month(int m);
-    DatePicker* Day(int d);
-    DatePicker* View(int y, int m);
-    DatePicker* RangeEnd(int y, int m, int d);
-    DatePicker* Placeholder(Str s);
-    DatePicker* Format(DateFormat f);
-    DatePicker* WithSize(UiSize s);
-    DatePicker* W(float v);
-    DatePicker* Cleanable(bool v = true);
-    DatePicker* Appearance(bool v);
-
-    DatePicker* FocusRing(bool v);
-    DatePicker* Range(bool v = true);
-    DatePicker* NumberOfMonths(int count);
-    DatePicker* CalendarMode(CalendarView value);
-    DatePicker* YearRange(int minYear, int maxYear, int pageStart);
-    DatePicker* DisabledMatcher(DateMatcher matcher);
-    DatePicker* Presets(const DateRangePreset* values, int count,
-                        Listener onSelect);
-    DatePicker* Open(bool v);
-    DatePicker* OnToggle(Listener fn);
-    DatePicker* OnDay(Listener fn);
-    DatePicker* OnDate(Listener fn);
-    DatePicker* OnClear(Listener fn);
-    DatePicker* OnPrev(Listener fn);
-    DatePicker* OnNext(Listener fn);
-    DatePicker* OnMonthToggle(Listener fn);
-    DatePicker* OnYearToggle(Listener fn);
-    DatePicker* OnMonth(Listener fn);
-    DatePicker* OnYear(Listener fn);
-    El* IntoEl();
+struct SankeyLink {
+    int source = 0;
+    int target = 0;
+    double value = 0;
 };
+
+struct SankeyNodeLayout {
+    int index = 0;
+
+    double value = 0;
+
+    int depth = 0;
+    int height = 0;
+
+    int layer = 0;
+    float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+
+    int srcStart = 0, srcCount = 0;
+    int tgtStart = 0, tgtCount = 0;
+};
+
+struct SankeyLinkLayout {
+    int index = 0;
+    int source = 0;
+    int target = 0;
+    double value = 0;
+    float y0 = 0, y1 = 0;
+
+    float width = 0;
+    float sourceWidth = 0;
+    float targetWidth = 0;
+};
+
+struct SankeyGraph {
+    Vec<SankeyNodeLayout> nodes;
+    Vec<SankeyLinkLayout> links;
+
+    Vec<int> srcLinks;
+    Vec<int> tgtLinks;
+
+    int errNode = 0;
+
+    void Reset() {
+        nodes.Reset();
+        links.Reset();
+        srcLinks.Reset();
+        tgtLinks.Reset();
+    }
+};
+
+int SankeyLayerCount(const SankeyGraph* g);
+
+struct Sankey {
+    float nodeWidth = 24.f;
+    float nodePadding = 8.f;
+    SankeyAlign align = SankeyAlign::Justify;
+    int iterations = 6;
+    SankeyValueScale valueScale = SankeyValueScale::Linear;
+
+    float x0 = 0, y0 = 0, x1 = 1, y1 = 1;
+};
+
+SankeyError SankeyTopology(const Sankey* s, int nodeCount,
+                           const SankeyLink* links, int nLinks,
+                           SankeyGraph* out);
+
+void SankeyLayoutFrom(const Sankey* s, SankeyGraph* g);
+
+SankeyError SankeyLayout(const Sankey* s, int nodeCount,
+                         const SankeyLink* links, int nLinks, SankeyGraph* out);
 
 }
-}
+
+#line 1 "src/ui/sankey.h"
 
 #line 1 "src/ui/chart.h"
 
@@ -9791,8 +13306,7 @@ struct PieSlice {
 struct PieChart {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    PieSlice slices[12] = {};
-    int n = 0;
+    ArenaVec<PieSlice> slices;
     float outerRadius = 100;
     float innerRadius = 0;
     float padAngle = 0;
@@ -9831,8 +13345,7 @@ struct AreaChart {
     Rgba fillBottom = {};
     ChartStroke strokeStyle = ChartStroke::Natural;
 
-    ChartSeriesExtra more[4] = {};
-    int nMore = 0;
+    ArenaVec<ChartSeriesExtra> more;
 
     static AreaChart* New(Ctx* cx, const float* ys, int n);
 
@@ -9964,12 +13477,23 @@ struct CandlestickChart {
     El* IntoEl();
 };
 
+struct RadarLabel {
+    enum class Kind : uint8_t { Text, Element };
+
+    Kind kind = Kind::Text;
+    Str text = {};
+    El* element = nullptr;
+
+    static RadarLabel Text(Str text);
+    static RadarLabel Element(El* element);
+};
+
 struct RadarChart {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     const float* values = nullptr;
     int n = 0;
-    const char* const* labels = nullptr;
+    const RadarLabel* labels = nullptr;
     Rgba stroke = {};
     Rgba fill = {};
     float domainMin = 0;
@@ -9979,11 +13503,17 @@ struct RadarChart {
     bool dot = false;
     float outerRadius = 0;
     int gridLevels = 4;
+    float labelGap = 10;
+    Rgba labelColor = {};
+    bool hasLabelColor = false;
 
     static RadarChart* New(Ctx* cx, const float* values, int n);
     RadarChart* Stroke(Rgba c);
     RadarChart* Fill(Rgba c);
     RadarChart* Labels(const char* const* l);
+    RadarChart* Labels(const RadarLabel* l);
+    RadarChart* LabelColor(Rgba c);
+    RadarChart* LabelGap(float v);
     RadarChart* Domain(float lo, float hi);
     RadarChart* Overlay(bool v = true);
     RadarChart* Dot(bool v = true);
@@ -10001,6 +13531,18 @@ const float kSankeyChartLabelGap = 6;
 const float kSankeyMaxLabelWidthRatio = 0.2f;
 const float kSankeyMaxLabelMarginRatio = 0.6f;
 
+struct SankeyLabel {
+    Str text = {};
+    Rgba color = {};
+    float fontSize = 0;
+    bool hasColor = false;
+
+    static SankeyLabel New(Str text);
+    SankeyLabel Color(Rgba color) const;
+    SankeyLabel FontSize(float fontSize) const;
+    float LineHeight() const;
+};
+
 struct SankeyChartNode {
     Str label = {};
 
@@ -10010,6 +13552,9 @@ struct SankeyChartNode {
     Rgba noteColor = {};
     Rgba color = {};
     bool hasColor = false;
+
+    ArenaVec<SankeyLabel> labels;
+    bool hasCustomLabels = false;
 };
 
 struct SankeyChart {
@@ -10037,6 +13582,8 @@ struct SankeyChart {
 
     SankeyChart* NodeValue(Str text);
     SankeyChart* NodeNote(Str text, Rgba color);
+    SankeyChart* CustomLabel(SankeyLabel label);
+    SankeyChart* CustomLabels(const SankeyLabel* labels, int n);
     SankeyChart* Link(int source, int target, double value);
     SankeyChart* NodeWidth(float v);
     SankeyChart* NodePadding(float v);
@@ -10076,6 +13623,9 @@ struct Checkbox {
     UiSize size = UiSize::Medium;
     Str tooltip = {};
     bool focusRing = true;
+    AccessibilityRole accessibilityRole = AccessibilityRole::CheckBox;
+    int tabIndex = 0;
+    bool tabStop = true;
     float w = 0;
     Listener onClick;
 
@@ -10089,6 +13639,9 @@ struct Checkbox {
     Checkbox* W(float v);
 
     Checkbox* FocusRing(bool v);
+    Checkbox* Role(AccessibilityRole role);
+    Checkbox* TabIndex(int v);
+    Checkbox* TabStop(bool v);
     Checkbox* Tooltip(Str s);
     Checkbox* OnClick(Listener fn);
     El* IntoEl();
@@ -10185,8 +13738,10 @@ struct ColorPicker {
     int nFeatured = 0;
 
     Listener onChange;
+    Entity<ColorPickerState> state = {};
 
     static ColorPicker* New(Ctx* cx, Str id);
+    static ColorPicker* New(Ctx* cx, Entity<ColorPickerState> state);
     ColorPicker* Label(Str s);
     ColorPicker* Icon(IconName v);
     ColorPicker* WithSize(UiSize s);
@@ -10196,41 +13751,6 @@ struct ColorPicker {
 };
 
 }
-}
-
-#line 1 "src/base/index_path.h"
-
-namespace gpui {
-
-struct IndexPath {
-    int section = 0;
-    int row = 0;
-    int column = 0;
-
-    IndexPath Section(int v) const { return IndexPath{v, row, column}; }
-    IndexPath Row(int v) const { return IndexPath{section, v, column}; }
-    IndexPath Column(int v) const { return IndexPath{section, row, v}; }
-
-    bool EqRow(IndexPath o) const {
-        return section == o.section && row == o.row;
-    }
-};
-
-inline IndexPath IndexPathNew(int row) {
-    return IndexPath{0, row, 0};
-}
-
-inline bool operator==(IndexPath a, IndexPath b) {
-    return a.section == b.section && a.row == b.row && a.column == b.column;
-}
-inline bool operator!=(IndexPath a, IndexPath b) {
-    return !(a == b);
-}
-
-Str IndexPathIdStr(Arena* a, IndexPath p);
-
-uint32_t IndexPathClickId(IndexPath p);
-
 }
 
 #line 1 "src/base/list.h"
@@ -10251,6 +13771,20 @@ struct ListEvent {
 
     int index = -1;
 
+    bool secondary = false;
+};
+
+struct ListSelectionChange {
+    bool hasIndex = false;
+    IndexPath index = {};
+};
+
+struct ListSearchRequest {
+
+    Str query = {};
+};
+
+struct ListConfirmRequest {
     bool secondary = false;
 };
 
@@ -10317,13 +13851,23 @@ struct ListState {
     bool hasMore = false;
     int loadMoreThreshold = 20;
     Listener onEvent = {};
+
+    Listener onPerformSearch = {};
+    Listener onSetSelectedIndex = {};
+    Listener onSetRightClickedIndex = {};
+    Listener onConfirm = {};
+    Listener onCancel = {};
     Listener onLoadMore = {};
+
+    InputState* queryInput = nullptr;
+    Str lastQuery = {};
 
     EntityId self = {};
 
     FocusHandle focus = {};
 
     ~ListState() {
+        StrFree(lastQuery);
         sectionCounts.Reset();
         rowHeights.Reset();
     }
@@ -10333,6 +13877,9 @@ struct ListState {
     static void OnRowMouseDown(ListState* self, Ctx* cx,
                                const MouseDownEvent* ev, intptr_t ix);
     static void OnScroll(ListState* self, Ctx* cx, const ScrollEvent* ev);
+    static void OnQueryInput(ListState* self, Ctx* cx, const InputEvent* ev);
+    static void OnMouseDownOut(ListState* self, Ctx* cx,
+                               const MouseDownEvent* ev);
 };
 
 void ListSetSections(ListState* s, const int* counts, int n, bool headers,
@@ -10357,6 +13904,17 @@ int ListEntryOf(const ListState* s, IndexPath path);
 void ListScrollToItem(ListState* s, int entry, ScrollStrategy strategy);
 
 bool ListShouldLoadMore(const ListState* s, int lastVisibleRow);
+
+void ListSetSelectedIndex(ListState* s, Ctx* cx, int entry,
+                          bool scroll = false,
+                          ScrollStrategy strategy = ScrollStrategy::Top);
+void ListSetRightClickedIndex(ListState* s, Ctx* cx, int entry);
+bool ListSelectedIndex(const ListState* s, IndexPath* out);
+bool ListRightClickedIndex(const ListState* s, IndexPath* out);
+void ListSetItemToMeasureIndex(ListState* s, Ctx* cx, IndexPath path);
+
+void ListSetQuery(ListState* s, Ctx* cx, Str query);
+void ListRequestLoadMore(ListState* s, Ctx* cx);
 
 int ListNextIndex(const ListState* s);
 int ListPrevIndex(const ListState* s);
@@ -10403,17 +13961,37 @@ struct ListItem {
 
 ListItem* ListSeparatorItem(Ctx* cx, El* child = nullptr);
 
+struct ListDelegate {
+    void* data = nullptr;
+    int (*sectionsCount)(Ctx* cx, void* data) = nullptr;
+    int (*itemsCount)(Ctx* cx, void* data, int section) = nullptr;
+    ListItem* (*renderItem)(Ctx* cx, void* data, int section, int row,
+                            int entry) = nullptr;
+    El* (*renderSectionHeader)(Ctx* cx, void* data, int section) = nullptr;
+    El* (*renderSectionFooter)(Ctx* cx, void* data, int section) = nullptr;
+    El* (*renderEmpty)(Ctx* cx, void* data) = nullptr;
+    El* (*renderInitial)(Ctx* cx, void* data) = nullptr;
+    bool (*isLoading)(Ctx* cx, void* data) = nullptr;
+    El* (*renderLoading)(Ctx* cx, void* data) = nullptr;
+    bool (*hasMore)(Ctx* cx, void* data) = nullptr;
+    int (*loadMoreThreshold)(void* data) = nullptr;
+
+    Listener performSearch = {};
+    Listener setSelectedIndex = {};
+    Listener setRightClickedIndex = {};
+    Listener confirm = {};
+    Listener cancel = {};
+    Listener loadMore = {};
+};
+
 struct List {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
     Entity<ListState> state = {};
+    ListDelegate delegate = {};
 
-    void* data = nullptr;
-    ListItem* (*item)(Ctx* cx, void* data, int section, int row,
-                      int entry) = nullptr;
-    El* (*header)(Ctx* cx, void* data, int section) = nullptr;
-    El* (*footer)(Ctx* cx, void* data, int section) = nullptr;
+    bool delegateSet = false;
 
     InputState* search = nullptr;
     Listener onSearchFocus;
@@ -10422,9 +14000,15 @@ struct List {
     El* initial = nullptr;
 
     El* empty = nullptr;
+    Str searchPlaceholder = {};
+    UiSize size = UiSize::Medium;
+    bool scrollbarVisible = true;
+
+    float padding = 0;
     float h = 320;
 
     static List* New(Ctx* cx, Str id, Entity<ListState> state);
+    List* WithDelegate(const ListDelegate& value);
 
     List* Sections(const int* counts, int n);
     List* Count(int n);
@@ -10433,6 +14017,10 @@ struct List {
     List* Headers(El* (*headerFn)(Ctx*, void*, int),
                   El* (*footerFn)(Ctx*, void*, int) = nullptr);
     List* Searchable(InputState* search, Listener onFocus);
+    List* SearchPlaceholder(Str value);
+    List* WithSize(UiSize value);
+    List* ScrollbarVisible(bool value);
+    List* Padding(float value);
     List* Loading(El* e);
     List* Initial(El* e);
     List* Empty(El* e);
@@ -10449,7 +14037,7 @@ namespace gpui {
 
 namespace component {
 
-struct SearchableItem {
+struct SearchableListItem {
     Str title = {};
     Str value = {};
 
@@ -10463,6 +14051,114 @@ struct SearchableItem {
     Str badge = {};
 
     Str display = {};
+};
+
+using SearchableItem = SearchableListItem;
+
+struct SearchableGroup;
+struct SearchableListState;
+struct SearchableListChange;
+struct SearchableListDelegate {
+    void* user = nullptr;
+    const SearchableListItem* items = nullptr;
+    int nItems = 0;
+    SearchableGroup* const* groups = nullptr;
+    int nGroups = 0;
+    int (*sectionsCount)(void* user, const App* app) = nullptr;
+    Str (*sectionTitle)(void* user, int section) = nullptr;
+    int (*itemsCount)(void* user, int section) = nullptr;
+    const SearchableListItem* (*item)(void* user, IndexPath path) = nullptr;
+    bool (*position)(void* user, Str value, IndexPath* out) = nullptr;
+    bool (*matches)(void* user, const SearchableListItem* item,
+                    Str query) = nullptr;
+    El* (*renderItem)(void* user, Ctx* cx, IndexPath path,
+                      const SearchableListItem* item, bool checked) = nullptr;
+    El* (*renderSectionHeader)(void* user, Ctx* cx, int section) = nullptr;
+    bool (*isItemEnabled)(void* user, IndexPath path,
+                          const SearchableListItem* item,
+                          const App* app) = nullptr;
+    bool (*isItemChecked)(void* user, IndexPath path,
+                          const SearchableListItem* item,
+                          const SearchableListState* state,
+                          const App* app) = nullptr;
+    void (*onWillChange)(void* user, SearchableListState* state,
+                         const SearchableListChange* changes, int n) = nullptr;
+    void (*onConfirm)(void* user, const SearchableListState* state,
+                      IndexPath path, bool secondary) = nullptr;
+
+    static SearchableListDelegate Items(const SearchableListItem* items,
+                                        int nItems);
+    static SearchableListDelegate Groups(SearchableGroup* const* groups,
+                                         int nGroups);
+    int SectionsCount(const App* app = nullptr) const;
+    Str SectionTitle(int section) const;
+    int ItemsCount(int section) const;
+    const SearchableListItem* Item(IndexPath path) const;
+    bool Position(Str value, IndexPath* out) const;
+    bool Matches(const SearchableListItem* value, Str query) const;
+    El* RenderItem(Ctx* cx, IndexPath path,
+                   const SearchableListItem* value, bool checked) const;
+    El* RenderSectionHeader(Ctx* cx, int section) const;
+    bool IsItemEnabled(IndexPath path, const SearchableListItem* value,
+                       const App* app) const;
+    bool IsItemChecked(IndexPath path, const SearchableListItem* value,
+                       const SearchableListState* state,
+                       const App* app) const;
+    void OnWillChange(SearchableListState* state,
+                      const SearchableListChange* changes, int n) const;
+    void OnConfirm(const SearchableListState* state, IndexPath path,
+                   bool secondary) const;
+};
+
+struct SearchableGroup {
+    Str title = {};
+    Vec<SearchableListItem> items;
+
+    static SearchableGroup* New(Str title);
+    SearchableGroup* Item(const SearchableListItem& item);
+    SearchableGroup* Items(const SearchableListItem* items, int nItems);
+    bool Matches(Str query) const;
+    ~SearchableGroup() { items.Reset(); }
+};
+
+struct SearchableVec {
+    Vec<SearchableListItem> items;
+    Vec<SearchableListItem> matchedItems;
+
+    static SearchableVec* New(const SearchableListItem* items, int nItems);
+    SearchableVec* Push(const SearchableListItem& item);
+    void PerformSearch(Str query);
+    int ItemsCount(int section = 0) const;
+    const SearchableListItem* Item(IndexPath path) const;
+    bool Position(Str value, IndexPath* out) const;
+    ~SearchableVec() {
+        items.Reset();
+        matchedItems.Reset();
+    }
+};
+
+struct SearchableListItemElement {
+    Ctx* cx = nullptr;
+    size_t index = 0;
+    UiSize size = UiSize::Medium;
+    bool selected = false;
+    bool checked = false;
+    bool disabled = false;
+    IconName checkIcon = IconName::Check;
+    ArenaVec<El*> children;
+    Style style = {};
+    uint32_t styleSet = 0;
+
+    static SearchableListItemElement* New(Ctx* cx, size_t index);
+    SearchableListItemElement* Checked(bool value);
+    SearchableListItemElement* CheckIcon(IconName value);
+    SearchableListItemElement* Disabled(bool value);
+    SearchableListItemElement* Selected(bool value);
+    bool IsSelected() const;
+    SearchableListItemElement* WithSize(UiSize value);
+    SearchableListItemElement* Child(El* child);
+    SearchableListItemElement* Refine(const Style& value, uint32_t fields);
+    El* IntoEl();
 };
 
 enum class SearchableListMode : uint8_t {
@@ -10504,6 +14200,18 @@ struct SearchableListState {
     FocusHandle triggerFocus = {};
     FocusHandle contentFocus = {};
     FocusHandle previousFocus = {};
+    SearchableListDelegate delegate = {};
+    bool hasDelegate = false;
+
+    bool suppressDelegateConfirm = false;
+
+    const Vec<int>& Selection() const { return selected; }
+    void SelectedValues(Vec<Str>* out) const;
+    bool IsOpen() const { return open; }
+    const FocusHandle* Focus() const { return &triggerFocus; }
+    bool AddSelectedIndex(IndexPath index);
+    bool RemoveSelectedIndex(IndexPath index);
+    void SetSelectedIndices(const IndexPath* indices, int n);
 
     static void OnRowClick(SearchableListState* self, Ctx* cx,
                            const ClickEvent* ev, intptr_t match);
@@ -10562,6 +14270,9 @@ struct SearchableList {
     float maxH = 320;
 
     IconName checkIcon = IconName::Check;
+    UiSize size = UiSize::Medium;
+    SearchableListDelegate delegate = {};
+    bool hasDelegate = false;
 
     bool inSelect = false;
 
@@ -10575,6 +14286,8 @@ struct SearchableList {
     SearchableList* W(float v);
     SearchableList* MaxH(float v);
     SearchableList* CheckIcon(IconName n);
+    SearchableList* WithSize(UiSize value);
+    SearchableList* Delegate(const SearchableListDelegate& value);
     SearchableList* InSelect(bool v);
     El* IntoEl();
 };
@@ -10588,11 +14301,67 @@ namespace gpui {
 
 namespace component {
 
+using SelectGroup = SearchableGroup;
+using SelectDelegate = SearchableListDelegate;
+using SelectItem = SearchableListItem;
+using SelectListItem = SearchableListItemElement;
+
+struct Caret {
+    UiSize size = UiSize::Medium;
+    Rgba color = {};
+    bool hasColor = false;
+
+    static Caret New(UiSize size);
+    Caret TextColor(Rgba color) const;
+    float IconSize() const;
+    El* IntoEl(Arena* a) const;
+};
+
+struct SelectEvent {
+    bool hasValue = false;
+    IndexPath index = {};
+    Str value = {};
+};
+
+struct SelectState {
+    SearchableListState state;
+    InputState queryInput;
+    InputState* activeQuery = nullptr;
+    bool searchable = false;
+    IconName icon = IconName::None;
+    Str titlePrefix = {};
+    bool focusRingEnabled = true;
+    EntityId self = {};
+
+    static Entity<SelectState> New(App* app);
+    SearchableListState* List() { return &state; }
+    const SearchableListState* List() const { return &state; }
+    void Searchable(bool value);
+    void SetItems(const SearchableItem* items, int nItems);
+    void SetSelectedIndex(const IndexPath* selected, Ctx* cx);
+    void SetSelectedIndex(int flatIndex, Ctx* cx);
+    void SetSelectedValue(Str value, Ctx* cx);
+    bool SelectedIndex(IndexPath* out) const;
+    Str SelectedValue() const;
+    void Focus(Window* win) const;
+    void SetOpen(bool open, Ctx* cx);
+    void ToggleMenu(Ctx* cx);
+    void Clean(Ctx* cx);
+
+    static void OnListChange(SelectState* self, Ctx* cx,
+                             const ListEvent* event);
+    static void OnMouseDownOut(SelectState* self, Ctx* cx,
+                               const MouseDownEvent* event);
+};
+
+Entity<SearchableListState> SelectListEntity(Entity<SelectState> state);
+
 struct Select {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
     Entity<SearchableListState> state = {};
+    Entity<SelectState> selectState = {};
 
     const SearchableItem* items = nullptr;
     int nItems = 0;
@@ -10601,6 +14370,7 @@ struct Select {
     Str placeholder = {};
     Str titlePrefix = {};
     Str empty = {};
+    El* emptyEl = nullptr;
     float width = kFill;
     float menuWidth = 0;
     float menuMaxH = 0;
@@ -10619,15 +14389,23 @@ struct Select {
     El* trigger = nullptr;
 
     El* footer = nullptr;
+    SearchableListDelegate delegate = {};
+    bool hasDelegate = false;
     Listener onToggle;
     Listener onClear;
+    Listener onMouseDownOut;
+    Bounds* triggerBoundsOut = nullptr;
+    Style triggerStyle = {};
+    uint32_t triggerStyleSet = 0;
 
     static Select* New(Ctx* cx, Str id, Entity<SearchableListState> state);
+    static Select* New(Ctx* cx, Str id, Entity<SelectState> state);
     Select* Items(const SearchableItem* items, int n);
     Select* Sections(const Str* titles, int n);
     Select* Placeholder(Str s);
     Select* TitlePrefix(Str s);
     Select* Empty(Str s);
+    Select* Empty(El* element);
     Select* W(float v);
     Select* MenuWidth(float v);
     Select* MenuMaxH(float v);
@@ -10642,10 +14420,14 @@ struct Select {
     Select* Searchable(InputState* query, Listener onFocus);
     Select* Trigger(El* e);
     Select* Footer(El* e);
+    Select* Delegate(const SearchableListDelegate& value);
 
     Select* Multiple(bool v = true);
     Select* OnToggle(Listener fn);
     Select* OnClear(Listener fn);
+    Select* OnMouseDownOut(Listener fn);
+    Select* TriggerBoundsOut(Bounds* bounds);
+    Select* TriggerRefine(const Style& style, uint32_t fields);
     El* IntoEl();
 };
 
@@ -10653,9 +14435,11 @@ Str SelectTriggerTitle(const SearchableListState* s, Str placeholder,
                        Str titlePrefix, Arena* a);
 
 void SelectToggleOpen(SearchableListState* s, Ctx* cx);
+void SelectToggleOpen(SelectState* s, Ctx* cx);
 
 void SelectBindKeys(Ctx* cx, El* root, Entity<SearchableListState> state);
 void SelectClear(SearchableListState* s, Ctx* cx);
+void SelectClear(SelectState* s, Ctx* cx);
 
 }
 }
@@ -10666,11 +14450,91 @@ namespace gpui {
 
 namespace component {
 
+using ComboboxChange = SearchableListChange;
+
+enum class ComboboxEventKind : uint8_t {
+    Change,
+    Confirm
+};
+
+struct ComboboxEvent {
+    ComboboxEventKind kind = ComboboxEventKind::Change;
+    const Str* values = nullptr;
+    int nValues = 0;
+};
+
+struct ComboboxTriggerContext {
+    const SearchableListState* state = nullptr;
+    Str placeholder = {};
+    bool hasPlaceholder = false;
+    bool open = false;
+    bool disabled = false;
+    UiSize size = UiSize::Medium;
+
+    int SelectionCount() const;
+    int SelectionIndex(int at) const;
+    const SearchableListItem* SelectionItem(int at) const;
+    Str Placeholder() const;
+    bool IsOpen() const { return open; }
+    bool IsDisabled() const { return disabled; }
+    UiSize Size() const { return size; }
+};
+
+struct ComboboxState {
+    SearchableListState state;
+    InputState queryInput;
+    Vec<int> selectionSnapshot;
+    bool multiple = false;
+    bool searchable = false;
+    IconName triggerIcon = IconName::None;
+    IconName checkIcon = IconName::Check;
+    bool focusRingEnabled = true;
+    Bounds bounds = {};
+    EntityId self = {};
+
+    static Entity<ComboboxState> New(App* app);
+    SearchableListState* List() { return &state; }
+    const SearchableListState* List() const { return &state; }
+    ComboboxState* Multiple(bool value);
+    ComboboxState* Searchable(bool value);
+    void SetItems(const SearchableListItem* items, int nItems);
+    void SetDelegate(const SearchableListDelegate& delegate);
+    void SelectedValues(Vec<Str>* out) const;
+    Str SelectedValue() const;
+    const Vec<int>& Selection() const { return state.selected; }
+    void SetSelectedValues(const Str* values, int nValues, Ctx* cx);
+    void SetSelectedIndices(const IndexPath* indices, int n, Ctx* cx);
+    bool AddSelectedIndex(IndexPath index, Ctx* cx);
+    bool RemoveSelectedIndex(IndexPath index, Ctx* cx);
+    void ClearSelection(Ctx* cx);
+    void Focus(Window* win) const;
+    const FocusHandle* FocusHandleNow() const;
+    Str Query() const { return InputValue(&queryInput); }
+    void SetQuery(Str query, Ctx* cx);
+    void SetOpen(bool open, Ctx* cx);
+    void SyncSnapshot();
+    void Emit(Ctx* cx, ComboboxEventKind kind);
+
+    static void OnListChange(ComboboxState* self, Ctx* cx,
+                             const ListEvent* event);
+    static void OnToggle(ComboboxState* self, Ctx* cx,
+                         const ClickEvent* event);
+    static void OnClear(ComboboxState* self, Ctx* cx,
+                        const ClickEvent* event);
+    static void OnMouseDownOut(ComboboxState* self, Ctx* cx,
+                               const MouseDownEvent* event);
+
+    ~ComboboxState() { selectionSnapshot.Reset(); }
+};
+
+Entity<SearchableListState> ComboboxListEntity(Entity<ComboboxState> state);
+
 struct Combobox {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
     Entity<SearchableListState> state = {};
+    Entity<ComboboxState> comboboxState = {};
     const SearchableItem* items = nullptr;
     int nItems = 0;
     const Str* sections = nullptr;
@@ -10683,20 +14547,35 @@ struct Combobox {
 
     IconName checkIcon = IconName::Check;
     float width = 280;
+    float menuWidth = 0;
     float menuMaxH = 0;
+    UiSize size = UiSize::Medium;
     bool disabled = false;
     bool cleanable = false;
+    bool appearance = true;
     bool focusRing = true;
     InputState* query = nullptr;
     Listener onQueryFocus = {};
 
     El* trigger = nullptr;
     El* footer = nullptr;
+    void* triggerData = nullptr;
+    void* footerData = nullptr;
+    void* emptyData = nullptr;
+    El* (*renderTrigger)(Ctx* cx, void* data,
+                         const ComboboxTriggerContext* trigger) = nullptr;
+    El* (*renderFooter)(Ctx* cx, void* data) = nullptr;
+    El* (*renderEmpty)(Ctx* cx, void* data) = nullptr;
+    SearchableListDelegate delegate = {};
+    bool hasDelegate = false;
+    Style style = {};
+    uint32_t styleSet = 0;
     Listener onToggle;
     Listener onClear;
 
     static Combobox* New(Ctx* cx, Str id, Entity<SearchableListState> state,
                          InputState* query);
+    static Combobox* New(Ctx* cx, Str id, Entity<ComboboxState> state);
     Combobox* Items(const SearchableItem* items, int n);
     Combobox* Sections(const Str* titles, int n);
     Combobox* Placeholder(Str s);
@@ -10705,14 +14584,25 @@ struct Combobox {
     Combobox* Icon(IconName n);
     Combobox* CheckIcon(IconName n);
     Combobox* W(float v);
+    Combobox* MenuWidth(float v);
     Combobox* MenuMaxH(float v);
+    Combobox* WithSize(UiSize value);
     Combobox* Disabled(bool v);
     Combobox* Cleanable(bool v = true);
+    Combobox* Appearance(bool v);
 
     Combobox* FocusRing(bool v);
     Combobox* Multiple(bool v = true);
     Combobox* Trigger(El* e);
+    Combobox* RenderTrigger(
+        void* data,
+        El* (*fn)(Ctx* cx, void* data,
+                  const ComboboxTriggerContext* trigger));
     Combobox* Footer(El* e);
+    Combobox* RenderFooter(void* data, El* (*fn)(Ctx* cx, void* data));
+    Combobox* RenderEmpty(void* data, El* (*fn)(Ctx* cx, void* data));
+    Combobox* Delegate(const SearchableListDelegate& value);
+    Combobox* Refine(const Style& value, uint32_t fields);
 
     Combobox* MaxSelected(int n);
     Combobox* OnQueryFocus(Listener fn);
@@ -10961,24 +14851,297 @@ struct Command {
 }
 }
 
+#line 1 "src/ui/component_traits.h"
+
+#line 1 "src/ui/time.h"
+
+namespace gpui {
+
+namespace component {
+
+struct Calendar {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+    int selectedYear = 0;
+    int selectedMonth = 0;
+    LocalDate rangeEnd = {};
+    UiSize size = UiSize::Medium;
+    int numberOfMonths = 1;
+    CalendarView view = CalendarView::Day;
+    int yearMin = 0;
+    int yearMax = 0;
+    int yearPageStart = 0;
+    DateMatcher disabledMatcher = {};
+    Entity<CalendarState> state = {};
+    int firstDayOfWeek = 0;
+    Style style = {};
+    uint32_t styleSet = 0;
+
+    bool bare = false;
+    Listener onDay;
+    Listener onDate;
+    Listener onPrev;
+    Listener onNext;
+    Listener onMonthToggle;
+    Listener onYearToggle;
+    Listener onMonth;
+    Listener onYear;
+
+    static Calendar* New(Ctx* cx);
+
+    static Calendar* New(Ctx* cx, Entity<CalendarState> state);
+    Calendar* Year(int y);
+    Calendar* Month(int m);
+    Calendar* Day(int d);
+    Calendar* Selection(int y, int m, int d);
+    Calendar* RangeEnd(int y, int m, int d);
+    Calendar* WithSize(UiSize s);
+    Calendar* NumberOfMonths(int count);
+    Calendar* FirstDayOfWeek(int weekday);
+    Calendar* View(CalendarView value);
+    Calendar* YearRange(int minYear, int maxYear, int pageStart);
+    Calendar* DisabledMatcher(DateMatcher matcher);
+    Calendar* Bare();
+    Calendar* Refine(const Style& value, uint32_t fields);
+    Calendar* OnDay(Listener fn);
+    Calendar* OnDate(Listener fn);
+    Calendar* OnPrev(Listener fn);
+    Calendar* OnNext(Listener fn);
+    Calendar* OnMonthToggle(Listener fn);
+    Calendar* OnYearToggle(Listener fn);
+    Calendar* OnMonth(Listener fn);
+    Calendar* OnYear(Listener fn);
+    El* IntoEl();
+};
+
+enum class DatePickerEventKind : uint8_t {
+    Change
+};
+
+struct DatePickerEvent {
+    DatePickerEventKind kind = DatePickerEventKind::Change;
+    Date date = {};
+};
+
+enum class DateRangePresetValueKind : uint8_t {
+    Single,
+    Range
+};
+
+struct DateRangePresetValue {
+    DateRangePresetValueKind kind = DateRangePresetValueKind::Single;
+    LocalDate start = {};
+    LocalDate end = {};
+
+    static DateRangePresetValue Single(LocalDate date);
+    static DateRangePresetValue Range(LocalDate start, LocalDate end);
+    Date IntoDate() const;
+};
+
+struct DateRangePreset {
+    Str label = {};
+    DateRangePresetValue value = {};
+
+    LocalDate start = {};
+    LocalDate end = {};
+    intptr_t arg = 0;
+
+    static DateRangePreset Single(Str label, LocalDate date,
+                                  intptr_t arg = 0);
+    static DateRangePreset Range(Str label, LocalDate start, LocalDate end,
+                                 intptr_t arg = 0);
+};
+
+enum class DateFormat : uint8_t {
+    Slash,
+    Dash
+};
+
+struct DatePickerState {
+    EntityId self = {};
+    FocusHandle focus = {};
+    Date date = {};
+    bool open = false;
+    Entity<CalendarState> calendar = {};
+
+    Str dateFormat = {};
+    int numberOfMonths = 1;
+    Matcher disabledMatcher = {};
+    Subscription calendarSubscription = {};
+    int firstDayOfWeek = 0;
+    Bounds bounds = {};
+
+    ~DatePickerState();
+
+    static void OnCalendar(DatePickerState* self, Ctx* cx,
+                           const CalendarEvent* ev);
+    static void OnToggle(DatePickerState* self, Ctx* cx,
+                         const ClickEvent* ev);
+    static void OnOpenChange(DatePickerState* self, Ctx* cx,
+                             const ClickEvent* ev, intptr_t open);
+    static void OnDismiss(DatePickerState* self, Ctx* cx,
+                          const MouseUpEvent* ev);
+    static void OnClear(DatePickerState* self, Ctx* cx,
+                        const ClickEvent* ev);
+};
+
+Entity<DatePickerState> DatePickerStateNew(Ctx* cx, bool range = false);
+inline Entity<DatePickerState> DatePickerStateRange(Ctx* cx) {
+    return DatePickerStateNew(cx, true);
+}
+void DatePickerStateSetDate(DatePickerState* state, Date date, Ctx* cx,
+                            bool emit = false);
+void DatePickerStateSetDateFormat(DatePickerState* state, Str format,
+                                  Ctx* cx = nullptr);
+void DatePickerStateSetNumberOfMonths(DatePickerState* state, int count,
+                                      Ctx* cx = nullptr);
+void DatePickerStateSetFirstDayOfWeek(DatePickerState* state, int weekday,
+                                      Ctx* cx = nullptr);
+void DatePickerStateSetDisabledMatcher(DatePickerState* state,
+                                       Matcher matcher, Ctx* cx = nullptr);
+void DatePickerStateSetYearRange(DatePickerState* state, int minYear,
+                                 int maxYear, Ctx* cx = nullptr);
+void DatePickerStateSelectPreset(DatePickerState* state,
+                                 const DateRangePreset& preset, Ctx* cx,
+                                 bool emit = true);
+
+Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date);
+Str DatePickerFormatValue(Arena* a, Str pattern, Date date);
+
+struct DatePicker {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    Str id = {};
+    int year = 2026;
+    int month = 1;
+    int day = 1;
+    int viewYear = 0;
+    int viewMonth = 0;
+
+    int year2 = 0;
+    int month2 = 0;
+    int day2 = 0;
+    Str placeholder = {};
+    DateFormat format = DateFormat::Slash;
+    UiSize size = UiSize::Medium;
+    float width = kFill;
+
+    bool cleanable = false;
+    bool appearance = true;
+    bool focusRing = true;
+    bool disabled = false;
+    bool range = false;
+    bool open = false;
+    int numberOfMonths = 1;
+    CalendarView calendarView = CalendarView::Day;
+    int yearMin = 0;
+    int yearMax = 0;
+    int yearPageStart = 0;
+    DateMatcher disabledMatcher = {};
+    const DateRangePreset* presets = nullptr;
+    int presetsCount = 0;
+    Listener onToggle;
+    Listener onDay;
+    Listener onDate;
+    Listener onClear;
+    Listener onPrev;
+    Listener onNext;
+    Listener onMonthToggle;
+    Listener onYearToggle;
+    Listener onMonth;
+    Listener onYear;
+    Listener onPreset;
+    Entity<DatePickerState> state = {};
+    Style style = {};
+    uint32_t styleSet = 0;
+
+    static DatePicker* New(Ctx* cx);
+    static DatePicker* New(Ctx* cx, Entity<DatePickerState> state);
+    DatePicker* Id(Str value);
+    DatePicker* Year(int y);
+    DatePicker* Month(int m);
+    DatePicker* Day(int d);
+    DatePicker* View(int y, int m);
+    DatePicker* RangeEnd(int y, int m, int d);
+    DatePicker* Placeholder(Str s);
+    DatePicker* Format(DateFormat f);
+    DatePicker* WithSize(UiSize s);
+    DatePicker* W(float v);
+    DatePicker* Cleanable(bool v = true);
+    DatePicker* Appearance(bool v);
+
+    DatePicker* FocusRing(bool v);
+    DatePicker* Refine(const Style& value, uint32_t fields);
+    DatePicker* Disabled(bool v = true);
+    DatePicker* Range(bool v = true);
+    DatePicker* NumberOfMonths(int count);
+    DatePicker* CalendarMode(CalendarView value);
+    DatePicker* YearRange(int minYear, int maxYear, int pageStart);
+    DatePicker* DisabledMatcher(DateMatcher matcher);
+    DatePicker* Presets(const DateRangePreset* values, int count,
+                        Listener onSelect = {});
+    DatePicker* Open(bool v);
+    DatePicker* OnToggle(Listener fn);
+    DatePicker* OnDay(Listener fn);
+    DatePicker* OnDate(Listener fn);
+    DatePicker* OnClear(Listener fn);
+    DatePicker* OnPrev(Listener fn);
+    DatePicker* OnNext(Listener fn);
+    DatePicker* OnMonthToggle(Listener fn);
+    DatePicker* OnYearToggle(Listener fn);
+    DatePicker* OnMonth(Listener fn);
+    DatePicker* OnYear(Listener fn);
+    El* IntoEl();
+};
+
+}
+}
+
 #line 1 "src/ui/description_list.h"
 
 namespace gpui {
 
 namespace component {
 
+enum class DescriptionTextKind : uint8_t {
+    String,
+    Text,
+    AnyElement
+};
+
+struct DescriptionText {
+    DescriptionTextKind kind = DescriptionTextKind::String;
+    Str string = {};
+    El* element = nullptr;
+
+    static DescriptionText From(Str text);
+    static DescriptionText Text(El* text);
+    static DescriptionText AnyElement(El* element);
+    El* IntoEl(Ctx* cx) const;
+};
+
 struct DescriptionItem {
-    Str label = {};
-    El* value = nullptr;
+    DescriptionText label = {};
+    DescriptionText value = {};
     int span = 1;
     bool separator = false;
+
+    static DescriptionItem New(DescriptionText label);
+    static DescriptionItem Separator();
+    DescriptionItem& Value(DescriptionText value);
+    DescriptionItem& Span(int spanValue);
 };
+
+int DescriptionGroupRows(const DescriptionItem* items, int n, int columns,
+                         int* rowCounts = nullptr, int capacity = 0);
 
 struct DescriptionList {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    DescriptionItem items[16] = {};
-    int n = 0;
+    ArenaVec<DescriptionItem> items;
     int columns = 3;
     float labelWidth = 120;
     bool bordered = true;
@@ -10987,13 +15150,19 @@ struct DescriptionList {
     UiSize size = UiSize::Medium;
 
     static DescriptionList* New(Ctx* cx);
+    static DescriptionList* Horizontal(Ctx* cx);
+    static DescriptionList* Vertical(Ctx* cx);
 
     DescriptionList* Item(Str label, Str value, int span = 1);
+    DescriptionList* Item(DescriptionText label, DescriptionText value,
+                          int span = 1);
     DescriptionList* ItemEl(Str label, El* value, int span = 1);
+    DescriptionList* Child(const DescriptionItem& item);
     DescriptionList* Separator();
     DescriptionList* Columns(int n);
     DescriptionList* LabelWidth(float w);
     DescriptionList* Bordered(bool v);
+    DescriptionList* Layout(Axis axis);
     DescriptionList* Vertical(bool v = true);
     DescriptionList* WithSize(UiSize s);
     El* IntoEl();
@@ -11008,6 +15177,89 @@ namespace gpui {
 
 namespace component {
 
+constexpr float ANIMATION_DURATION = 250.f;
+
+struct DialogButtonProps {
+    Str okText = {};
+    ButtonVariant okVariant = ButtonVariant::Primary;
+    Str cancelText = {};
+    ButtonVariant cancelVariant = ButtonVariant::Default;
+    bool showCancel = false;
+    Listener onOk = {};
+    Listener onCancel = {};
+    Listener onClose = {};
+
+    DialogButtonProps* OkText(Str value);
+    DialogButtonProps* OkVariant(ButtonVariant value);
+    DialogButtonProps* CancelText(Str value);
+    DialogButtonProps* CancelVariant(ButtonVariant value);
+    DialogButtonProps* ShowCancel(bool value = true);
+    DialogButtonProps* OnOk(Listener value);
+    DialogButtonProps* OnCancel(Listener value);
+    DialogButtonProps* OnClose(Listener value);
+    El* RenderOk(Ctx* cx, Str id, bool outline = false) const;
+    El* RenderCancel(Ctx* cx, Str id) const;
+};
+
+struct DialogContent {
+    El* root = nullptr;
+    static DialogContent* New(Ctx* cx);
+    DialogContent* Child(El* child);
+    El* IntoEl();
+};
+
+struct DialogHeader {
+    El* root = nullptr;
+    static DialogHeader* New(Ctx* cx);
+    DialogHeader* Child(El* child);
+    El* IntoEl();
+};
+
+struct DialogTitle {
+    El* root = nullptr;
+    static DialogTitle* New(Ctx* cx);
+    DialogTitle* Child(El* child);
+    El* IntoEl();
+};
+
+struct DialogDescription {
+    El* root = nullptr;
+    static DialogDescription* New(Ctx* cx);
+    DialogDescription* Child(El* child);
+    El* IntoEl();
+};
+
+struct DialogFooterButton {
+    bool cancel = false;
+    bool action = false;
+    bool IsCancel() const { return cancel; }
+    bool IsAction() const { return action; }
+};
+
+struct DialogFooter {
+    El* root = nullptr;
+    static DialogFooter* New(Ctx* cx);
+    DialogFooter* Child(El* child);
+    El* IntoEl();
+};
+
+struct DialogClose {
+    El* root = nullptr;
+    El* slot = nullptr;
+    DialogFooterButton semantic = {true, false};
+    static DialogClose* New(Ctx* cx);
+    DialogClose* Child(El* child);
+    El* IntoEl();
+};
+
+struct DialogAction {
+    El* root = nullptr;
+    DialogFooterButton semantic = {false, true};
+    static DialogAction* New(Ctx* cx);
+    DialogAction* Child(El* child);
+    El* IntoEl();
+};
+
 struct Dialog {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
@@ -11017,10 +15269,7 @@ struct Dialog {
     El* body = nullptr;
 
     El* surface = nullptr;
-
-    Listener onClose;
-    Listener onCancel;
-    Listener onOk;
+    DialogButtonProps buttonProps = {};
 
     float width = 448;
     float height = 0;
@@ -11029,6 +15278,8 @@ struct Dialog {
     bool overlayClosable = true;
 
     bool keyboard = true;
+
+    bool alertHost = false;
 
     int layerIx = 0;
     float radius = 0;
@@ -11043,12 +15294,7 @@ struct Dialog {
     float iconSize = 16;
     bool headerCentered = false;
 
-    Str okText = {};
-    Str cancelText = {};
-    ButtonVariant okVariant = ButtonVariant::Primary;
     bool okOutline = false;
-
-    bool showCancel = false;
 
     bool closeButton = false;
 
@@ -11078,8 +15324,10 @@ struct Dialog {
     Dialog* HeaderCentered(bool v = true);
     Dialog* OkText(Str s);
     Dialog* CancelText(Str s);
+    Dialog* CancelVariant(ButtonVariant v);
     Dialog* OkVariant(ButtonVariant v, bool outline = false);
     Dialog* ShowCancel(bool v);
+    Dialog* ButtonProps(const DialogButtonProps& value);
 
     Dialog* Confirm();
     Dialog* CloseButton(bool v = true);
@@ -11098,6 +15346,44 @@ struct Dialog {
     Str LayerId(Str base) const;
     El* Header();
     El* Actions();
+};
+
+struct AlertDialog {
+    Dialog* base = nullptr;
+
+    static AlertDialog* New(Ctx* cx);
+    AlertDialog* Title(Str value);
+    AlertDialog* Description(Str value);
+    AlertDialog* Open(bool value);
+    AlertDialog* Body(El* value);
+    AlertDialog* Surface(El* value);
+    AlertDialog* W(float value);
+    AlertDialog* H(float value);
+    AlertDialog* Overlay(bool value);
+    AlertDialog* Keyboard(bool value);
+    AlertDialog* Layer(int value);
+    AlertDialog* Radius(float value);
+    AlertDialog* Bg(Background value);
+    AlertDialog* Fg(Rgba value);
+    AlertDialog* Icon(IconName value, Rgba color, float size = 16);
+    AlertDialog* HeaderCentered(bool value = true);
+    AlertDialog* ButtonProps(const DialogButtonProps& value);
+    AlertDialog* OkText(Str value);
+    AlertDialog* CancelText(Str value);
+    AlertDialog* CancelVariant(ButtonVariant value);
+    AlertDialog* OkVariant(ButtonVariant value, bool outline = false);
+    AlertDialog* ShowCancel(bool value);
+    AlertDialog* Confirm();
+    AlertDialog* CloseButton(bool value = true);
+    AlertDialog* Footer(El* value);
+    AlertDialog* FooterVertical(bool value = true);
+    AlertDialog* FooterStretch(bool value = true);
+    AlertDialog* FooterMuted(bool value = true);
+    AlertDialog* FooterDivider(bool value = true);
+    AlertDialog* OnClose(Listener value);
+    AlertDialog* OnCancel(Listener value);
+    AlertDialog* OnOk(Listener value);
+    El* IntoEl(WinSize size);
 };
 
 }
@@ -11168,6 +15454,24 @@ Str StyleToJson(Arena* a, const Style& style);
 bool StyleFromJson(Arena* a, Str text, Style* style, uint32_t* fields,
                    Str* error);
 
+struct DivInspector {
+    int inspectorId = 0;
+    Style initialStyle = {};
+    Str applied = {};
+    Str error = {};
+    InputState jsonInput;
+
+    ~DivInspector();
+
+    void UpdateInspectedElement(const InspectorPick& pick, Ctx* cx);
+    bool EditJson(Str code, Ctx* cx);
+    void Reset(Ctx* cx);
+    El* Render(const InspectorPick& pick, Ctx* cx);
+
+    static void OnReset(DivInspector* self, Ctx* cx, const ClickEvent*);
+    static void OnFocus(DivInspector* self, Ctx* cx, const ClickEvent*);
+};
+
 struct Inspector {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
@@ -11194,29 +15498,57 @@ enum class FieldAlign : uint8_t {
     End
 };
 
-struct FormField {
-    Str label = {};
+enum class FieldBuilderKind : uint8_t {
+    None,
+    String,
+    Element
+};
 
-    El* labelEl = nullptr;
+struct FieldBuilder {
+    FieldBuilderKind kind = FieldBuilderKind::None;
+    Str string = {};
+    El* element = nullptr;
+
+    static FieldBuilder String(Str value);
+    static FieldBuilder Element(El* value);
+    bool IsSet() const { return kind != FieldBuilderKind::None; }
+};
+
+struct Field {
+    FieldBuilder label = {};
     El* control = nullptr;
 
-    Str description = {};
-    El* descriptionEl = nullptr;
+    FieldBuilder description = {};
     bool required = false;
-
-    bool spanAll = false;
+    int colSpan = 1;
+    int colStart = -1;
+    int colEnd = -1;
 
     bool visible = true;
 
     bool labelIndent = true;
     FieldAlign align = FieldAlign::Center;
+
+    static Field New(El* control = nullptr);
+    Field& Label(Str value);
+    Field& Label(El* value);
+    Field& Description(Str value);
+    Field& Description(El* value);
+    Field& Required(bool value = true);
+    Field& Visible(bool value);
+    Field& LabelIndent(bool value);
+    Field& Align(FieldAlign value);
+    Field& ColSpan(int value);
+    Field& ColStart(int value);
+    Field& ColEnd(int value);
 };
+
+using FormField = Field;
 
 struct Form {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    FormField fields[12] = {};
-    int n = 0;
+    ArenaVec<FormField> fields;
     bool horizontal = false;
     int columns = 1;
     float labelWidth = 0;
@@ -11226,6 +15558,7 @@ struct Form {
     float labelTextSize = 0;
 
     static Form* New(Ctx* cx);
+    Form* Child(const component::Field& field);
 
     Form* Field(Str label, El* control);
 
@@ -11245,6 +15578,33 @@ struct Form {
     El* IntoEl();
 };
 
+Form* v_form(Ctx* cx);
+Form* h_form(Ctx* cx);
+component::Field field(El* control = nullptr);
+
+}
+}
+
+#line 1 "src/ui/global_state.h"
+
+namespace gpui {
+namespace component {
+
+struct UiGlobalState {
+    Vec<EntityId> textViewStateStack;
+    uint64_t selectionDocumentOrder = 1;
+
+    ~UiGlobalState() { textViewStateStack.Reset(); }
+};
+
+UiGlobalState* UiGlobalStateOf(App* app);
+void UiGlobalStateInit(App* app);
+void UiSelectionFrameBegin(App* app);
+uint64_t UiSelectionNextDocumentOrder(App* app);
+void UiTextViewStatePush(App* app, EntityId state);
+void UiTextViewStatePop(App* app);
+EntityId UiTextViewStateCurrent(const App* app);
+
 }
 }
 
@@ -11254,16 +15614,32 @@ namespace gpui {
 
 namespace component {
 
+enum class GroupBoxVariant : uint8_t {
+    Normal,
+    Fill,
+    Outline
+};
+
+GroupBoxVariant GroupBoxVariantFromStr(Str text);
+Str GroupBoxVariantAsStr(GroupBoxVariant variant);
+
 struct GroupBox {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
+    Str id = StrL("group-box");
     Str title = {};
 
     El* titleEl = nullptr;
-    El* child = nullptr;
+    bool hasTitle = false;
+    ArenaVec<El*> children;
+    GroupBoxVariant variant = GroupBoxVariant::Normal;
 
-    bool outline = false;
-    bool filled = false;
+    Style rootStyle = {};
+    uint32_t rootStyleSet = 0;
+    Style titleStyle = {};
+    uint32_t titleStyleSet = 0;
+    Style contentStyle = {};
+    uint32_t contentStyleSet = 0;
 
     bool titleSemibold = false;
     float titlePadX = 0;
@@ -11273,11 +15649,20 @@ struct GroupBox {
     float contentPad = -1;
     float contentBorder = -1;
 
+    static GroupBox* New(Ctx* cx);
     static GroupBox* New(Ctx* cx, Str title);
+    GroupBox* Id(Str value);
     GroupBox* Title(El* e);
     GroupBox* Child(El* e);
+    GroupBox* WithVariant(GroupBoxVariant value);
+    GroupBox* Normal();
+    GroupBox* Fill();
     GroupBox* Outline();
+
     GroupBox* Filled(bool v);
+    GroupBox* Refine(const Style& style, uint32_t fields);
+    GroupBox* TitleStyle(const Style& style, uint32_t fields);
+    GroupBox* ContentStyle(const Style& style, uint32_t fields);
     GroupBox* TitleSemibold(bool v = true);
     GroupBox* TitlePadX(float px);
     GroupBox* ContentBg(Background c);
@@ -11391,6 +15776,8 @@ struct Highlighter {
 }
 }
 
+#line 1 "src/ui/history.h"
+
 #line 1 "src/ui/hover_card.h"
 
 namespace gpui {
@@ -11463,22 +15850,40 @@ namespace gpui {
 
 namespace component {
 
+struct IconNamed {
+    Str path = {};
+
+    static IconNamed From(IconName name);
+};
+
 struct Icon {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     IconName name = IconName::None;
-    float size = 16;
+    Str path = {};
+    float size = 0;
+    float rotation = 0;
     Rgba color = {};
+    bool hasSize = false;
     bool hasColor = false;
 
     static Icon* New(Ctx* cx, IconName name);
+    static Icon* New(Ctx* cx, IconNamed named);
+    static Icon* Empty(Ctx* cx);
+    Icon* Path(Str assetPath);
     Icon* Size(float v);
+    Icon* Size(UiSize v);
     Icon* Color(Rgba c);
+
+    Icon* Transform(float turns);
+    Icon* Rotate(float turns);
     El* IntoEl();
 };
 
 }
 }
+
+#line 1 "src/ui/index_path.h"
 
 #line 1 "src/ui/input.h"
 
@@ -11490,6 +15895,54 @@ enum class InputAlign : uint8_t {
     Left,
     Center,
     Right
+};
+
+enum class InputContentType : uint8_t {
+    Name,
+    NamePrefix,
+    GivenName,
+    MiddleName,
+    FamilyName,
+    NameSuffix,
+    Nickname,
+    JobTitle,
+    OrganizationName,
+    Location,
+    FullStreetAddress,
+    StreetAddressLine1,
+    StreetAddressLine2,
+    AddressCity,
+    AddressState,
+    AddressCityAndState,
+    Sublocality,
+    CountryName,
+    PostalCode,
+    TelephoneNumber,
+    EmailAddress,
+    Url,
+    CreditCardNumber,
+    CreditCardName,
+    CreditCardGivenName,
+    CreditCardMiddleName,
+    CreditCardFamilyName,
+    CreditCardSecurityCode,
+    CreditCardExpiration,
+    CreditCardExpirationMonth,
+    CreditCardExpirationYear,
+    CreditCardType,
+    Username,
+    Password,
+    NewPassword,
+    OneTimeCode,
+    ShipmentTrackingNumber,
+    FlightNumber,
+    DateTime,
+    Birthdate,
+    BirthdateDay,
+    BirthdateMonth,
+    BirthdateYear,
+    CellularEid,
+    CellularImei
 };
 
 struct Input {
@@ -11510,6 +15963,13 @@ struct Input {
     bool maskToggle = false;
     bool appearance = true;
     bool focusRing = true;
+    bool readonly = false;
+    InputContentType contentType = InputContentType::Name;
+    bool hasContentType = false;
+    AccessibilityRole accessibilityRole = AccessibilityRole::None;
+    bool hasAccessibilityRole = false;
+    Str accessibilityId = {};
+    Str ariaLabel = {};
     Rgba textColor = {};
     bool hasTextColor = false;
     Listener onChange;
@@ -11522,6 +15982,12 @@ struct Input {
     Input* WithSize(UiSize s);
     Input* Align(InputAlign v);
     Input* Disabled(bool v);
+    Input* Readonly(bool v = true);
+    Input* ContentType(InputContentType value);
+
+    Input* Role(AccessibilityRole role);
+    Input* AccessibilityId(Str id);
+    Input* AriaLabel(Str label);
     Input* Cleanable(bool v = true);
     Input* Masked(bool v);
     Input* MaskToggle(bool v = true);
@@ -11561,6 +16027,9 @@ struct Textarea {
 
     float height = 0;
     bool softWrap = true;
+    AccessibilityRole accessibilityRole =
+        AccessibilityRole::MultilineTextInput;
+    Str ariaLabel = {};
     Listener onFocus;
 
     static Textarea* New(Ctx* cx, Str id, InputState* state);
@@ -11568,6 +16037,8 @@ struct Textarea {
     Textarea* Rows(int n);
     Textarea* H(float px);
     Textarea* SoftWrap(bool v);
+    Textarea* Role(AccessibilityRole role);
+    Textarea* AriaLabel(Str label);
     Textarea* OnFocus(Listener fn);
     El* IntoEl();
 };
@@ -11587,6 +16058,13 @@ struct NumberInput {
     bool hasBg = false;
     Rgba textColor = {};
     bool hasTextColor = false;
+    NumberStep numberStep = {};
+    bool hasNumberStep = true;
+    bool hasMin = false;
+    double min = 0;
+    bool hasMax = false;
+    double max = 0;
+    Listener onStep;
     Listener onInc;
     Listener onDec;
     Listener onFocus;
@@ -11603,6 +16081,14 @@ struct NumberInput {
     NumberInput* Suffix(El* el);
     NumberInput* Bg(Background c);
     NumberInput* TextColor(Rgba c);
+
+    NumberInput* Step(double value);
+    NumberInput* StepBy(NumberStepByValueFn fn, intptr_t arg = 0);
+    NumberInput* NoStep();
+    NumberInput* Min(double value);
+    NumberInput* Max(double value);
+
+    NumberInput* OnStep(Listener fn);
     NumberInput* OnFocus(Listener fn);
     NumberInput* OnInc(Listener fn);
     NumberInput* OnDec(Listener fn);
@@ -11651,30 +16137,51 @@ namespace gpui {
 
 namespace component {
 
+enum class HighlightsMatchKind : uint8_t {
+    Prefix,
+    Full
+};
+
+struct HighlightsMatch {
+    HighlightsMatchKind kind = HighlightsMatchKind::Full;
+    Str text = {};
+
+    static HighlightsMatch Prefix(Str text);
+    static HighlightsMatch Full(Str text);
+    static HighlightsMatch From(Str text);
+    Str AsStr() const;
+    bool IsPrefix() const;
+};
+
 struct Label {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str text = {};
     Str secondary = {};
+    bool hasSecondary = false;
     bool masked = false;
     bool semibold = false;
-    float font = 14;
-
-    Str highlights = {};
-    bool prefixMatch = false;
+    float font = 0;
+    HighlightsMatch highlight = {};
+    bool hasHighlight = false;
 
     int align = 0;
-    float lineHeight = 0;
+    float lineHeight = 1.25f;
 
     static Label* New(Ctx* cx, Str text);
     Label* Secondary(Str s);
     Label* Masked(bool v);
     Label* Semibold();
     Label* Font(float px);
+    Label* Highlights(HighlightsMatch matched);
+
     Label* Highlights(Str matched, bool prefix = false);
     Label* TextCenter();
     Label* TextRight();
     Label* LineHeight(float mult);
+    Str FullText() const;
+    int HighlightRanges(int totalLength, Selection* out,
+                        int capacity) const;
     El* IntoEl();
 };
 
@@ -11802,17 +16309,23 @@ void PopupMenuConfirm(PopupMenuState* s, Ctx* cx, int ix);
 
 }
 
+#line 1 "src/ui/popup_menu.h"
+
 #line 1 "src/ui/menu.h"
 
 namespace gpui {
 
 namespace component {
 
-enum class MenuItemKind : uint8_t {
+enum class PopupMenuItem : uint8_t {
     Item,
     Separator,
-    Label
+    Label,
+    ElementItem,
+    Submenu
 };
+
+using MenuItemKind = PopupMenuItem;
 
 struct PopupMenu;
 
@@ -11900,10 +16413,26 @@ struct DropdownMenu {
     El* IntoEl();
 };
 
+struct DropdownMenuPopover : DropdownMenu {
+    static DropdownMenuPopover* New(Ctx* cx, Str id);
+    DropdownMenuPopover* Anchor(gpui::Anchor value);
+};
+
+struct ContextMenuState {
+    Entity<PopupMenuState> menu = {};
+    bool open = false;
+    Point position = {};
+    FocusHandle previousFocus = {};
+
+    static void OnMouseDown(ContextMenuState* self, Ctx* cx,
+                            const MouseDownEvent* ev);
+};
+
 struct ContextMenu {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
+    Entity<ContextMenuState> state = {};
     El* child = nullptr;
     PopupMenu* menu = nullptr;
 
@@ -11913,14 +16442,28 @@ struct ContextMenu {
     El* IntoEl();
 };
 
+struct ContextMenuExt {
+    static ContextMenu* Wrap(Ctx* cx, Str id, El* child, PopupMenu* menu);
+};
+
 struct AppMenuBarState {
     int selected = -1;
+    int count = 0;
+    FocusHandle focus = {};
+    FocusHandle previousFocus = {};
 
     static void OnMenuClick(AppMenuBarState* self, Ctx* cx,
                             const ClickEvent* ev, intptr_t ix);
 
     static void OnMenuHover(AppMenuBarState* self, Ctx* cx,
                             const HoverEvent* ev, intptr_t ix);
+    static void OnAction(AppMenuBarState* self, Ctx* cx,
+                         const ActionEvent* ev);
+};
+
+struct AppMenuBarItem {
+    Str title = {};
+    PopupMenu* menu = nullptr;
 };
 
 int AppMenuBarNextIndex(int selected, int count);
@@ -11933,14 +16476,20 @@ struct AppMenuBar {
     Ctx* cx = nullptr;
     Str id = {};
     Entity<AppMenuBarState> state = {};
-    Str titles[12] = {};
-    PopupMenu* menus[12] = {};
-    int n = 0;
+    ArenaVec<AppMenuBarItem> items;
 
     static AppMenuBar* New(Ctx* cx, Str id, Entity<AppMenuBarState> state);
     AppMenuBar* Menu(Str title, PopupMenu* menu);
     El* IntoEl();
 };
+
+namespace popup_menu {
+void init();
+}
+namespace app_menu_bar {
+void init();
+}
+Str AppMenuBarContext();
 
 }
 }
@@ -12006,37 +16555,10 @@ namespace gpui {
 
 namespace component {
 
-enum class NotificationKind : uint8_t {
-
-    None,
-    Info,
-    Success,
-    Warning,
-    Error
-};
-
-enum class NotificationAnchor : uint8_t {
-    None,
-    TopLeft,
-    TopCenter,
-    TopRight,
-    LeftCenter,
-    RightCenter,
-    BottomLeft,
-    BottomCenter,
-    BottomRight
-};
-
-enum class NotificationDelivery : uint8_t {
-    InApp,
-    System,
-    InAppAndSystem
-};
+using NotificationKind = NotificationType;
 
 bool NotificationDeliveryIncludesInApp(NotificationDelivery d);
 bool NotificationDeliveryIncludesSystem(NotificationDelivery d);
-
-const float kNotificationMargin = 16;
 
 const float kNotificationWidth = 382;
 
@@ -12044,24 +16566,103 @@ const int kNotificationMaxItems = 10;
 
 const int kNotificationTickMs = 50;
 
-struct NotificationItem {
+using NotificationTypeId = uintptr_t;
+template <typename T>
+inline NotificationTypeId NotificationTypeOf() {
+    static uint8_t tag = 0;
+    return (NotificationTypeId)&tag;
+}
+
+struct Notification {
     int id = 0;
-    NotificationKind kind = NotificationKind::None;
+
+    NotificationTypeId identityType = 0;
+    uint32_t identityKey = 0;
+    bool identityHasKey = false;
+    bool hasType = false;
+    NotificationType type = NotificationType::Info;
     Str title = {};
     Str message = {};
-    El* content = nullptr;
+    bool hasIcon = false;
+    IconName icon = IconName::None;
+    bool hasPlacement = false;
+    Anchor placement = Anchor::TopRight;
+    EntityId action = {};
+    EntityId content = {};
     Listener onClick = {};
+    Listener onClose = {};
 
     bool hasDelivery = false;
     NotificationDelivery delivery = NotificationDelivery::InApp;
+    bool autohide = true;
+    Style style = {};
+    uint32_t styleSet = 0;
+
+    Bounds measured = {};
+    bool ownsText = false;
+
+    static Notification New();
+    static Notification Info(Str message);
+    static Notification Success(Str message);
+    static Notification Warning(Str message);
+    static Notification Error(Str message);
+    Notification& Message(Str value);
+    Notification& Title(Str value);
+    Notification& WithType(NotificationType value);
+    Notification& Icon(IconName value);
+    Notification& Placement(Anchor value);
+    Notification& Delivery(NotificationDelivery value);
+    Notification& System();
+    Notification& InAppAndSystem();
+    Notification& Autohide(bool value = true);
+    Notification& Action(EntityId value);
+    Notification& Content(EntityId value);
+    Notification& OnClick(Listener value);
+    Notification& OnClose(Listener value);
+    Notification& Refine(const Style& value, uint32_t fields);
+
+    template <typename T>
+    Notification& Id() {
+        id = 0;
+        identityType = NotificationTypeOf<T>();
+        identityKey = 0;
+        identityHasKey = false;
+        return *this;
+    }
+    template <typename T>
+    Notification& Id1(uint32_t key) {
+        id = 0;
+        identityType = NotificationTypeOf<T>();
+        identityKey = key;
+        identityHasKey = true;
+        return *this;
+    }
+    template <typename T>
+    Notification& Id1(Str key) {
+        return Id1<T>((uint32_t)HashClickId(key));
+    }
+    template <typename T>
+    Notification& Action(Entity<T> value) {
+        return Action(value.id);
+    }
+    template <typename T>
+    Notification& Content(Entity<T> value) {
+        return Content(value.id);
+    }
 };
 
+using NotificationItem = Notification;
+
+bool NotificationIdentitySame(const Notification& a, const Notification& b);
+
 struct NotificationListState {
-    ToastStackState stack = {};
-    NotificationItem items[kToastStackCap] = {};
-    int n = 0;
+    ToastStackState stack;
+    Vec<Notification> items;
     int nextId = 1;
-    NotificationAnchor placement = NotificationAnchor::TopRight;
+
+    bool useThemeSettings = false;
+    Anchor placement = Anchor::TopRight;
+    Edges margins = Edges::New(16.f, 16.f, 50.f, 16.f);
     float width = kNotificationWidth;
     int maxItems = kNotificationMaxItems;
 
@@ -12070,15 +16671,21 @@ struct NotificationListState {
     double lastTickAt = 0;
 
     NotificationDelivery delivery = NotificationDelivery::InApp;
+    bool stackHovered[8] = {};
+    bool stackFocused[8] = {};
+    FocusHandle stackFocus[8] = {};
 
     EntityId self = {};
+
+    ~NotificationListState();
+    bool IsExpanded() const;
 
     static void OnCloseClick(NotificationListState* self, Ctx* cx,
                              const ClickEvent* ev, intptr_t id);
     static void OnItemClick(NotificationListState* self, Ctx* cx,
                             const ClickEvent* ev, intptr_t id);
     static void OnHover(NotificationListState* self, Ctx* cx,
-                        const HoverEvent* ev);
+                        const HoverEvent* ev, intptr_t anchor);
     static void OnTick(NotificationListState* self, Ctx* cx,
                        const TickEvent* ev);
 
@@ -12086,14 +16693,20 @@ struct NotificationListState {
                                  const ClickEvent* ev, intptr_t id);
 };
 
-int NotificationPush(NotificationListState* s, Ctx* cx, NotificationItem item,
-                     int timeoutMs);
+int NotificationPush(NotificationListState* s, Ctx* cx, Notification item,
+                     int timeoutMs = -1);
 
 void NotificationDismiss(NotificationListState* s, Ctx* cx, int id);
+
+void NotificationDismissByType(NotificationListState* s, Ctx* cx,
+                               NotificationTypeId type);
+void NotificationDismissByTypeKey(NotificationListState* s, Ctx* cx,
+                                  NotificationTypeId type, uint32_t key);
 
 void NotificationClear(NotificationListState* s, Ctx* cx);
 
 bool NotificationAdvance(NotificationListState* s, int deltaMs);
+bool NotificationAdvance(NotificationListState* s, Ctx* cx, int deltaMs);
 
 int NotificationIndexOf(const NotificationListState* s, int id);
 
@@ -12101,6 +16714,9 @@ const int kNotificationSystemMax = 100;
 
 struct NotificationSystemEntry {
     int id = 0;
+    NotificationTypeId identityType = 0;
+    uint32_t identityKey = 0;
+    bool identityHasKey = false;
     EntityId list = {};
     Window* win = nullptr;
     Listener onClick = {};
@@ -12110,44 +16726,21 @@ Str NotificationSystemTag(char* buf, int cap, int id);
 
 bool NotificationTagId(Str tag, int* outId);
 
-void NotificationInitSystem();
+void NotificationInitSystem(App* app);
 
 void NotificationSystemInsert(const NotificationSystemEntry& e);
 
 void NotificationSystemDismiss(int id, Window* win);
+void NotificationSystemDismissByType(NotificationTypeId type, Window* win);
+void NotificationSystemDismissByTypeKey(NotificationTypeId type,
+                                         uint32_t key, Window* win);
 
 void NotificationSystemDismissAll(Window* win);
 const NotificationSystemEntry* NotificationSystemFind(int id, Window* win);
 int NotificationSystemCount();
+int NotificationSystemCount(const App* app);
 
 void NotificationSystemResponse(Str tag);
-
-struct Notification {
-    Arena* a = nullptr;
-    Ctx* cx = nullptr;
-    NotificationKind kind = NotificationKind::None;
-    Str title = {};
-    Str message = {};
-
-    El* action = nullptr;
-
-    El* content = nullptr;
-    NotificationAnchor anchor = NotificationAnchor::None;
-
-    float width = 382;
-    Listener onClose;
-
-    Listener onClick;
-
-    static Notification* New(Ctx* cx, Str title, Str message);
-    Notification* Kind(NotificationKind k);
-    Notification* Action(El* e);
-    Notification* Content(El* e);
-    Notification* Placement(NotificationAnchor p);
-    Notification* OnClose(Listener fn);
-    Notification* OnClick(Listener fn);
-    El* IntoEl();
-};
 
 struct NotificationList {
     Arena* a = nullptr;
@@ -12204,6 +16797,8 @@ struct Pagination {
 #line 1 "src/ui/plot.h"
 
 namespace gpui {
+
+struct Path;
 
 namespace component {
 
@@ -12266,7 +16861,422 @@ Point PlotTooltipPlace(Point cursor, Size within, Size box, float gap);
 const float kPlotAxisGap = 18;
 
 const float kPlotTextSize = 10;
-const float kPlotTextGap = 4;
+const float kPlotTextGap = 2;
+const float kPlotTextHeight = kPlotTextSize + kPlotTextGap;
+
+namespace plot {
+
+using ::gpui::component::ScaleBand;
+using ::gpui::component::ScaleLinear;
+using ::gpui::component::ScaleOrdinal;
+using ::gpui::component::ScalePoint;
+
+using StrokeStyle = ChartStroke;
+
+inline Point OriginPoint(float x, float y, Point origin) {
+    return Point{x + origin.x, y + origin.y};
+}
+
+Path* Polygon(PaintCtx* ctx, const Point* points, int count, Bounds bounds);
+
+enum class PlotTextAlign : uint8_t {
+    Left,
+    Center,
+    Right
+};
+
+struct Text {
+    Str text = {};
+    Point origin = {};
+    Rgba color = {};
+    float fontSize = kPlotTextSize;
+    FontWeight fontWeight = FontWeight::Normal;
+    PlotTextAlign align = PlotTextAlign::Left;
+
+    static Text New(Str text, Point origin, Rgba color);
+    Text* FontSize(float value);
+    Text* Weight(FontWeight value);
+    Text* Align(PlotTextAlign value);
+};
+
+float MeasureTextWidth(PaintCtx* ctx, Str text, float fontSize);
+
+Str TruncateTextToWidth(PaintCtx* ctx, Arena* arena, Str text, float fontSize,
+                        float maxWidth);
+
+struct PlotLabel {
+    Arena* a = nullptr;
+    ArenaVec<Text> items;
+
+    static PlotLabel New(Arena* arena);
+    PlotLabel* Add(const Text& text);
+    PlotLabel* AddMany(const Text* text, int count);
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+enum class AxisLabelSide : uint8_t {
+    End,
+    Start
+};
+
+struct AxisText {
+    Str text = {};
+    float tick = 0;
+    Rgba color = {};
+    float fontSize = kPlotTextSize;
+    PlotTextAlign align = PlotTextAlign::Left;
+
+    static AxisText New(Str text, float tick, Rgba color);
+    AxisText* FontSize(float value);
+    AxisText* Align(PlotTextAlign value);
+};
+
+struct PlotAxis {
+    Arena* a = nullptr;
+    bool hasX = false;
+    float x = 0;
+    PlotLabel xLabel;
+    bool xAxis = false;
+    AxisLabelSide xLabelSide = AxisLabelSide::End;
+    bool hasY = false;
+    float y = 0;
+    PlotLabel yLabel;
+    bool yAxis = false;
+    AxisLabelSide yLabelSide = AxisLabelSide::End;
+    Rgba stroke = {};
+
+    static PlotAxis New(Arena* arena);
+    PlotAxis* X(float value);
+    PlotAxis* ShowXAxis(bool value);
+    PlotAxis* XLabel(const AxisText* labels, int count);
+    PlotAxis* XLabelSide(AxisLabelSide value);
+    PlotAxis* Y(float value);
+    PlotAxis* ShowYAxis(bool value);
+    PlotAxis* YLabel(const AxisText* labels, int count);
+    PlotAxis* YLabelSide(AxisLabelSide value);
+    PlotAxis* Stroke(Rgba value);
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+struct Grid {
+    const float* x = nullptr;
+    int xCount = 0;
+    const float* y = nullptr;
+    int yCount = 0;
+    Rgba stroke = {};
+    const float* dashArray = nullptr;
+    int dashCount = 0;
+
+    static Grid New();
+    Grid* X(const float* values, int count);
+    Grid* Y(const float* values, int count);
+    Grid* Stroke(Rgba value);
+    Grid* DashArray(const float* values, int count);
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+struct PlotItems {
+    const void* data = nullptr;
+    int count = 0;
+    int stride = 0;
+
+    const void* At(int index) const;
+};
+
+typedef bool (*PlotValueFn)(const void* item, int index, void* user,
+                            float* out);
+
+struct Line {
+    PlotItems items = {};
+    PlotValueFn x = nullptr;
+    void* xUser = nullptr;
+    PlotValueFn y = nullptr;
+    void* yUser = nullptr;
+    Background stroke = {};
+    float strokeWidth = 1;
+    StrokeStyle strokeStyle = StrokeStyle::Natural;
+    bool dot = false;
+    float dotSize = 4;
+    Rgba dotFillColor = RgbaTransparent();
+    bool hasDotStrokeColor = false;
+    Rgba dotStrokeColor = {};
+
+    static Line New();
+    Line* Data(const void* values, int count, int stride);
+    Line* X(PlotValueFn fn, void* user = nullptr);
+    Line* Y(PlotValueFn fn, void* user = nullptr);
+    Line* Stroke(Background value);
+    Line* StrokeWidth(float value);
+    Line* Style(StrokeStyle value);
+    Line* Dots(bool value = true);
+    Line* DotSize(float value);
+    Line* DotFill(Rgba value);
+    Line* DotStroke(Rgba value);
+    int Points(Bounds bounds, Point* out, int capacity) const;
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+struct Area {
+    PlotItems items = {};
+    PlotValueFn x = nullptr;
+    void* xUser = nullptr;
+    bool hasY0 = false;
+    float y0 = 0;
+    PlotValueFn y1 = nullptr;
+    void* y1User = nullptr;
+    Background fill = {};
+    Background stroke = {};
+    StrokeStyle strokeStyle = StrokeStyle::Natural;
+
+    static Area New();
+    Area* Data(const void* values, int count, int stride);
+    Area* X(PlotValueFn fn, void* user = nullptr);
+    Area* Y0(float value);
+    Area* Y1(PlotValueFn fn, void* user = nullptr);
+    Area* Fill(Background value);
+    Area* Stroke(Background value);
+    Area* Style(StrokeStyle value);
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+enum class BarAlignment : uint8_t {
+    Bottom,
+    Top,
+    Left,
+    Right
+};
+
+bool BarAlignmentIsHorizontal(BarAlignment value);
+float BarAlignmentGradientAngle(BarAlignment value);
+Point BarLabelOrigin(BarAlignment alignment, float cross, float base,
+                     float value, float bandWidth);
+
+typedef Background (*PlotBarFillFn)(const void* item, int index, Bounds frame,
+                                    BarAlignment alignment, void* user);
+typedef void (*PlotBarLabelFn)(const void* item, int index, Point origin,
+                               void* user, Vec<Text>* out);
+
+struct Bar {
+    PlotItems items = {};
+    BarAlignment alignment = BarAlignment::Bottom;
+    PlotValueFn cross = nullptr;
+    void* crossUser = nullptr;
+    float bandWidth = 0;
+    PlotValueFn base = nullptr;
+    void* baseUser = nullptr;
+    PlotValueFn value = nullptr;
+    void* valueUser = nullptr;
+    PlotBarFillFn fill = nullptr;
+    void* fillUser = nullptr;
+    PlotBarLabelFn label = nullptr;
+    void* labelUser = nullptr;
+    Corners cornerRadii = {};
+
+    static Bar New();
+    Bar* Data(const void* values, int count, int stride);
+    Bar* Alignment(BarAlignment value);
+    Bar* Cross(PlotValueFn fn, void* user = nullptr);
+    Bar* BandWidth(float value);
+    Bar* Base(PlotValueFn fn, void* user = nullptr);
+    Bar* Value(PlotValueFn fn, void* user = nullptr);
+    Bar* Fill(PlotBarFillFn fn, void* user = nullptr);
+    Bar* Label(PlotBarLabelFn fn, void* user = nullptr);
+    Bar* CornerRadii(Corners value);
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+struct ArcData {
+    const void* data = nullptr;
+    int index = 0;
+    float value = 0;
+    float startAngle = 0;
+    float endAngle = 0;
+    float padAngle = 0;
+};
+
+struct Arc {
+    float innerRadius = 0;
+    float outerRadius = 0;
+
+    static Arc New();
+    Arc* InnerRadius(float value);
+    Arc* OuterRadius(float value);
+    Point Centroid(const ArcData& arc) const;
+    Path* PathFor(PaintCtx* ctx, const ArcData& arc, Bounds bounds,
+                  float innerOverride = -1, float outerOverride = -1) const;
+    void Paint(PaintCtx* ctx, const ArcData& arc, Rgba color, Bounds bounds,
+               float innerOverride = -1, float outerOverride = -1) const;
+};
+
+struct Pie {
+    PlotValueFn value = nullptr;
+    void* valueUser = nullptr;
+    float startAngle = 0;
+    float endAngle = 2 * kPi;
+    float padAngle = 0;
+
+    static Pie New();
+    Pie* Value(PlotValueFn fn, void* user = nullptr);
+    Pie* StartAngle(float value);
+    Pie* EndAngle(float value);
+    Pie* PadAngle(float value);
+    void Arcs(Arena* arena, PlotItems items, ArenaVec<ArcData>* out) const;
+};
+
+struct RadialLine {
+    PlotItems items = {};
+    PlotValueFn angle = nullptr;
+    void* angleUser = nullptr;
+    PlotValueFn radius = nullptr;
+    void* radiusUser = nullptr;
+    bool closed = false;
+    bool hasFill = false;
+    Background fill = {};
+    Background stroke = {};
+    float strokeWidth = 1;
+    bool dot = false;
+    float dotSize = 4;
+    Rgba dotFillColor = RgbaTransparent();
+    bool hasDotStrokeColor = false;
+    Rgba dotStrokeColor = {};
+
+    static RadialLine New();
+    RadialLine* Data(const void* values, int count, int stride);
+    RadialLine* Angle(PlotValueFn fn, void* user = nullptr);
+    RadialLine* Radius(PlotValueFn fn, void* user = nullptr);
+    RadialLine* Closed(bool value = true);
+    RadialLine* Fill(Background value);
+    RadialLine* Stroke(Background value);
+    RadialLine* StrokeWidth(float value);
+    RadialLine* Dots(bool value = true);
+    RadialLine* DotSize(float value);
+    RadialLine* DotFill(Rgba value);
+    RadialLine* DotStroke(Rgba value);
+    int Points(Bounds bounds, Point* out, int capacity) const;
+    void Paint(PaintCtx* ctx, Bounds bounds) const;
+};
+
+struct StackPoint {
+    float y0 = 0;
+    float y1 = 0;
+    const void* data = nullptr;
+};
+
+struct StackSeries {
+    Str key = {};
+    int index = 0;
+    ArenaVec<StackPoint> points;
+};
+
+typedef bool (*PlotStackValueFn)(const void* item, int index, Str key,
+                                 void* user, float* out);
+
+struct Stack {
+    PlotItems items = {};
+    const Str* keys = nullptr;
+    int keyCount = 0;
+    PlotStackValueFn value = nullptr;
+    void* valueUser = nullptr;
+
+    static Stack New();
+    Stack* Data(const void* values, int count, int stride);
+    Stack* Keys(const Str* values, int count);
+    Stack* Value(PlotStackValueFn fn, void* user = nullptr);
+    void Series(Arena* arena, ArenaVec<StackSeries>* out) const;
+};
+
+Path* SankeyLinkPath(PaintCtx* ctx, const SankeyNodeLayout& source,
+                     const SankeyNodeLayout& target,
+                     const SankeyLinkLayout& link, float minWidth,
+                     Point origin);
+
+enum class CrossLineAxis : uint8_t {
+    Vertical,
+    Horizontal,
+    Both
+};
+
+struct CrossLine {
+    Point point = {};
+    float verticalStart = 0;
+    bool hasVerticalLength = false;
+    float verticalLength = 0;
+    float horizontalStart = 0;
+    bool hasHorizontalLength = false;
+    float horizontalLength = 0;
+    float thickness = 1;
+    bool dashed = true;
+    CrossLineAxis direction = CrossLineAxis::Vertical;
+
+    static CrossLine New(Point point);
+    CrossLine* Band(float value);
+    CrossLine* Horizontal();
+    CrossLine* Both();
+    CrossLine* Height(float value);
+    CrossLine* Width(float value);
+    CrossLine* Span(float start, float length);
+    CrossLine* HSpan(float start, float length);
+    bool ShowVertical() const;
+    bool ShowHorizontal() const;
+    El* IntoEl(Ctx* cx) const;
+};
+
+struct Dot {
+    Point point = {};
+    float size = 6;
+    Rgba stroke = RgbaTransparent();
+    Rgba fill = RgbaTransparent();
+
+    static Dot New(Point point);
+    Dot* Size(float value);
+    Dot* Stroke(Rgba value);
+    Dot* Fill(Rgba value);
+    El* IntoEl(Ctx* cx) const;
+};
+
+struct TooltipState {
+    int index = 0;
+    Point crossLine = {};
+    const Point* dots = nullptr;
+    int dotCount = 0;
+
+    static TooltipState New(int index, Point crossLine, const Point* dots,
+                            int dotCount);
+};
+
+struct TooltipRow {
+    Rgba color = {};
+    Str label = {};
+    Str value = {};
+};
+
+struct Tooltip {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    float gap = 0;
+    bool hasCrossLine = false;
+    CrossLine crossLine = {};
+    ArenaVec<Dot> dots;
+    bool appearance = true;
+    bool hasTitle = false;
+    Str title = {};
+    ArenaVec<TooltipRow> rows;
+    ArenaVec<El*> children;
+    Point cursor = {};
+    Size within = {};
+
+    static Tooltip* New(Ctx* cx, Point cursor, Size within);
+    Tooltip* Title(Str value);
+    Tooltip* Row(Rgba color, Str label, Str value);
+    Tooltip* Gap(float value);
+    Tooltip* Cross(const CrossLine& value);
+    Tooltip* Dots(const Dot* values, int count);
+    Tooltip* Appearance(bool value);
+    Tooltip* Child(El* value);
+    El* IntoEl();
+};
+
+}
 
 }
 }
@@ -12301,6 +17311,8 @@ struct Popover {
     PopupAnchor anchor = PopupAnchor::TopLeft;
 
     MouseButton button = MouseButton::Left;
+    bool overlayClosable = true;
+    Listener onOpenChange;
     Listener onClose;
 
     static Popover* New(Ctx* cx);
@@ -12311,6 +17323,9 @@ struct Popover {
     Popover* DefaultOpen(bool v);
     Popover* Button(MouseButton b);
     Popover* Anchor(PopupAnchor v);
+    Popover* OverlayClosable(bool v);
+
+    Popover* OnOpenChange(Listener fn);
 
     Popover* OnClose(Listener fn);
     El* IntoEl();
@@ -12319,216 +17334,6 @@ struct Popover {
 bool PopoverOpen(Ctx* cx, Str id);
 
 }
-}
-
-#line 1 "src/base/animation.h"
-
-namespace gpui {
-
-float CubicBezier(float x1, float y1, float x2, float y2, float t);
-
-using EaseFn = float (*)(float);
-
-float EaseLinear(float t);
-
-float EaseOutCubic(float t);
-
-float EaseInCubic(float t);
-
-float EaseInOutCubic(float t);
-
-float EaseQuadratic(float t);
-
-float EaseInOutQuad(float t);
-float EaseOutQuint(float t);
-
-float EaseBounce(EaseFn e, float t);
-
-float EaseBounceInOut(float t);
-
-float ClampF01(float t);
-
-float Lerp(float a, float b, float t);
-Point Lerp(Point a, Point b, float t);
-
-Rgba Lerp(Rgba a, Rgba b, float t);
-
-}
-
-#line 1 "src/base/motion.h"
-
-namespace gpui {
-
-struct Motion {
-    float durationMs = 0;
-    float delayMs = 0;
-    EaseFn ease = EaseOutCubic;
-};
-
-inline Motion MotionNew(float durationMs) {
-    Motion m;
-    m.durationMs = durationMs;
-    return m;
-}
-
-uint32_t MotionId(Str id);
-uint32_t MotionId(Str id, Str channel);
-
-uint32_t MotionName(Ctx* cx, Str name);
-
-float MotionProgress(const Motion& m, float elapsedMs);
-
-float MotionSample(const Motion& m, float progress);
-
-bool MotionReduced();
-
-void MotionSetReduced(bool on);
-
-template <typename T>
-struct MotionState {
-    T from = {};
-    T target = {};
-    double startedAt = 0;
-    bool init = false;
-};
-
-template <typename T>
-struct MotionStep {
-    T value = {};
-
-    bool running = false;
-};
-
-inline bool MotionEq(float a, float b) {
-    return a == b;
-}
-inline bool MotionEq(Point a, Point b) {
-    return a.x == b.x && a.y == b.y;
-}
-inline bool MotionEq(Rgba a, Rgba b) {
-    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
-}
-
-template <typename T>
-MotionStep<T> MotionAdvance(MotionState<T>* st, T target, const Motion& m,
-                            double now, bool reduced) {
-    MotionStep<T> out;
-    if (!st->init) {
-        st->init = true;
-        st->from = target;
-        st->target = target;
-        st->startedAt = now;
-    }
-    if (reduced || m.durationMs <= 0) {
-        st->from = target;
-        st->target = target;
-        st->startedAt = now;
-        out.value = target;
-        return out;
-    }
-    float elapsedMs = (float)((now - st->startedAt) * 1000.0);
-    float progress = MotionProgress(m, elapsedMs);
-    T sampled = Lerp(st->from, st->target, MotionSample(m, progress));
-    if (!MotionEq(st->target, target)) {
-
-        st->from = sampled;
-        st->target = target;
-        st->startedAt = now;
-        out.value = sampled;
-        out.running = true;
-        return out;
-    }
-    out.value = sampled;
-    out.running = progress < 1.f && !MotionEq(st->from, st->target);
-    return out;
-}
-
-double MotionNow(Ctx* cx);
-
-void* MotionSlot(Ctx* cx, uint32_t key, int size);
-void MotionWantsFrame(Ctx* cx);
-
-float MotionRepeat(Ctx* cx, uint32_t key, float periodMs,
-                   EaseFn ease = nullptr);
-
-float MotionAppear(Ctx* cx, uint32_t key, float durationMs,
-                   EaseFn ease = nullptr);
-
-template <typename T>
-void MotionSeed(Ctx* cx, uint32_t key, T from) {
-    auto* st =
-        (MotionState<T>*)MotionSlot(cx, key, (int)sizeof(MotionState<T>));
-    if (!st) {
-        return;
-    }
-    st->init = true;
-    st->from = from;
-    st->target = from;
-    st->startedAt = MotionNow(cx);
-}
-
-struct Spring {
-
-    float responseMs = 0;
-
-    float damping = 1.f;
-
-    float epsilon = 0.001f;
-
-    bool travel = true;
-};
-
-inline Spring SpringNew(float responseMs) {
-    Spring s;
-    s.responseMs = responseMs;
-    return s;
-}
-
-struct SpringState {
-    float position = 0;
-    float velocity = 0;
-    float target = 0;
-    double updatedAt = 0;
-    bool init = false;
-};
-
-struct SpringStep {
-    float value = 0;
-    bool running = false;
-};
-
-SpringStep SpringAdvance(SpringState* st, float target, const Spring& s,
-                         double now, bool reduced);
-
-float SpringValue(Ctx* cx, uint32_t key, float target, const Spring& s);
-
-inline void SpringSeed(Ctx* cx, uint32_t key, float from) {
-    auto* st = (SpringState*)MotionSlot(cx, key, (int)sizeof(SpringState));
-    if (!st) {
-        return;
-    }
-    st->init = true;
-    st->position = from;
-    st->velocity = 0;
-    st->target = from;
-    st->updatedAt = MotionNow(cx);
-}
-
-template <typename T>
-T MotionValue(Ctx* cx, uint32_t key, T target, const Motion& m) {
-    auto* st =
-        (MotionState<T>*)MotionSlot(cx, key, (int)sizeof(MotionState<T>));
-    if (!st) {
-        return target;
-    }
-    MotionStep<T> step =
-        MotionAdvance(st, target, m, MotionNow(cx), MotionReduced());
-    if (step.running) {
-        MotionWantsFrame(cx);
-    }
-    return step.value;
-}
-
 }
 
 #line 1 "src/ui/progress.h"
@@ -12599,6 +17404,8 @@ struct Radio {
     bool disabled = false;
     UiSize size = UiSize::Medium;
     bool focusRing = true;
+    int tabIndex = 0;
+    bool tabStop = true;
     Listener onClick;
 
     static Radio* New(Ctx* cx, Str id);
@@ -12609,6 +17416,8 @@ struct Radio {
     Radio* WithSize(UiSize s);
 
     Radio* FocusRing(bool v);
+    Radio* TabIndex(int v);
+    Radio* TabStop(bool v);
     Radio* OnClick(Listener fn);
     El* IntoEl();
 };
@@ -12617,8 +17426,7 @@ struct RadioGroup {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
-    Radio* radios[16] = {};
-    int n = 0;
+    ArenaVec<Radio*> radios;
     bool horizontal = false;
     int selected = -1;
     bool disabled = false;
@@ -12685,6 +17493,24 @@ struct Rating {
 }
 }
 
+#line 1 "src/ui/resizable.h"
+
+namespace gpui {
+
+namespace component {
+
+using ResizableState = gpui::ResizableState;
+
+struct Resizable {
+
+    static gpui::Resizable* New(Ctx* cx, Str id,
+                                Entity<ResizableState> state = {},
+                                Axis axis = Axis::Horizontal);
+};
+
+}
+}
+
 #line 1 "src/ui/sheet.h"
 
 namespace gpui {
@@ -12702,12 +17528,17 @@ struct Sheet {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str title = {};
+    El* titleEl = nullptr;
     bool open = false;
 
     float size = 350;
     SheetPlacement placement = SheetPlacement::Right;
+
+    bool resizable = true;
     bool overlay = true;
+    bool overlayClosable = true;
     El* body = nullptr;
+    ArenaVec<El*> children;
 
     El* footer = nullptr;
 
@@ -12715,15 +17546,22 @@ struct Sheet {
     int scrollId = 0;
     Listener onScroll;
     Listener onClose;
+    Style style = {};
+    uint32_t styleSet = 0;
 
     static Sheet* New(Ctx* cx);
     Sheet* Title(Str s);
+    Sheet* Title(El* e);
     Sheet* Placement(SheetPlacement p);
     Sheet* Size(float px);
+    Sheet* Resizable(bool v = true);
     Sheet* Overlay(bool v);
+    Sheet* OverlayClosable(bool v = true);
     Sheet* Open(bool v);
     Sheet* Body(El* e);
+    Sheet* Child(El* e);
     Sheet* Footer(El* e);
+    Sheet* Refine(const Style& style, uint32_t fields);
     Sheet* Scroll(int id, float y, Listener fn);
     Sheet* OnClose(Listener fn);
     El* IntoEl(WinSize size);
@@ -12749,17 +17587,11 @@ const float kWindowResizeHitSize = 4;
 
 const float kWindowBorderRadius = 0;
 
-struct WindowTiling {
-    bool top = false;
-    bool bottom = false;
-    bool left = false;
-    bool right = false;
-
-    bool IsTiled() const { return top || bottom || left || right; }
-    bool AllTiled() const { return top && bottom && left && right; }
-};
+using WindowTiling = gpui::Tiling;
 
 Edges WindowBorderInsets(float shadowSize, WindowTiling tiling);
+
+Edges WindowPaddings(Window* window);
 
 enum class WindowEdge : int8_t {
     None = -1,
@@ -12781,11 +17613,14 @@ struct WindowBorder {
     Ctx* cx = nullptr;
     El* child = nullptr;
     float shadowSize = kWindowShadowSize;
+    float resizeHitSize = kWindowResizeHitSize;
     WindowTiling tiling = {};
+    bool hasTiling = false;
 
     static WindowBorder* New(Ctx* cx);
     WindowBorder* Child(El* e);
     WindowBorder* ShadowSize(float v);
+    WindowBorder* ResizeHitSize(float v);
     WindowBorder* Tiling(WindowTiling v);
     El* IntoEl();
 };
@@ -12806,6 +17641,8 @@ struct WindowLayer {
 };
 
 struct WindowLayers {
+    App* app = nullptr;
+    Window* win = nullptr;
 
     Vec<WindowLayer> dialogs;
     WindowLayer sheet = {};
@@ -12814,7 +17651,7 @@ struct WindowLayers {
     Entity<component::NotificationListState> notifications = {};
     int notifyTimer = 0;
 
-    ~WindowLayers() { dialogs.Reset(); }
+    ~WindowLayers();
 };
 
 WindowLayers* WindowLayersOf(Window* win);
@@ -12822,6 +17659,16 @@ WindowLayers* WindowLayersOf(Window* win);
 void WindowOpenDialog(Ctx* cx, EntityId view, bool overlay = true);
 template <typename T>
 inline void WindowOpenDialog(Ctx* cx, Entity<T> e, bool overlay = true) {
+    WindowOpenDialog(cx, e.id, overlay);
+}
+
+inline void WindowOpenAlertDialog(Ctx* cx, EntityId view,
+                                  bool overlay = true) {
+    WindowOpenDialog(cx, view, overlay);
+}
+template <typename T>
+inline void WindowOpenAlertDialog(Ctx* cx, Entity<T> e,
+                                  bool overlay = true) {
     WindowOpenDialog(cx, e.id, overlay);
 }
 bool WindowHasActiveDialog(Ctx* cx);
@@ -12832,6 +17679,12 @@ void WindowCloseAllDialogs(Ctx* cx);
 
 void WindowOpenSheetAt(Ctx* cx, EntityId view,
                        component::SheetPlacement placement, float size);
+template <typename T>
+inline void WindowOpenSheetAt(Ctx* cx, Entity<T> e,
+                              component::SheetPlacement placement,
+                              float size) {
+    WindowOpenSheetAt(cx, e.id, placement, size);
+}
 
 inline void WindowOpenSheet(Ctx* cx, EntityId view, float size) {
     WindowOpenSheetAt(cx, view, component::SheetPlacement::Right, size);
@@ -12845,16 +17698,39 @@ void WindowCloseSheet(Ctx* cx);
 
 Entity<component::NotificationListState> WindowNotifications(Ctx* cx);
 
-int WindowPushNotification(Ctx* cx, component::NotificationItem item,
-                           int timeoutMs = 5000);
+int WindowPushNotification(Ctx* cx, component::Notification item,
+                           int timeoutMs = -1);
+int WindowPushNotification(Ctx* cx, Str message);
 
-int WindowPushNotification(Ctx* cx, component::NotificationKind kind,
+int WindowPushNotification(Ctx* cx, component::NotificationType kind,
                            Str message);
 void WindowClearNotifications(Ctx* cx);
 int WindowNotificationCount(Ctx* cx);
+void WindowRemoveNotifications(Ctx* cx,
+                               component::NotificationTypeId type);
+void WindowRemoveNotification1(Ctx* cx,
+                               component::NotificationTypeId type,
+                               uint32_t key);
+template <typename T>
+inline void WindowRemoveNotification(Ctx* cx) {
+    WindowRemoveNotifications(cx, component::NotificationTypeOf<T>());
+}
+template <typename T>
+inline void WindowRemoveNotification1(Ctx* cx, uint32_t key) {
+    WindowRemoveNotification1(cx, component::NotificationTypeOf<T>(), key);
+}
+template <typename T>
+inline void WindowRemoveNotification1(Ctx* cx, Str key) {
+    WindowRemoveNotification1<T>(cx, (uint32_t)HashClickId(key));
+}
 
 InputState* WindowFocusedInput(Ctx* cx);
 bool WindowHasFocusedInput(Ctx* cx);
+
+int WindowSelectedText(Ctx* cx, char* out, int cap);
+bool WindowHasTextSelection(Ctx* cx);
+void WindowClearTextSelection(Ctx* cx);
+void WindowEndTextSelection(Ctx* cx);
 
 }
 
@@ -12911,24 +17787,31 @@ namespace gpui {
 
 namespace component {
 
-using ScrollAxis = gpui::ScrollAxis;
+using ScrollbarAxis = gpui::ScrollAxis;
+using ScrollAxis = ScrollbarAxis;
 
 struct Scrollable {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    El* child = nullptr;
+
+    El* element = nullptr;
     Str id = {};
     float scrollY = 0;
     float scrollX = 0;
-    float h = 200;
+    float h = 0;
+    bool hSet = false;
     ScrollAxis axis = ScrollAxis::Vertical;
 
-    ScrollbarMode mode = ScrollbarMode::Always;
+    ScrollbarMode mode = ScrollbarMode::Scrolling;
+    bool modeSet = false;
 
     Listener onScroll;
 
     static Scrollable* New(Ctx* cx);
     static Scrollable* New(Ctx* cx, Str id);
+    static Scrollable* New(Ctx* cx, El* element,
+                           ScrollAxis axis = ScrollAxis::Both);
+    Scrollable* Id(Str v);
     Scrollable* Child(El* e);
     Scrollable* ScrollY(float v);
     Scrollable* ScrollX(float v);
@@ -12936,6 +17819,33 @@ struct Scrollable {
     Scrollable* Mode(ScrollbarMode v);
     Scrollable* H(float v);
     Scrollable* OnScroll(Listener fn);
+    El* IntoEl();
+};
+
+struct ScrollableElement {
+    static El* Scrollbar(Ctx* cx, El* element, Str id, float scrollY,
+                         float scrollX, Listener onScroll,
+                         ScrollbarAxis axis = ScrollbarAxis::Vertical);
+    static El* VerticalScrollbar(Ctx* cx, El* element, Str id, float scrollY,
+                                 Listener onScroll);
+    static El* HorizontalScrollbar(Ctx* cx, El* element, Str id,
+                                   float scrollX, Listener onScroll);
+    static Scrollable* OverflowScrollbar(Ctx* cx, El* element);
+    static Scrollable* OverflowXScrollbar(Ctx* cx, El* element);
+    static Scrollable* OverflowYScrollbar(Ctx* cx, El* element);
+};
+
+struct ScrollableMask {
+    Arena* a = nullptr;
+    Axis axis = Axis::Vertical;
+    El* element = nullptr;
+    Str id = {};
+    bool debug = false;
+
+    static ScrollableMask* New(Ctx* cx, Axis axis, El* element);
+    static El* Apply(El* element, Axis axis);
+    ScrollableMask* Id(Str v);
+    ScrollableMask* Debug(bool v = true);
     El* IntoEl();
 };
 
@@ -12979,7 +17889,7 @@ namespace gpui {
 
 namespace component {
 
-enum class SettingFieldKind : uint8_t {
+enum class SettingFieldType : uint8_t {
     Element,
     Switch,
     Checkbox,
@@ -12988,20 +17898,167 @@ enum class SettingFieldKind : uint8_t {
     Dropdown
 };
 
+using SettingFieldKind = SettingFieldType;
+
 struct NumberFieldOptions {
     double min = -1e300;
     double max = 1e300;
     double step = 1;
 };
 
-const int kMaxSettingKeywords = 4;
+struct RenderOptions {
+    int pageIx = 0;
+    int groupIx = 0;
+    int itemIx = 0;
+    UiSize size = UiSize::Medium;
+    GroupBoxVariant groupVariant = GroupBoxVariant::Normal;
+    Axis layout = Axis::Horizontal;
+    bool disabled = false;
+
+    static RenderOptions New();
+    RenderOptions WithPageIx(int value) const;
+    RenderOptions WithGroupIx(int value) const;
+    RenderOptions WithItemIx(int value) const;
+    RenderOptions WithSize(UiSize value) const;
+    RenderOptions WithGroupVariant(GroupBoxVariant value) const;
+    RenderOptions WithLayout(Axis value) const;
+    RenderOptions WithDisabled(bool value) const;
+};
+
+using SettingFieldElementFn =
+    El* (*)(void* user, const RenderOptions* options, Ctx* cx);
+
+struct SettingFieldElement {
+    void* user = nullptr;
+    SettingFieldElementFn renderField = nullptr;
+
+    bool IsValid() const { return renderField != nullptr; }
+    El* Render(const RenderOptions* options, Ctx* cx) const {
+        return renderField ? renderField(user, options, cx) : nullptr;
+    }
+};
+
+template <typename T>
+using SettingValueFn = T (*)(void* user, const App* app);
+template <typename T>
+using SettingSetValueFn = void (*)(void* user, T value, App* app);
+using SettingDirtyFn = bool (*)(void* user, const App* app);
+using SettingResetFn = void (*)(void* user, Ctx* cx);
+
+template <typename T>
+inline bool SettingValueSame(const T& a, const T& b) {
+    return a == b;
+}
+
+template <>
+inline bool SettingValueSame<Str>(const Str& a, const Str& b) {
+    return StrSame(a, b);
+}
+
+template <typename T>
+struct SettingField {
+    SettingFieldType fieldType = SettingFieldType::Element;
+    void* user = nullptr;
+    SettingValueFn<T> value = nullptr;
+    SettingSetValueFn<T> setValue = nullptr;
+    T defaultValue = {};
+    bool hasDefault = false;
+    SettingDirtyFn dirty = nullptr;
+    SettingResetFn reset = nullptr;
+    NumberFieldOptions number = {};
+    const SearchableItem* dropdownOptions = nullptr;
+    int dropdownOptionsLen = 0;
+    bool dropdownScrollable = false;
+    SettingFieldElement element = {};
+
+    static SettingField New(SettingFieldType type, void* user,
+                            SettingValueFn<T> getValue,
+                            SettingSetValueFn<T> putValue) {
+        SettingField out;
+        out.fieldType = type;
+        out.user = user;
+        out.value = getValue;
+        out.setValue = putValue;
+        return out;
+    }
+    SettingField& DefaultValue(T value_) {
+        defaultValue = value_;
+        hasDefault = true;
+        return *this;
+    }
+    SettingField& OnReset(SettingDirtyFn isDirty, SettingResetFn doReset) {
+        dirty = isDirty;
+        reset = doReset;
+        return *this;
+    }
+    bool IsResettable(const App* app) const {
+        if (dirty) {
+            return dirty(user, app);
+        }
+        if (fieldType == SettingFieldType::Element || !hasDefault || !value) {
+            return false;
+        }
+        return !SettingValueSame(value(user, app), defaultValue);
+    }
+    void Reset(Ctx* cx) const {
+        if (reset) {
+            reset(user, cx);
+        } else if (hasDefault && setValue) {
+            setValue(user, defaultValue, cx ? cx->app : nullptr);
+        }
+    }
+};
+
+using SettingFieldTypeId = uintptr_t;
+
+template <typename T>
+inline SettingFieldTypeId SettingFieldTypeOf() {
+    static const uint8_t tag = 0;
+    return (SettingFieldTypeId)&tag;
+}
+
+struct AnySettingField {
+    void* field = nullptr;
+    SettingFieldTypeId typeId = 0;
+    SettingFieldType fieldType = SettingFieldType::Element;
+    bool (*isResettable)(void* field, const App* app) = nullptr;
+    void (*reset)(void* field, Ctx* cx) = nullptr;
+
+    bool IsValid() const { return field != nullptr; }
+    bool IsResettable(const App* app) const {
+        return isResettable && isResettable(field, app);
+    }
+    void Reset(Ctx* cx) const {
+        if (reset) {
+            reset(field, cx);
+        }
+    }
+};
+
+template <typename T>
+inline AnySettingField EraseSettingField(SettingField<T>* field) {
+    AnySettingField out;
+    out.field = field;
+    out.typeId = SettingFieldTypeOf<T>();
+    out.fieldType = field ? field->fieldType : SettingFieldType::Element;
+    out.isResettable = [](void* p, const App* app) {
+        return ((SettingField<T>*)p)->IsResettable(app);
+    };
+    out.reset = [](void* p, Ctx* cx) { ((SettingField<T>*)p)->Reset(cx); };
+    return out;
+}
+
+struct SelectIndex {
+    int pageIx = 0;
+    int groupIx = -1;
+};
 
 struct SettingItem {
     Str title = {};
     Str description = {};
     El* control = nullptr;
-    Str keywords[kMaxSettingKeywords] = {};
-    int nKeywords = 0;
+    SettingFieldElement fieldElement = {};
+    ArenaVec<Str> keywords;
     bool disabled = false;
 
     bool dirty = false;
@@ -13068,6 +18125,7 @@ struct SettingFieldInput {
 struct SettingsState {
     int page = 0;
     int group = -1;
+    bool selectionInitialized = false;
 
     InputState search;
     Vec<SettingBinding> fields;
@@ -13103,8 +18161,12 @@ struct Settings {
     Entity<SettingsState> state = {};
 
     ArenaVec<SettingPage> pages;
-    float sidebarWidth = 220;
+    float sidebarWidth = 250;
+    float sidebarMinWidth = 160;
+    float sidebarMaxWidth = 360;
     float h = 480;
+    UiSize size = UiSize::Medium;
+    SelectIndex defaultSelectedIndex = {};
 
     bool bordered = true;
 
@@ -13113,6 +18175,7 @@ struct Settings {
                    Str description = {});
     Settings* Group(Str title, Str description = {});
     Settings* Item(Str title, Str description, El* control = nullptr);
+    Settings* FieldElement(SettingFieldElement element);
 
     Settings* SwitchField(bool* value, bool defValue = false,
                           bool hasDefault = false);
@@ -13132,10 +18195,14 @@ struct Settings {
     Settings* PageTitleSuffix(El* e);
 
     Settings* Keywords(Str a1, Str a2 = {}, Str a3 = {});
+    Settings* Keyword(Str keyword);
     Settings* Disabled(bool v = true);
     Settings* Resettable(bool dirty, Listener onReset);
     Settings* Layout(Axis axis);
     Settings* SidebarWidth(float v);
+    Settings* SidebarSizeRange(float minWidth, float maxWidth);
+    Settings* WithSize(UiSize value);
+    Settings* DefaultSelectedIndex(SelectIndex value);
     Settings* H(float v);
     Settings* Bordered(bool v);
     El* IntoEl();
@@ -13177,6 +18244,25 @@ struct SidebarLayout {
 SidebarLayout SidebarLayoutFor(SidebarCollapsible collapsible, bool collapsed,
                                float expandedWidth, Side side);
 
+struct SidebarMenuItem;
+struct SidebarMenu;
+struct SidebarGroup;
+
+using SidebarItemRender =
+    El* (*)(void* value, Ctx* cx, Str id, bool collapsed);
+
+struct SidebarItem {
+    void* value = nullptr;
+    SidebarItemRender render = nullptr;
+
+    static SidebarItem New(void* value, SidebarItemRender render);
+    static SidebarItem From(SidebarMenuItem* item);
+    static SidebarItem From(SidebarMenu* menu);
+    static SidebarItem From(SidebarGroup* group);
+    bool IsValid() const { return value && render; }
+    El* Render(Ctx* cx, Str id, bool collapsed) const;
+};
+
 const float kSidebarCollapsedWidth = 48;
 
 struct SidebarMenuState {
@@ -13205,9 +18291,8 @@ struct SidebarMenuItem {
     bool clickToOpen = false;
     bool clickToToggle = false;
     El* suffix = nullptr;
-    SidebarMenuItem* children[16] = {};
+    ArenaVec<SidebarMenuItem*> children;
     PopupMenu* contextMenu = nullptr;
-    int nChildren = 0;
 
     bool collapsed = false;
 
@@ -13230,12 +18315,14 @@ struct SidebarMenuItem {
 struct SidebarMenu {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
-    SidebarMenuItem* items[24] = {};
-    int n = 0;
+    ArenaVec<SidebarMenuItem*> items;
     bool collapsed = false;
+    Style style = {};
+    uint32_t styleSet = 0;
 
     static SidebarMenu* New(Ctx* cx);
     SidebarMenu* Child(SidebarMenuItem* item);
+    SidebarMenu* Refine(const Style& v, uint32_t fields);
     El* IntoEl(Str id);
 };
 
@@ -13243,19 +18330,55 @@ struct SidebarGroup {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str label = {};
-    SidebarMenu* menus[8] = {};
-    int n = 0;
+
+    ArenaVec<SidebarMenu*> menus;
+    ArenaVec<SidebarItem> children;
     bool collapsed = false;
 
     static SidebarGroup* New(Ctx* cx, Str label);
     SidebarGroup* Child(SidebarMenu* menu);
+    SidebarGroup* Child(SidebarMenuItem* item);
+    SidebarGroup* Child(SidebarItem item);
     El* IntoEl(Str id);
 };
 
-El* SidebarHeader(Ctx* cx, El* child, bool selected = false,
-                  Listener onClick = {});
-El* SidebarFooter(Ctx* cx, El* child, bool selected = false,
-                  Listener onClick = {});
+struct SidebarHeader {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    ArenaVec<El*> children;
+    Style style = {};
+    uint32_t styleSet = 0;
+    bool selected = false;
+    bool collapsed = false;
+    Listener onClick = {};
+
+    static SidebarHeader* New(Ctx* cx);
+    SidebarHeader* Child(El* child);
+    SidebarHeader* Selected(bool v);
+    SidebarHeader* Collapsed(bool v);
+    SidebarHeader* OnClick(Listener fn);
+    SidebarHeader* Refine(const Style& v, uint32_t fields);
+    El* IntoEl();
+};
+
+struct SidebarFooter {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    ArenaVec<El*> children;
+    Style style = {};
+    uint32_t styleSet = 0;
+    bool selected = false;
+    bool collapsed = false;
+    Listener onClick = {};
+
+    static SidebarFooter* New(Ctx* cx);
+    SidebarFooter* Child(El* child);
+    SidebarFooter* Selected(bool v);
+    SidebarFooter* Collapsed(bool v);
+    SidebarFooter* OnClick(Listener fn);
+    SidebarFooter* Refine(const Style& v, uint32_t fields);
+    El* IntoEl();
+};
 
 struct SidebarToggleButton {
     Arena* a = nullptr;
@@ -13277,22 +18400,32 @@ struct Sidebar {
     Str id = {};
     El* header = nullptr;
     El* footer = nullptr;
-    SidebarGroup* groups[8] = {};
-    int n = 0;
+
+    ArenaVec<SidebarGroup*> groups;
+    ArenaVec<SidebarItem> content;
     Side side = Side::Left;
     SidebarCollapsible collapsible = SidebarCollapsible::Icon;
     bool collapsed = false;
 
     float width = 255;
+    Style style = {};
+    uint32_t styleSet = 0;
 
     static Sidebar* New(Ctx* cx, Str id);
     Sidebar* WithSide(Side v);
     Sidebar* Collapsible(SidebarCollapsible v);
+    Sidebar* Collapsible(bool v);
     Sidebar* Collapsed(bool v);
     Sidebar* Header(El* e);
+    Sidebar* Header(SidebarHeader* e);
     Sidebar* Footer(El* e);
+    Sidebar* Footer(SidebarFooter* e);
     Sidebar* Child(SidebarGroup* group);
+    Sidebar* Child(SidebarMenu* menu);
+    Sidebar* Child(SidebarMenuItem* item);
+    Sidebar* Child(SidebarItem item);
     Sidebar* W(float px);
+    Sidebar* Refine(const Style& v, uint32_t fields);
     El* IntoEl();
 };
 
@@ -13425,6 +18558,8 @@ struct StatusBar {
 }
 }
 
+#line 1 "src/ui/styled.h"
+
 #line 1 "src/ui/stepper.h"
 
 namespace gpui {
@@ -13458,8 +18593,7 @@ struct Stepper {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
-    StepperItem* items[16] = {};
-    int n = 0;
+    ArenaVec<StepperItem*> items;
     int step = 0;
     Axis layout = Axis::Horizontal;
     bool disabled = false;
@@ -13549,21 +18683,59 @@ float TabBarRadius(TabVariant v, UiSize size, float radius, float radiusLg);
 float TabRadius(TabVariant v, UiSize size, float radius, float radiusLg);
 float TabInnerRadius(TabVariant v, UiSize size, float radius, float radiusLg);
 
-struct TabItem {
+struct Tab {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
     Str label = {};
+    Str ariaLabel = {};
     IconName icon = IconName::None;
+    El* prefix = nullptr;
+    El* suffix = nullptr;
+    ArenaVec<El*> children;
+    TabVariant variant = TabVariant::Tab;
+    UiSize size = UiSize::Medium;
     bool disabled = false;
+    bool selected = false;
+    bool tabBarPrefix = true;
 
     bool flex1 = false;
+    float maxWidth = 0;
+    Listener onClick;
+    Style style = {};
+    uint32_t styleSet = 0;
+
+    static Tab* New(Ctx* cx);
+    static Tab* New(Ctx* cx, Str label);
+    Tab* Label(Str value);
+    Tab* AriaLabel(Str value);
+    Tab* Icon(IconName value);
+    Tab* Prefix(El* value);
+    Tab* Suffix(El* value);
+    Tab* Child(El* value);
+    Tab* Disabled(bool value = true);
+    Tab* Selected(bool value = true);
+    Tab* OnClick(Listener value);
+    Tab* WithVariant(TabVariant value);
+    Tab* Outline();
+    Tab* Pill();
+    Tab* Segmented();
+    Tab* Underline();
+    Tab* WithSize(UiSize value);
+    Tab* Flex1();
+    Tab* MaxWidth(float value);
+    Tab* TabBarPrefix(bool value);
+    Tab* Refine(const Style& value, uint32_t fields);
+    El* IntoEl();
 };
 
-struct Tabs {
+struct TabBar {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str id = {};
 
-    ArenaVec<TabItem> items;
-    int selected = 0;
+    ArenaVec<component::Tab> items;
+
+    int selected = -1;
     TabVariant variant = TabVariant::Tab;
     UiSize size = UiSize::Medium;
 
@@ -13572,34 +18744,54 @@ struct Tabs {
     float width = kAuto;
     El* prefix = nullptr;
     El* suffix = nullptr;
+    El* lastEmptySpace = nullptr;
 
     bool menu = false;
     Listener onChange;
+    bool trackScroll = false;
+    int scrollId = 0;
+    float scrollX = 0;
+    Listener onScroll;
+    Style style = {};
+    uint32_t styleSet = 0;
 
-    static Tabs* New(Ctx* cx);
-    static Tabs* New(Ctx* cx, Str id);
-    Tabs* Tab(Str label);
-    Tabs* Tab(Str label, IconName icon, bool disabled = false);
+    static TabBar* New(Ctx* cx);
+    static TabBar* New(Ctx* cx, Str id);
+    TabBar* Child(component::Tab* child);
+    TabBar* Child(Str label);
+    TabBar* Tab(Str label);
+    TabBar* Tab(Str label, IconName icon, bool disabled = false);
 
-    Tabs* Flex1();
-    Tabs* Disabled(int ix, bool v = true);
-    Tabs* Selected(int i);
-    Tabs* OnChange(Listener fn);
-    Tabs* Variant(TabVariant v);
-    Tabs* Outline();
-    Tabs* Pill();
-    Tabs* Segmented();
-    Tabs* Underline();
-    Tabs* Size(UiSize v);
-    Tabs* MaxWidth(float v);
+    TabBar* Flex1();
 
-    Tabs* W(float v);
-    Tabs* WFill();
-    Tabs* Prefix(El* e);
-    Tabs* Suffix(El* e);
-    Tabs* Menu(bool v = true);
+    TabBar* AriaLabel(Str label);
+    TabBar* Disabled(int ix, bool v = true);
+    TabBar* Selected(int i);
+    TabBar* OnChange(Listener fn);
+    TabBar* OnClick(Listener fn);
+    TabBar* Variant(TabVariant v);
+    TabBar* WithVariant(TabVariant v);
+    TabBar* Outline();
+    TabBar* Pill();
+    TabBar* Segmented();
+    TabBar* Underline();
+    TabBar* Size(UiSize v);
+    TabBar* WithSize(UiSize v);
+    TabBar* MaxWidth(float v);
+
+    TabBar* W(float v);
+    TabBar* WFill();
+    TabBar* Prefix(El* e);
+    TabBar* Suffix(El* e);
+    TabBar* LastEmptySpace(El* e);
+    TabBar* Menu(bool v = true);
+
+    TabBar* TrackScroll(int scrollKey, float offset, Listener fn);
+    TabBar* Refine(const Style& value, uint32_t fields);
     El* IntoEl();
 };
+
+using Tabs = TabBar;
 
 }
 }
@@ -13709,6 +18901,8 @@ struct TableState {
 
     Vec<float> colWidth;
 
+    Vec<float> colMinWidths;
+    Vec<float> colMaxWidths;
     float colMinWidth = 20;
     float colMaxWidth = 0;
 
@@ -13749,10 +18943,19 @@ struct TableState {
 
     ~TableState() {
         colWidth.Reset();
+        colMinWidths.Reset();
+        colMaxWidths.Reset();
         colOrder.Reset();
         colBounds.Reset();
     }
     Listener onLoadMore = {};
+
+    void* delegateData = nullptr;
+    void (*delegateSort)(Ctx* cx, void* data, int col,
+                         ColumnSort sort) = nullptr;
+    void (*delegateMoveColumn)(Ctx* cx, void* data, int from,
+                               int to) = nullptr;
+    void (*delegateLoadMore)(Ctx* cx, void* data) = nullptr;
 
     static void OnRowClick(TableState* self, Ctx* cx, const ClickEvent* ev,
                            intptr_t row);
@@ -13821,6 +19024,9 @@ float TableColWidth(const TableState* s, int col, float declared);
 void TableSeedColWidth(TableState* s, int col, float declared);
 
 float TableClampColWidth(const TableState* s, float width);
+float TableClampColWidth(const TableState* s, int col, float width);
+void TableSetColConstraints(TableState* s, int col, float minWidth,
+                            float maxWidth);
 
 void TableResizeCol(TableState* s, Ctx* cx, int col, float width);
 
@@ -13844,11 +19050,17 @@ void TableBindKeys(Ctx* cx, El* root, Entity<TableState> state);
 
 }
 
+#line 1 "src/ui/data_table.h"
+
 #line 1 "src/ui/table.h"
 
 namespace gpui {
 
 namespace component {
+
+enum class ColumnFixed : uint8_t {
+    Left
+};
 
 struct TableColumn {
     Str title = {};
@@ -13860,11 +19072,85 @@ struct TableColumn {
     bool resizable = true;
 
     bool fixed = false;
+
+    Str key = {};
+    Str name = {};
+    bool center = false;
+    bool hasSort = false;
+    ColumnSort sort = ColumnSort::Default;
+    bool hasPaddings = false;
+    Edges paddings = {};
+    ColumnFixed fixedSide = ColumnFixed::Left;
+    bool movable = true;
+    float minWidth = 20;
+    float maxWidth = 0;
+
+    static TableColumn New(Str key, Str name);
+    TableColumn Sort(ColumnSort value) const;
+    TableColumn Sortable() const;
+    TableColumn Ascending() const;
+    TableColumn Descending() const;
+    TableColumn TextCenter() const;
+    TableColumn TextRight() const;
+    TableColumn Paddings(Edges value) const;
+    TableColumn P0() const;
+    TableColumn Width(float value) const;
+    TableColumn Fixed(ColumnFixed value = ColumnFixed::Left) const;
+    TableColumn FixedLeft() const;
+    TableColumn Resizable(bool value) const;
+    TableColumn Movable(bool value) const;
+    TableColumn Selectable(bool value) const;
+    TableColumn MinWidth(float value) const;
+    TableColumn MaxWidth(float value) const;
 };
 
-struct TableGroupCell {
+using Column = TableColumn;
+
+struct ColumnGroup {
     Str label = {};
     int span = 1;
+
+    static ColumnGroup New(Str label, size_t span);
+};
+
+using TableGroupCell = ColumnGroup;
+
+struct TableGroupHeader {
+    const TableGroupCell* cells = nullptr;
+    int n = 0;
+};
+
+struct DataTable;
+
+struct TableDelegate {
+    void* data = nullptr;
+    int (*columnsCount)(Ctx* cx, void* data) = nullptr;
+    int (*rowsCount)(Ctx* cx, void* data) = nullptr;
+    TableColumn (*column)(Ctx* cx, void* data, int col) = nullptr;
+    void (*performSort)(Ctx* cx, void* data, int col,
+                        ColumnSort sort) = nullptr;
+    El* (*renderHeader)(Ctx* cx, void* data) = nullptr;
+    El* (*renderGroupTh)(Ctx* cx, void* data, Str label, int span,
+                         float width) = nullptr;
+    El* (*renderTh)(Ctx* cx, void* data, int col) = nullptr;
+    El* (*renderTr)(Ctx* cx, void* data, int row) = nullptr;
+    El* (*renderTd)(Ctx* cx, void* data, int row, int col) = nullptr;
+    void (*groupHeaders)(Ctx* cx, void* data, DataTable* table) = nullptr;
+    PopupMenu* (*contextMenu)(Ctx* cx, void* data, int row,
+                              PopupMenu* menu) = nullptr;
+    void (*moveColumn)(Ctx* cx, void* data, int from, int to) = nullptr;
+    El* (*renderEmpty)(Ctx* cx, void* data) = nullptr;
+    bool (*loading)(Ctx* cx, void* data) = nullptr;
+    El* (*renderLoading)(Ctx* cx, void* data, UiSize size) = nullptr;
+    bool (*hasMore)(Ctx* cx, void* data) = nullptr;
+    int (*loadMoreThreshold)(void* data) = nullptr;
+    void (*loadMore)(Ctx* cx, void* data) = nullptr;
+    El* (*renderLastEmptyCol)(Ctx* cx, void* data) = nullptr;
+    void (*visibleRowsChanged)(Ctx* cx, void* data, int first,
+                               int end) = nullptr;
+    void (*visibleColumnsChanged)(Ctx* cx, void* data, int first,
+                                  int end) = nullptr;
+    Str (*cellText)(Ctx* cx, void* data, int row, int col) = nullptr;
 };
 
 struct DataTable {
@@ -13880,9 +19166,7 @@ struct DataTable {
     int nRows = 0;
     bool stripe = false;
 
-    const TableGroupCell* groupRows[4] = {};
-    int groupRowLens[4] = {};
-    int nGroupHeaders = 0;
+    ArenaVec<TableGroupHeader> groupHeaders;
 
     float h = 0;
 
@@ -13903,9 +19187,12 @@ struct DataTable {
     float rowHeight = 32;
 
     UiSize size = UiSize::Medium;
+    TableDelegate delegate = {};
+    bool hasDelegate = false;
 
     static DataTable* New(Ctx* cx, Str id, Entity<TableState> state);
     DataTable* Columns(const TableColumn* cols, int n);
+    DataTable* Delegate(const TableDelegate& value);
     DataTable* Rows(int n, void* data,
                     El* (*cell)(Ctx* cx, void* data, int row, int col));
     DataTable* Stripe(bool v);
@@ -14240,9 +19527,7 @@ struct TextView {
     void* tableActionsData = nullptr;
     void* codeActionsData = nullptr;
 
-    static const int kMaxPlugins = 8;
-    MdPlugin plugins[kMaxPlugins] = {};
-    int nPlugins = 0;
+    ArenaVec<MdPlugin> plugins = {};
 
     float tableColW = 64;
 
@@ -14426,6 +19711,9 @@ struct VirtualList {
     Listener onRenderRow;
     El* (*row)(Ctx* cx, int ix) = nullptr;
 
+    VirtualRowFn rowWithUser = nullptr;
+    void* rowUser = nullptr;
+
     int scrollId = 0;
     Listener onScroll = {};
 
@@ -14446,6 +19734,7 @@ struct VirtualList {
     VirtualList* Pad(float v);
 
     VirtualList* Row(El* (*fn)(Ctx*, int));
+    VirtualList* Row(VirtualRowFn fn, void* user);
     El* IntoEl();
 };
 
@@ -14453,6 +19742,14 @@ struct VirtualList {
 }
 
 #line 1 "src/ui/lib.h"
+
+namespace gpui {
+namespace component {
+
+void Init(App* app);
+
+}
+}
 
 #line 1 "src/sys/sysinfo.h"
 
@@ -14523,167 +19820,6 @@ void SysSortProcesses(SysState* s, ProcessSort field, bool descending,
 
 TempStr FormatBytes(uint64_t bytes);
 TempStr FormatPct(float v, int decimals);
-}
-
-#line 1 "src/base/actions.h"
-
-namespace gpui {
-
-namespace action {
-
-uint32_t Confirm();
-
-constexpr intptr_t kConfirmSecondary = 1;
-uint32_t Cancel();
-uint32_t SelectUp();
-uint32_t SelectDown();
-uint32_t SelectLeft();
-uint32_t SelectRight();
-uint32_t SelectFirst();
-uint32_t SelectLast();
-uint32_t SelectPrevColumn();
-uint32_t SelectNextColumn();
-uint32_t SelectPageUp();
-uint32_t SelectPageDown();
-
-}
-
-struct CancelKeys {
-    Listener onCancel = {};
-
-    static void OnAction(CancelKeys* self, Ctx* cx, const ActionEvent* ev);
-};
-
-void CancelInitKeys(const char* context);
-
-void CancelBindKeys(Ctx* cx, El* root, const char* context, Str name,
-                    Listener onCancel);
-
-}
-
-#line 1 "src/gpui/keymap.h"
-
-namespace gpui {
-
-struct KeyChord {
-    int vk = 0;
-    bool shift = false;
-    bool ctrl = false;
-    bool alt = false;
-
-    bool platform = false;
-};
-
-bool KeyChordParse(Str spec, KeyChord* out);
-bool KeyChordEq(const KeyChord& a, const KeyChord& b);
-
-const int kMaxContextDepth = 8;
-
-const int kMaxStrokes = 3;
-
-int KeyChordsParse(Str spec, KeyChord* out, int maxChords);
-
-uint32_t ActionOf(Str name);
-
-uint32_t KeyContextOf(Str name);
-
-struct KeyBinding {
-    const char* stroke = nullptr;
-    uint32_t action = 0;
-    const char* context = nullptr;
-
-    intptr_t arg = 0;
-};
-
-void KeymapBind(const KeyBinding* bindings, int n);
-void KeymapClear();
-
-uint32_t KeymapGeneration();
-
-struct KeyMatch {
-    uint32_t action = 0;
-
-    intptr_t arg = 0;
-    bool pending = false;
-};
-
-KeyMatch KeymapMatch(const KeyChord& chord, const uint32_t* contexts,
-                     int nContexts);
-
-bool KeymapBindingForAction(uint32_t action, const uint32_t* contexts,
-                            int nContexts, KeyChord* out);
-
-bool KeymapAnyBindingForAction(uint32_t action, KeyChord* out);
-
-Str KeyName(int vk);
-
-bool KeymapPending();
-
-void KeymapClearPending();
-
-}
-
-#line 1 "src/base/input_keys.h"
-
-namespace gpui {
-
-namespace input {
-
-uint32_t Backspace();
-uint32_t Copy();
-uint32_t Cut();
-uint32_t Delete();
-uint32_t DeleteToBeginningOfLine();
-uint32_t DeleteToEndOfLine();
-uint32_t DeleteToNextWordEnd();
-uint32_t DeleteToPreviousWordStart();
-uint32_t Escape();
-uint32_t Indent();
-uint32_t IndentInline();
-uint32_t MoveDown();
-uint32_t MoveEnd();
-uint32_t MoveHome();
-uint32_t MoveLeft();
-uint32_t MovePageDown();
-uint32_t MovePageUp();
-uint32_t MoveRight();
-uint32_t MoveToEnd();
-uint32_t MoveToNextWord();
-uint32_t MoveToPreviousWord();
-uint32_t MoveToStart();
-uint32_t MoveUp();
-uint32_t Outdent();
-uint32_t OutdentInline();
-uint32_t Paste();
-uint32_t Redo();
-uint32_t Replace();
-uint32_t Search();
-uint32_t SelectAll();
-uint32_t SelectDown();
-uint32_t SelectLeft();
-uint32_t SelectRight();
-uint32_t SelectToEnd();
-uint32_t SelectToEndOfLine();
-uint32_t SelectToNextWordEnd();
-uint32_t SelectToPreviousWordStart();
-uint32_t SelectToStart();
-uint32_t SelectToStartOfLine();
-uint32_t SelectUp();
-uint32_t Undo();
-uint32_t Enter();
-
-}
-
-Str InputContext();
-
-void InputInitKeys();
-
-InputAction InputActionOf(uint32_t id, intptr_t arg = 0);
-
-constexpr bool InputEnterShift(intptr_t arg) {
-    return (arg & 2) != 0;
-}
-
 }
 
 #line 1 "src/fps/fps.h"
@@ -14793,6 +19929,23 @@ El* FpsMonitorEl(Ctx* cx);
 
 }
 
+#line 1 "src/gpui/accessibility_win.h"
+
+namespace gpui {
+
+#if GPUI_OS_WINDOWS
+struct WinAccessibility;
+
+WinAccessibility* AccessibilityWinNew(Window* win, void* hwnd);
+void AccessibilityWinClose(WinAccessibility* accessibility);
+intptr_t AccessibilityWinGetObject(WinAccessibility* accessibility,
+                                   uintptr_t wParam, intptr_t lParam);
+void AccessibilityWinTreeChanged(WinAccessibility* accessibility);
+void AccessibilityWinFocusChanged(WinAccessibility* accessibility, int focusId);
+#endif
+
+}
+
 #line 1 "src/gpui/asset_icons.h"
 
 namespace gpui {
@@ -14838,16 +19991,22 @@ void ImageCacheClear();
 namespace gpui {
 
 enum {
-    kFontWeightMask = 3,
+    kFontWeightMask = 15,
     kFontWeightNormal = 0,
-    kFontWeightSemibold = 1,
-    kFontWeightBold = 2,
-    kFontWeightMedium = 3,
-    kFontMono = 4,
-    kFontUnderline = 8,
-    kFontItalic = 16,
+    kFontWeightThin = 1,
+    kFontWeightExtraLight = 2,
+    kFontWeightLight = 3,
+    kFontWeightExplicitNormal = 4,
+    kFontWeightMedium = 5,
+    kFontWeightSemibold = 6,
+    kFontWeightBold = 7,
+    kFontWeightExtraBold = 8,
+    kFontWeightBlack = 9,
+    kFontMono = 16,
+    kFontUnderline = 32,
+    kFontItalic = 64,
 
-    kFontStrike = 32
+    kFontStrike = 128
 };
 
 const float kLineHeight = 1.618034f;
@@ -15086,6 +20245,9 @@ int PlatDoubleClickMs();
 void* PlatWindowHandle(Window* win);
 
 void PlatInstallAccessibilityHitTest(Window* win);
+
+void PlatAccessibilityTreeChanged(Window* win);
+void PlatAccessibilityFocusChanged(Window* win, int focusId);
 
 struct PlatMenuItem {
     const char* label = nullptr;
@@ -17224,6 +22386,8 @@ SizeF ComputeContentSizeContribution(PointF location, SizeF size,
 
 #endif
 
+#line 1 "src/ui/element_ext.h"
+
 #line 1 "src/ui/html.h"
 
 namespace gpui {
@@ -17255,93 +22419,6 @@ HtmlInlineTag HtmlParseInlineTag(Arena* a, Str tag);
 Str HtmlAttrValue(Arena* a, Str attrs, const char* name);
 
 }
-}
-
-#line 1 "src/ui/resizable.h"
-
-namespace gpui {
-
-namespace component {
-
-using ResizableState = gpui::ResizableState;
-
-struct Resizable {
-
-    static gpui::Resizable* New(Ctx* cx, Str id,
-                                Entity<ResizableState> state = {},
-                                Axis axis = Axis::Horizontal);
-};
-
-}
-}
-
-#line 1 "src/ui/theme.h"
-
-namespace gpui {
-
-const int kNumShadcnColumns = 11;
-
-struct ShadcnScale {
-    const char* name;
-    uint32_t hex[kNumShadcnColumns];
-};
-
-extern const ShadcnScale kShadcnScales[];
-extern const int kNumShadcnScales;
-extern const int kShadcnScaleNums[kNumShadcnColumns];
-
-extern const uint32_t kShadcnStone[kNumShadcnColumns];
-extern const uint32_t kShadcnBlack;
-extern const uint32_t kShadcnWhite;
-
-extern const char* const kDefaultThemeJson;
-
-bool ThemeParseColor(Str s, Rgba* out);
-
-bool ThemeParseBackground(Str s, Background* out);
-
-struct ThemeConfig {
-    Str name = {};
-    Str author = {};
-    Str url = {};
-    ThemeMode mode = ThemeMode::Light;
-    bool isDefault = false;
-
-    const JsonValue* colors = nullptr;
-
-    float fontSize = 0;
-    float radius = -1;
-    float radiusLg = -1;
-};
-
-bool ThemeConfigNames(const ThemeConfig* cfg, const char* key);
-
-void ThemeConfigResolve(Theme* out, const ThemeConfig* cfg, const Theme& base);
-
-void ThemeRegistryInit();
-
-int ThemeRegistryLoadStr(Str json);
-
-int ThemeRegistryLoadDir(Str dir);
-
-bool ThemeApplySemanticConfigStr(ThemeMode mode, Str json,
-                                 SemanticThemeTokens* out = nullptr);
-
-bool ThemeSemanticConfigApply(const JsonValue* doc, SemanticThemeTokens* io);
-
-int ThemeRegistryCount();
-const ThemeConfig* ThemeRegistryAt(int ix);
-const ThemeConfig* ThemeRegistryFind(Str name);
-
-Str ThemeRegistryActive(ThemeMode mode);
-
-bool ThemeRegistryApply(App* app, const ThemeConfig* cfg);
-bool ThemeRegistryApply(App* app, Str name);
-
-void ThemeRegistryReset(App* app);
-
-void ThemeRegistryFree();
-
 }
 
 #line 1 "src/wry/wry.h"

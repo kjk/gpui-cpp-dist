@@ -103,7 +103,7 @@ El* TableApp::Render(TableApp* app, Ctx* cx) {
     Arena* frame = cx->a;
 
     WinSize size = WindowSize(cx->win);
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     app->viewH = size.dipH;
     app->tableTopPage = kPagePad + kAboveH + kPageGap;
 
@@ -208,6 +208,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     Entity<TableApp> view = EntityNew<TableApp>(app);
     TableApp* self = view.Get(app);
     (void)self;

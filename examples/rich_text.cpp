@@ -115,7 +115,7 @@ static void OnLink(RichApp* self, Ctx* cx, const ClickEvent*, intptr_t href) {
 
 El* RichApp::Render(RichApp* self, Ctx* cx) {
     Arena* frame = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
 
     El* bar =
         Div(frame)
@@ -155,6 +155,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     ThemeSet(app, ThemeMode::Dark);
     // Where the images in the two documents are looked up, the same way the
     // icons of any other example are.

@@ -93,7 +93,7 @@ struct SheetStory {
 static component::ListItem* SheetFoodRow(Ctx* cx, void* data, int, int row,
                                          int entry) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     SheetStory* self = (SheetStory*)data;
     El* line =
         Div(a)->FlexRow()->W(kFill)->Gap(8)->ItemsCenter()->JustifyBetween();
@@ -171,7 +171,7 @@ static void SheetNotify(SheetStory*, Ctx* cx, const ClickEvent*) {
 El* SheetStory::Render(SheetStory* self, Ctx* cx) {
     WinSize size = WindowSize(cx->win);
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     if (!self->seeded) {
         self->seeded = true;
         InputSetPlaceholder(&self->focusInput,
@@ -323,6 +323,7 @@ El* SheetStory::Render(SheetStory* self, Ctx* cx) {
                            ? 400.f
                            : 540.f)
                 ->Overlay(self->overlay)
+                ->OverlayClosable(self->overlayClosable)
                 ->Body(body)
                 ->Scroll(7, self->sheetScrollY, Listen(cx, &OnSheetScroll))
                 ->OnClose(Listen(cx, &CloseSheet));

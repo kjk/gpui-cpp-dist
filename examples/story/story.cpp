@@ -240,7 +240,7 @@ El* StoryTxt(Ctx* cx, Str s, float px, Rgba c) {
 
 El* StorySection(Ctx* cx, const char* title, const char* desc) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     // Rust StorySection is an outline GroupBox: title sits above a bordered
     // content pane that centers its children (crates/story/src/lib.rs).
     // mb_6 on the GroupBox: every section carries its own bottom margin, on
@@ -350,7 +350,7 @@ static const char* StorySizeName(UiSize s) {
 // group, drawing the stroke and costing no layout.
 static El* ToolbarGroup(Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     return Div(a)
         ->FlexRow()
         ->ItemsStart()
@@ -361,7 +361,7 @@ static El* ToolbarGroup(Ctx* cx) {
 
 static El* ToolbarSep(Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     return Div(a)->W(1)->H(24)->Shrink0()->Bg(th.border);
 }
 
@@ -370,7 +370,7 @@ static El* ToolbarSep(Ctx* cx) {
 // cover the stroke that straddles the group's edge.
 static El* ToolbarDropBtn(Ctx* cx, Str label) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     return Div(a)
         ->H(24)
         ->PadX(8)
@@ -391,7 +391,7 @@ static El* ToolbarDropBtn(Ctx* cx, Str label) {
 static El* ToolbarCheckRow(Ctx* cx, Listener onAct, int act, const char* label,
                            bool on, bool gutter) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     El* row = Div(a)
                   ->H(26)
                   ->MinW(120)
@@ -420,7 +420,7 @@ static El* ToolbarCheckRow(Ctx* cx, Listener onAct, int act, const char* label,
 // PopupMenu::separator.
 static El* ToolbarMenuSep(Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     // No width of its own: `align: stretch` is what makes it as wide as the
     // menu, where `W(kFill)` would make it as wide as whatever the menu is
     // floating over — and take the menu with it.
@@ -429,7 +429,7 @@ static El* ToolbarMenuSep(Ctx* cx) {
 
 static El* ToolbarMenu(Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     return Div(a)
         ->FlexCol()
         ->Pad(4)
@@ -619,7 +619,7 @@ El* StoryToolbarDropdown(Ctx* cx, Str id, Str label, bool open, Listener onOpen,
 
 El* StoryComingSoon(Ctx* cx, int story) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     const StoryInfo* m = StoryMeta(story);
     return Div(a)
         ->FlexCol()
@@ -677,7 +677,7 @@ static void OnPaneScroll(StoryApp* app, Ctx* cx, const ScrollEvent* ev) {
 
 static El* SidebarList(StoryApp* app, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     El* list = Div(a)->FlexCol()->Gap(2)->Pad(8);
     const char* q = InputCStr(&app->search);
     for (int i = 0; i < StoryCount; i++) {
@@ -719,7 +719,7 @@ static El* SidebarList(StoryApp* app, Ctx* cx) {
 // that one, and it draws at the base's own 12px rather than at input_text_size.
 static El* SearchBox(StoryApp* app, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     El* box = Div(a)
                   ->H(36)
                   ->W(kFill)
@@ -759,7 +759,7 @@ static float SidebarWidth(Ctx* cx) {
 
 static El* Sidebar(StoryApp* app, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     float w = app->collapsed ? 56.f : SidebarWidth(cx);
     // Rust puts this sidebar in a `resizable_panel()`, whose width is not up
     // for negotiation with the pane beside it. A plain flex item is, so it
@@ -809,7 +809,7 @@ static El* Sidebar(StoryApp* app, Ctx* cx) {
 
 static El* Header(StoryApp* app, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     const StoryInfo* m = StoryMeta(app->story);
     return Div(a)
         ->W(kFill)
@@ -830,7 +830,7 @@ static El* Header(StoryApp* app, Ctx* cx) {
 // the window drag region.
 static El* StoryTitleMenuItem(Ctx* cx, Str label, bool semibold) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     El* text = StoryTxt(cx, label, 14, th.foreground);
     if (semibold) {
         text->Semibold();
@@ -854,7 +854,7 @@ Entity<component::NotificationListState> StoryNotifications(Ctx* cx) {
 }
 
 void StoryPushNotification(Ctx* cx, Str message) {
-    WindowPushNotification(cx, component::NotificationKind::None, message);
+    WindowPushNotification(cx, message);
 }
 
 static int StoryNotificationCount(Ctx* cx) {
@@ -980,16 +980,16 @@ static const ApRow kAppearance[] = {
 static const int kAppearanceRows = (int)(sizeof(kAppearance) / sizeof(ApRow));
 
 // menu_with_check: which row is the one in force.
-static bool ApChecked(const StoryApp* app, const ApRow& r) {
+static bool ApChecked(const StoryApp* app, Ctx* cx, const ApRow& r) {
     switch (r.kind) {
         case ApKind::Font:
-            return ThemeFontSize() == r.value;
+            return ThemeFontSize(cx->app) == r.value;
         case ApKind::Radius:
-            return ThemeNow().radius == r.value;
+            return ThemeNow(cx->app).radius == r.value;
         case ApKind::Scroll:
-            return ScrollbarModeNow() == (ScrollbarMode)(int)r.value;
+            return ScrollbarModeNow(cx->app) == (ScrollbarMode)(int)r.value;
         case ApKind::ListHighlight:
-            return ListSettingsNow().activeHighlight;
+            return ListSettingsNow(cx->app).activeHighlight;
         case ApKind::Fps:
             return app->fpsMonitor;
         case ApKind::MenuBar:
@@ -997,7 +997,7 @@ static bool ApChecked(const StoryApp* app, const ApRow& r) {
         case ApKind::Reduce:
             return MotionReduced();
         case ApKind::Ring:
-            return ThemeFocusRing();
+            return ThemeFocusRing(cx->app);
         default:
             return false;
     }
@@ -1082,7 +1082,7 @@ struct AboutDialog {
 
     static El* Render(AboutDialog*, Ctx* cx) {
         Arena* a = cx->a;
-        const Theme& th = cx->theme();
+        const Theme& th = ThemeNow(cx->app);
         El* body = Div(a)->FlexCol()->Gap(8)->W(kFill);
         body->Child(
             StoryTxt(cx,
@@ -1126,7 +1126,7 @@ static El* AppearanceMenu(StoryApp* app, Ctx* cx) {
             default:
                 menu->MenuWithAction(Str(r.label), ApAction(r.kind),
                                      (intptr_t)r.value);
-                menu->Checked(ApChecked(app, r));
+                menu->Checked(ApChecked(app, cx, r));
                 break;
         }
     }
@@ -1214,7 +1214,7 @@ static void OnSwitchThemeModeAction(StoryApp*, Ctx* cx, const ActionEvent* ev) {
 // SelectTheme(name): the registry resolves the file into the palette for its
 // own mode, and switching to that mode is what puts it on screen.
 static void OnSelectThemeAction(StoryApp*, Ctx* cx, const ActionEvent* ev) {
-    const ThemeConfig* cfg = ThemeRegistryAt((int)ev->arg);
+    const ThemeConfig* cfg = ThemeRegistryAt(cx->app, (int)ev->arg);
     if (!cfg || !ThemeRegistryApply(cx->app, cfg)) {
         return;
     }
@@ -1260,28 +1260,28 @@ static void StoryInitKeys() {
 // window is what the menu is over, and the story is the entity that answers
 // for both.
 static void OnSelectFontAction(StoryApp*, Ctx* cx, const ActionEvent* ev) {
-    ThemeSetFontSize((float)ev->arg);
+    ThemeSetFontSize(cx->app, (float)ev->arg);
     // window.refresh(), and the layout memo goes with it: a font size or a
     // radius changes every box that inherited one.
     Notify(cx);
 }
 
 static void OnSelectRadiusAction(StoryApp*, Ctx* cx, const ActionEvent* ev) {
-    ThemeSetRadius((float)ev->arg);
+    ThemeSetRadius(cx->app, (float)ev->arg);
     Notify(cx);
 }
 
 static void OnSelectScrollbarModeAction(StoryApp*, Ctx* cx,
                                         const ActionEvent* ev) {
-    ScrollbarModeSet((ScrollbarMode)(int)ev->arg);
+    ScrollbarModeSet(cx->app, (ScrollbarMode)(int)ev->arg);
     Notify(cx);
 }
 
 static void OnToggleListActiveHighlightAction(StoryApp*, Ctx* cx,
                                               const ActionEvent*) {
-    ListSettings s = ListSettingsNow();
+    ListSettings s = ListSettingsNow(cx->app);
     s.activeHighlight = !s.activeHighlight;
-    ListSettingsSet(s);
+    ListSettingsSet(cx->app, s);
     Notify(cx);
 }
 
@@ -1303,7 +1303,7 @@ static void OnToggleReduceMotionAction(StoryApp*, Ctx* cx, const ActionEvent*) {
 }
 
 static void OnToggleFocusRingAction(StoryApp*, Ctx* cx, const ActionEvent*) {
-    ThemeSetFocusRing(!ThemeFocusRing());
+    ThemeSetFocusRing(cx->app, !ThemeFocusRing(cx->app));
     Notify(cx);
 }
 
@@ -1366,8 +1366,8 @@ static int StoryBuildMenus(Ctx* cx, MenuDef* out, int cap) {
     }
     // The same `themes/` directory the Theme Colors page reads, so the menu
     // lists whatever that page lists whichever of the two is opened first.
-    ThemeRegistryLoadDir(StrL("themes"));
-    bool dark = ThemeGet() == ThemeMode::Dark;
+    ThemeRegistryLoadDir(cx->app, StrL("themes"));
+    bool dark = ThemeGet(cx->app) == ThemeMode::Dark;
 
     MenuRow* appearance = StoryRows(cx, 2);
     appearance[0].label = StrL("Light");
@@ -1378,11 +1378,11 @@ static int StoryBuildMenus(Ctx* cx, MenuDef* out, int cap) {
     appearance[1].arg = 1;
     appearance[1].checked = dark;
 
-    Str active = ThemeRegistryActive(ThemeGet());
-    int nThemes = ThemeRegistryCount();
+    Str active = ThemeRegistryActive(cx->app, ThemeGet(cx->app));
+    int nThemes = ThemeRegistryCount(cx->app);
     MenuRow* themes = StoryRows(cx, nThemes > 0 ? nThemes : 1);
     for (int i = 0; i < nThemes; i++) {
-        const ThemeConfig* cfg = ThemeRegistryAt(i);
+        const ThemeConfig* cfg = ThemeRegistryAt(cx->app, i);
         themes[i].label = cfg->name;
         themes[i].action = ActSelectTheme();
         themes[i].arg = i;
@@ -1523,7 +1523,7 @@ static void StorySetSystemMenus(StoryApp* app, Ctx* cx, const MenuDef* menus,
         return;
     }
     app->menuHash = h;
-    AppSetMenus(cx->app, menus, n);
+    BaseSetAppMenus(cx->app, menus, n);
 }
 
 // The same rows as the menu the title bar draws. `id` keys the menu's state,
@@ -1592,7 +1592,7 @@ static El* StoryMenuBar(Ctx* cx, const MenuDef* menus, int n) {
 static El* StoryTitleBar(StoryApp* app, Ctx* cx, const MenuDef* defs,
                          int nDefs) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
 
     El* menus = Div(a)->FlexRow()->H(kFill)->ItemsCenter();
     if (app->appMenuBar) {
@@ -1642,7 +1642,7 @@ static El* StoryTitleBar(StoryApp* app, Ctx* cx, const MenuDef* defs,
 
 static El* Footer(StoryApp* app, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     const StoryInfo* m = StoryMeta(app->story);
     return Div(a)
         ->W(kFill)
@@ -1672,7 +1672,10 @@ static El* Footer(StoryApp* app, Ctx* cx) {
                 // The theme in force, which is whatever the registry
                 // last installed for this mode rather than always one of
                 // the two defaults.
-                ->Child(StoryTxt(cx, ThemeRegistryActive(ThemeGet()), 12,
+                ->Child(StoryTxt(cx,
+                                 ThemeRegistryActive(cx->app,
+                                                     ThemeGet(cx->app)),
+                                 12,
                                  th.mutedFg))
                 ->Child(StoryTxt(cx, StrL("v0.5.1"), 12, th.mutedFg))
                 // gallery.rs puts the repository link last in the bar's
@@ -1693,7 +1696,7 @@ El* StoryApp::Render(StoryApp* app, Ctx* cx) {
     if (app->search.focused) {
         cx->win->input = &app->search;
     }
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     if (!app->seeded) {
         app->seeded = true;
     }
@@ -1739,9 +1742,19 @@ El* StoryApp::Render(StoryApp* app, Ctx* cx) {
     }
     root->Child(body);
     root->Child(Footer(app, cx));
-    // ToggleFpsMonitor: the HUD places itself over the top right corner.
+    // ToggleFpsMonitor: the HUD places itself in the top right corner of
+    // whatever it is put in, so what it is put in is a strip that starts
+    // under the title bar -- `div().absolute().top(TITLE_BAR_HEIGHT).left_0()
+    // .right_0()` in StoryRoot::render. Without it the HUD is laid over the
+    // caption's own buttons. A window with no title bar of its own, like the
+    // fps_monitor example, hands it the whole window and it sits at the top.
     if (app->fpsMonitor) {
-        root->Child(FpsMonitorEl(cx));
+        root->Child(Div(frame)
+                        ->Absolute()
+                        ->Top(component::kTitleBarHeight)
+                        ->Left(0)
+                        ->Right(0)
+                        ->Child(FpsMonitorEl(cx)));
     }
     // Bordered only where the window is client-decorated; a system frame
     // draws its own, and Rust's window_border is the Linux CSD wrapper.
@@ -1802,6 +1815,7 @@ static void ParseSlug(int argc, char** argv, char* out, int cap) {
 
 int GpuiMain(int argc, char** argv) {
     App* app = AppNew();
+    component::Init(app);
     // cx.set_app_identity(..): what the platform calls the application when it
     // shows one of its notifications. Windows names the notification area icon
     // with it; the other backends do not have one to name yet.
@@ -1815,8 +1829,8 @@ int GpuiMain(int argc, char** argv) {
     // A theme out of the registry named in the environment, so a screenshot
     // of one is reproducible the way GPUI_TODAY makes the calendar's today.
     if (const char* themeName = getenv("GPUI_THEME")) {
-        ThemeRegistryLoadDir(StrL("themes"));
-        const ThemeConfig* cfg = ThemeRegistryFind(Str(themeName));
+        ThemeRegistryLoadDir(app, StrL("themes"));
+        const ThemeConfig* cfg = ThemeRegistryFind(app, Str(themeName));
         if (cfg) {
             ThemeRegistryApply(app, cfg);
             ThemeSet(app, cfg->mode);

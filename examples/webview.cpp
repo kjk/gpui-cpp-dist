@@ -26,7 +26,7 @@ struct Example {
 
     static El* Render(Example* self, Ctx* cx) {
         Arena* a = cx->a;
-        const Theme& th = cx->theme();
+        const Theme& th = ThemeNow(cx->app);
 
         // The webview is made on the first frame, because that is the first
         // time there is a window to parent it into. `started` is set before
@@ -66,6 +66,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     ThemeSet(app, ThemeMode::Dark);
 
     Entity<Example> view = EntityNew<Example>(app);

@@ -206,7 +206,7 @@ static void OnRedo(TilesApp* self, Ctx* cx, const ClickEvent*) {
 
 El* TilesApp::Render(TilesApp* self, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     if (!self->seeded) {
         self->seeded = true;
         self->tiles = EntityNewState<TilesState>(cx->app);
@@ -290,6 +290,7 @@ int GpuiMain(int argc, char** argv) {
     (void)argc;
     (void)argv;
     App* app = AppNew();
+    component::Init(app);
     AssetsClear();
     AssetsAddDefaultRoots(StrL("tiles"));
     Entity<TilesApp> view = EntityNew<TilesApp>(app);

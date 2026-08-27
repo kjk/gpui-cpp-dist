@@ -51,14 +51,14 @@ static void OnButtonClick(ButtonStory*, Ctx*, const ClickEvent*) {
     logf("Button clicked\n");
 }
 
-// The Selection group reports the indices selected after the click, one bit
-// per child, and this page keeps its four flags in them.
-static void OnSelectionGroup(ButtonStory* self, Ctx* cx, const ClickEvent*,
-                             intptr_t bits) {
-    self->disabled = (bits & 1) != 0;
-    self->loading = (bits & 2) != 0;
-    self->selected = (bits & 4) != 0;
-    self->compact = (bits & 8) != 0;
+// The Selection group reports the ordered indices selected after the click,
+// and this page keeps its four flags in them.
+static void OnSelectionGroup(ButtonStory* self, Ctx* cx,
+                             const component::ButtonGroupEvent* ev) {
+    self->disabled = ev->Contains(0);
+    self->loading = ev->Contains(1);
+    self->selected = ev->Contains(2);
+    self->compact = ev->Contains(3);
     Notify(cx);
 }
 
@@ -76,15 +76,15 @@ static component::Button* Btn(Ctx* cx, ButtonStory* self, const char* id) {
     return b;
 }
 
-static El* ProgressIcon(Ctx* cx, float value, Rgba color, bool hasColor) {
+static component::ButtonIcon* ProgressIcon(Ctx* cx, float value, Rgba color,
+                                            bool hasColor) {
     component::ProgressCircle* p = component::ProgressCircle::New(cx)
                                        ->Value(value)
-                                       ->Size(14)
                                        ->Label(false);
     if (hasColor) {
         p->Color(color);
     }
-    return p->IntoEl();
+    return component::ButtonIcon::New(cx, p);
 }
 
 struct BtnVarSpec {
@@ -95,7 +95,7 @@ struct BtnVarSpec {
 
 El* ButtonStory::Render(ButtonStory* self, Ctx* cx) {
     Arena* a = cx->a;
-    const Theme& th = cx->theme();
+    const Theme& th = ThemeNow(cx->app);
     UiSize size = self->toolbar.size;
     El* page = Div(a)->FlexCol()->Gap(24)->W(kFill);
 
@@ -189,7 +189,7 @@ El* ButtonStory::Render(ButtonStory* self, Ctx* cx) {
     progRow->Child(component::Button::New(cx, StrL("progress-button-1"))
                        ->WithSize(size)
                        ->Primary()
-                       ->Extra(ProgressIcon(cx, 25, th.primaryFg, true))
+                       ->Icon(ProgressIcon(cx, 25, th.primaryFg, true))
                        ->Label(StrL("Installing..."))
                        ->IntoEl());
     const float kProgress[] = {35, 68, 85};
@@ -197,7 +197,7 @@ El* ButtonStory::Render(ButtonStory* self, Ctx* cx) {
         progRow->Child(component::Button::New(
                            cx, StoryFmt(cx, "progress-button-%d", i + 2))
                            ->WithSize(size)
-                           ->Extra(ProgressIcon(cx, kProgress[i], {}, false))
+                           ->Icon(ProgressIcon(cx, kProgress[i], {}, false))
                            ->Label(StrL("Installing..."))
                            ->IntoEl());
     }
