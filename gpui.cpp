@@ -5710,7 +5710,8 @@ El* ButtonSmall(Arena* a, int clickId, Str label, BtnKind kind, bool selected) {
                 ->JustifyCenter()
                 ->Radius(th.radius)
                 ->Click(clickId)
-                ->FocusId(clickId);
+                ->FocusId(clickId)
+                ->FocusRing(true);
     if (kind == BtnKind::Primary) {
         b->PadX(16)
             ->PadY(8)
@@ -12063,6 +12064,10 @@ static ImageCacheSlot* ImageSlotFor(PaintApp* pa, Str src) {
             }
         } else if (pa) {
             img = ImageDecode(pa, bytes, len);
+        } else {
+
+            owned.Reset();
+            return nullptr;
         }
     }
 
@@ -65191,10 +65196,8 @@ El* TextView::ImageRun(MdRun* r, float font, Rgba color, bool inFlow) {
     if (h > 0) {
         e->H(h);
     }
-    if (w <= 0) {
 
-        e->MaxW(kFill);
-    }
+    e->MaxW(kFill);
     if ((r->marks & MdLink) && r->href.len > 0) {
         e->Cursor(CursorKind::Pointer);
         if (onLink.IsValid()) {
@@ -133742,7 +133745,24 @@ Str RevertUriWorkAround(Str uri, Str httpOrHttps, Str protocol) {
 #include <sys/mount.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
-#import <WebKit/WebKit.h>
+#import <WebKit/WKFrameInfo.h>
+#import <WebKit/WKNavigation.h>
+#import <WebKit/WKNavigationAction.h>
+#import <WebKit/WKNavigationDelegate.h>
+#import <WebKit/WKOpenPanelParameters.h>
+#import <WebKit/WKPreferences.h>
+#import <WebKit/WKScriptMessage.h>
+#import <WebKit/WKScriptMessageHandler.h>
+#import <WebKit/WKSecurityOrigin.h>
+#import <WebKit/WKUIDelegate.h>
+#import <WebKit/WKURLSchemeHandler.h>
+#import <WebKit/WKURLSchemeTask.h>
+#import <WebKit/WKUserContentController.h>
+#import <WebKit/WKUserScript.h>
+#import <WebKit/WKWebsiteDataStore.h>
+#import <WebKit/WKWebView.h>
+#import <WebKit/WKWebViewConfiguration.h>
+#import <WebKit/WKWindowFeatures.h>
 #endif
 
 #if GPUI_OS_WASM
@@ -136273,9 +136293,30 @@ int TextLayoutHitPoint(TextLayout* tl, Str s, float relX, float relY) {
     }
     int index = 0;
     int trailing = 0;
-    pango_layout_xy_to_index(tl->layout, (int)(relX * PANGO_SCALE),
-                             (int)((relY - BoxPad(tl)) * PANGO_SCALE), &index,
-                             &trailing);
+    int px = (int)(relX * PANGO_SCALE);
+    bool inside = pango_layout_xy_to_index(
+        tl->layout, px, (int)((relY - BoxPad(tl)) * PANGO_SCALE), &index,
+        &trailing);
+
+    if (!inside) {
+        int lineNo = 0;
+        int lineX = 0;
+        pango_layout_index_to_line_x(tl->layout, index, FALSE, &lineNo,
+                                     &lineX);
+        PangoLayoutLine* line =
+            pango_layout_get_line_readonly(tl->layout, lineNo);
+        if (line) {
+            PangoRectangle logical = {};
+            pango_layout_line_get_extents(line, nullptr, &logical);
+            if (px <= logical.x) {
+                index = line->start_index;
+                trailing = 0;
+            } else if (px >= logical.x + logical.width) {
+                index = line->start_index + line->length;
+                trailing = 0;
+            }
+        }
+    }
 
     const char* text = pango_layout_get_text(tl->layout);
     while (trailing > 0 && text && text[index]) {
@@ -137379,10 +137420,53 @@ EM_JS(void, GpJsInit, (), {
     };
     G.measurer = function() {
         if (!G.meas) {
-            const c = document.createElement("canvas");
-            c.width = 8;
-            c.height = 8;
-            G.meas = c.getContext("2d");
+            if (typeof document !== "undefined") {
+                const c = document.createElement("canvas");
+                c.width = 8;
+                c.height = 8;
+                G.meas = c.getContext("2d");
+            } else {
+
+                G.meas = {
+                    font: "400 16px sans-serif",
+                    measureText: function(s) {
+                        const font = this.font || "400 16px sans-serif";
+                        const marker = font.indexOf("px");
+                        let start = marker;
+                        while (start > 0) {
+                            const code = font.charCodeAt(start - 1);
+                            if ((code < 48 || code > 57) && code !== 46) {
+                                break;
+                            }
+                            start--;
+                        }
+                        const parsed = marker > start
+                            ? Number(font.slice(start, marker)) : 16;
+                        const px = parsed > 0 ? parsed : 16;
+                        let units = 0;
+                        for (let i = 0; i < s.length; i++) {
+                            const code = s.charCodeAt(i);
+                            if (code === 9) {
+                                units += 4;
+                            } else if (code === 32) {
+                                units += 0.33;
+                            } else if (code >= 0xd800 && code < 0xdc00) {
+                                units += 1;
+                                i++;
+                            } else if (code < 0x80) {
+                                units += 0.6;
+                            } else {
+                                units += 1;
+                            }
+                        }
+                        return {
+                            width: units * px,
+                            fontBoundingBoxAscent: px * 0.8,
+                            fontBoundingBoxDescent: px * 0.2
+                        };
+                    }
+                };
+            }
         }
         return G.cur || G.meas;
     };

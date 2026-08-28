@@ -4064,7 +4064,7 @@ struct Style {
 
     uint32_t keyContext = 0;
 
-    bool focusRing = true;
+    bool focusRing = false;
     int trapId = 0;
     Str tooltip;
 };
@@ -4773,7 +4773,8 @@ struct El {
     El* OnKeyDown(Listener fn);
     El* TabIndex(int v);
     El* TabStop(bool v);
-    El* FocusRing(bool v);
+
+    El* FocusRing(bool v = true);
     El* TrapId(int v);
     El* Tip(Str s);
     El* Id(Str s);
