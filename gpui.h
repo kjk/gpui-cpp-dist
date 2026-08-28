@@ -116,11 +116,17 @@ bool PlatDirExists(const char* path);
 bool PlatFileExists(const char* path);
 void PlatGetCwd(char* out, int cap);
 
+bool PlatCanonicalPath(const char* path, char* out, int cap);
+
 void PlatGetExeDir(char* out, int cap);
 
 struct DirEntry {
     char name[260] = {};
     bool isDir = false;
+    bool isFile = false;
+    bool isSymlink = false;
+    uint64_t size = 0;
+    uint64_t modified = 0;
 };
 
 int PlatListDir(const char* dir, DirEntry* out, int max);
@@ -936,8 +942,45 @@ void StrFree(const char*) = delete;
 Str StrDup(Arena*, Str str);
 Str StrDup(Str s);
 
-bool StrEqI(Str s1, Str s2);
+GPUI_NOINLINE bool StrEqRest(Str s1, Str s2);
+inline bool StrEq(Str s1, Str s2) {
+    if (s1.len != s2.len) {
+        return false;
+    }
+    return StrEqRest(s1, s2);
+}
+bool StrEq(Str s1, const char* s2);
+GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2);
+inline bool StrEqI(Str s1, Str s2) {
+    if (s1.len != s2.len) {
+        return false;
+    }
+    return StrEqIRest(s1, s2);
+}
+bool StrEqI(Str s1, const char* s2);
+bool StrStartsWith(Str s, Str prefix);
+bool StrStartsWith(Str s, const char* prefix);
+inline bool StrStartsWithI(Str s, Str prefix) {
+    if (prefix.len > s.len) {
+        return false;
+    }
+    return StrEqI(Str(s.s, prefix.len), prefix);
+}
+bool StrStartsWithI(Str s, const char* prefix);
+bool StrEndsWith(Str s, Str suffix);
+bool StrEndsWith(Str s, const char* suffix);
+bool StrEndsWithI(Str s, Str suffix);
+bool StrEndsWithI(Str s, const char* suffix);
+int StrFind(Str s, Str sub);
+int StrFind(Str s, const char* sub);
+int StrFindI(Str s, Str sub);
+int StrFindI(Str s, const char* sub);
+bool StrContains(Str s, Str sub);
 bool StrContainsI(Str s, Str sub);
+
+Str StrTrimAscii(Str s);
+
+Str StrReplaceAll(Str value, Str from, Str to);
 
 using SeqStrings = const char*;
 
@@ -1043,9 +1086,6 @@ inline void logf(const char* format, const TArgs&... args) {
 }
 
 #line 1 "src/taffy/geometry.h"
-
-#ifndef GPUI_TAFFY_GEOMETRY_H_
-#define GPUI_TAFFY_GEOMETRY_H_
 
 #include <cmath>
 #include <cfloat>
@@ -1379,12 +1419,7 @@ Slice<T> SliceOne(Arena* a, const T& v) {
 
 }
 
-#endif
-
 #line 1 "src/taffy/style.h"
-
-#ifndef GPUI_TAFFY_STYLE_H_
-#define GPUI_TAFFY_STYLE_H_
 
 namespace taffy {
 
@@ -2591,16 +2626,6 @@ inline bool SameFloatBits(float a, float b) {
     return ab == bb;
 }
 
-inline bool SameStr(base::Str a, base::Str b) {
-    if (a.len != b.len) {
-        return false;
-    }
-    if (a.len == 0) {
-        return true;
-    }
-    return memcmp(a.s, b.s, (size_t)a.len) == 0;
-}
-
 inline bool operator==(MinTrackSizingFunction a, MinTrackSizingFunction b) {
     return a.raw == b.raw;
 }
@@ -2615,7 +2640,7 @@ inline bool operator==(TrackSizingFunction a, TrackSizingFunction b) {
 
 inline bool operator==(const GridPlacement& a, const GridPlacement& b) {
     return a.kind == b.kind && a.line == b.line && a.span == b.span &&
-           SameStr(a.name, b.name);
+           base::StrEq(a.name, b.name);
 }
 
 inline bool operator==(const LinePlacement& a, const LinePlacement& b) {
@@ -2623,7 +2648,7 @@ inline bool operator==(const LinePlacement& a, const LinePlacement& b) {
 }
 
 inline bool operator==(const GridTemplateArea& a, const GridTemplateArea& b) {
-    return SameStr(a.name, b.name) && a.rowStart == b.rowStart &&
+    return base::StrEq(a.name, b.name) && a.rowStart == b.rowStart &&
            a.rowEnd == b.rowEnd && a.columnStart == b.columnStart &&
            a.columnEnd == b.columnEnd;
 }
@@ -2646,7 +2671,7 @@ inline bool SameNames(Slice<base::Str> a, Slice<base::Str> b) {
         return false;
     }
     for (int i = 0; i < a.len; i++) {
-        if (!SameStr(a.els[i], b.els[i])) {
+        if (!base::StrEq(a.els[i], b.els[i])) {
             return false;
         }
     }
@@ -2673,12 +2698,7 @@ inline bool operator==(const GridTemplateComponent& a,
 
 }
 
-#endif
-
 #line 1 "src/taffy/tree.h"
-
-#ifndef GPUI_TAFFY_TREE_H_
-#define GPUI_TAFFY_TREE_H_
 
 namespace taffy {
 
@@ -2906,12 +2926,7 @@ struct Cache {
 
 }
 
-#endif
-
 #line 1 "src/taffy/taffy_tree.h"
-
-#ifndef GPUI_TAFFY_TAFFY_TREE_H_
-#define GPUI_TAFFY_TAFFY_TREE_H_
 
 namespace taffy {
 
@@ -3048,8 +3063,6 @@ struct TaffyTree {
 
 }
 
-#endif
-
 #line 1 "src/gpui/gpui.h"
 
 namespace gpui {
@@ -3072,6 +3085,9 @@ inline Rgba Rgb(uint8_t r, uint8_t g, uint8_t b) {
 }
 inline Rgba Rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     return Rgba{r, g, b, a};
+}
+inline bool RgbaEq(Rgba a, Rgba b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
 inline Rgba RgbaHex(uint32_t hex) {
 
@@ -3328,6 +3344,8 @@ struct MouseMoveEvent {
     float x = 0;
     float y = 0;
 
+    Bounds el = {};
+
     bool pressed = false;
     MouseButton pressedButton = MouseButton::Left;
     Modifiers modifiers = {};
@@ -3336,11 +3354,6 @@ struct MouseMoveEvent {
         return pressed && pressedButton == MouseButton::Left;
     }
 };
-
-inline bool StrSame(Str a, Str b) {
-    return a.len == b.len &&
-           (a.len == 0 || memcmp(a.s, b.s, (size_t)a.len) == 0);
-}
 
 struct DragPayload {
     Str kind = {};
@@ -3488,6 +3501,10 @@ struct HoverEvent {
     bool hovered = false;
 };
 
+struct LineClampEvent {
+    bool clamped = false;
+};
+
 using ListenerFn = void (*)(void* self, Ctx* cx, const void* ev);
 using ListenerArgFn = void (*)(void* self, Ctx* cx, const void* ev,
                                intptr_t arg);
@@ -3562,27 +3579,27 @@ enum class ScrollbarMode : uint8_t {
 };
 
 struct RuntimeStyle {
-    Rgba background = Rgb(0xfa, 0xfa, 0xfa);
-    Rgba foreground = Rgb(0x17, 0x17, 0x17);
-    Rgba mutedForeground = Rgb(0x73, 0x73, 0x73);
-    Rgba border = Rgb(0xe5, 0xe5, 0xe5);
-    Rgba ring = Rgb(0x17, 0x17, 0x17);
-    Rgba inspectorAccent = Rgb(0x3b, 0x82, 0xf6);
-    Rgba popover = Rgb(0xfa, 0xfa, 0xfa);
-    Rgba popoverForeground = Rgb(0x17, 0x17, 0x17);
-    Background progress = Background(Rgb(0x17, 0x17, 0x17));
-    Background scrollbarThumb = Background(Rgba8(0x17, 0x17, 0x17, 0x33));
-    Background scrollbarThumbHover = Background(Rgba8(0x17, 0x17, 0x17, 0x66));
-    Background scrollbarTrack = Background(Rgba8(0, 0, 0, 0));
+    Rgba background{Rgb(0xfa, 0xfa, 0xfa)};
+    Rgba foreground{Rgb(0x17, 0x17, 0x17)};
+    Rgba mutedForeground{Rgb(0x73, 0x73, 0x73)};
+    Rgba border{Rgb(0xe5, 0xe5, 0xe5)};
+    Rgba ring{Rgb(0x17, 0x17, 0x17)};
+    Rgba inspectorAccent{Rgb(0x3b, 0x82, 0xf6)};
+    Rgba popover{Rgb(0xfa, 0xfa, 0xfa)};
+    Rgba popoverForeground{Rgb(0x17, 0x17, 0x17)};
+    Background progress{Rgb(0x17, 0x17, 0x17)};
+    Background scrollbarThumb{Rgba8(0x17, 0x17, 0x17, 0x33)};
+    Background scrollbarThumbHover{Rgba8(0x17, 0x17, 0x17, 0x66)};
+    Background scrollbarTrack{Rgba8(0, 0, 0, 0)};
 
-    Background legacyPrimary = Background(Rgb(0x17, 0x17, 0x17));
-    Rgba legacyPrimaryForeground = Rgb(0xfa, 0xfa, 0xfa);
-    Rgba legacyPrimaryHover = Rgb(0x35, 0x35, 0x35);
-    Background legacyMuted = Background(Rgb(0xf5, 0xf5, 0xf5));
-    Background legacySecondary = Background(Rgb(0xf5, 0xf5, 0xf5));
-    Rgba legacySecondaryForeground = Rgb(0x17, 0x17, 0x17);
-    Rgba legacySecondaryHover = Rgb(0xe5, 0xe5, 0xe5);
-    Rgba legacySecondaryActive = Rgb(0xd4, 0xd4, 0xd4);
+    Background legacyPrimary{Rgb(0x17, 0x17, 0x17)};
+    Rgba legacyPrimaryForeground{Rgb(0xfa, 0xfa, 0xfa)};
+    Rgba legacyPrimaryHover{Rgb(0x35, 0x35, 0x35)};
+    Background legacyMuted{Rgb(0xf5, 0xf5, 0xf5)};
+    Background legacySecondary{Rgb(0xf5, 0xf5, 0xf5)};
+    Rgba legacySecondaryForeground{Rgb(0x17, 0x17, 0x17)};
+    Rgba legacySecondaryHover{Rgb(0xe5, 0xe5, 0xe5)};
+    Rgba legacySecondaryActive{Rgb(0xd4, 0xd4, 0xd4)};
 
     float radius = 6.f;
     float fontSize = 16.f;
@@ -4020,6 +4037,7 @@ struct Style {
     float absTop = kAuto, absLeft = kAuto, absBottom = kAuto, absRight = kAuto;
 
     float absLeftRel = 0, absRightRel = 0;
+    float absTopRel = 0, absBottomRel = 0;
     Background hoverBg = {};
     bool hasHoverBg = false;
 
@@ -4097,48 +4115,187 @@ struct FocusHandle {
 
 enum class AccessibilityRole : uint8_t {
     None,
-    Alert,
-    AlertDialog,
-    Button,
+    Unknown,
+    TextRun,
     Cell,
+    Label,
+    Image,
+    Link,
+    Row,
+    ListItem,
+    ListMarker,
+    TreeItem,
+    ListBoxOption,
+    MenuItem,
+    MenuListOption,
+    Paragraph,
     CheckBox,
+    RadioButton,
+    TextInput,
+    Button,
+    DefaultButton,
+    Pane,
+    RowHeader,
     ColumnHeader,
-    ComboBox,
+    RowGroup,
+    List,
+    Table,
+    LayoutTableCell,
+    LayoutTableRow,
+    LayoutTable,
+    Switch,
+    Menu,
+    MultilineTextInput,
+    SearchInput,
     DateInput,
     DateTimeInput,
-    Dialog,
+    WeekInput,
+    MonthInput,
+    TimeInput,
     EmailInput,
-    GenericContainer,
-    Group,
-    Heading,
-    Link,
-    List,
-    ListBox,
-    ListBoxOption,
-    ListItem,
-    Menu,
-    MenuBar,
-    MenuItem,
-    MultilineTextInput,
-    Navigation,
+    NumberInput,
     PasswordInput,
     PhoneNumberInput,
+    UrlInput,
+    Abbr,
+    Alert,
+    AlertDialog,
+    Application,
+    Article,
+    Audio,
+    Banner,
+    Blockquote,
+    Canvas,
+    Caption,
+    Caret,
+    Code,
+    ColorWell,
+    ComboBox,
+    EditableComboBox,
+    Complementary,
+    Comment,
+    ContentDeletion,
+    ContentInsertion,
+    ContentInfo,
+    Definition,
+    DescriptionList,
+    Details,
+    Dialog,
+    DisclosureTriangle,
+    Document,
+    EmbeddedObject,
+    Emphasis,
+    Feed,
+    FigureCaption,
+    Figure,
+    Footer,
+    Form,
+    Grid,
+    GridCell,
+    Group,
+    Header,
+    Heading,
+    Iframe,
+    IframePresentational,
+    ImeCandidate,
+    Keyboard,
+    Legend,
+    LineBreak,
+    ListBox,
+    Log,
+    Main,
+    Mark,
+    Marquee,
+    Math,
+    MenuBar,
+    MenuItemCheckBox,
+    MenuItemRadio,
+    MenuListPopup,
+    Meter,
+    Navigation,
+    Note,
+    PluginObject,
     ProgressIndicator,
-    RadioButton,
     RadioGroup,
     Region,
-    Row,
-    RowGroup,
+    RootWebArea,
+    Ruby,
+    RubyAnnotation,
+    ScrollBar,
+    ScrollView,
+    Search,
+    Section,
+    SectionFooter,
+    SectionHeader,
     Slider,
     SpinButton,
-    Switch,
+    Splitter,
+    Status,
+    Strong,
+    Suggestion,
+    SvgRoot,
     Tab,
-    Table,
     TabList,
-    TextInput,
+    TabPanel,
+    Term,
+    Time,
+    Timer,
+    TitleBar,
     Toolbar,
     Tooltip,
-    UrlInput
+    Tree,
+    TreeGrid,
+    Video,
+    WebView,
+    Window,
+    PdfActionableHighlight,
+    PdfRoot,
+    GraphicsDocument,
+    GraphicsObject,
+    GraphicsSymbol,
+    DocAbstract,
+    DocAcknowledgements,
+    DocAfterword,
+    DocAppendix,
+    DocBackLink,
+    DocBiblioEntry,
+    DocBibliography,
+    DocBiblioRef,
+    DocChapter,
+    DocColophon,
+    DocConclusion,
+    DocCover,
+    DocCredit,
+    DocCredits,
+    DocDedication,
+    DocEndnote,
+    DocEndnotes,
+    DocEpigraph,
+    DocEpilogue,
+    DocErrata,
+    DocExample,
+    DocFootnote,
+    DocForeword,
+    DocGlossary,
+    DocGlossRef,
+    DocIndex,
+    DocIntroduction,
+    DocNoteRef,
+    DocNotice,
+    DocPageBreak,
+    DocPageFooter,
+    DocPageHeader,
+    DocPageList,
+    DocPart,
+    DocPreface,
+    DocPrologue,
+    DocPullquote,
+    DocQna,
+    DocSubtitle,
+    DocTip,
+    DocToc,
+    ListGrid,
+    Terminal
 };
 
 enum class AccessibilityToggled : uint8_t {
@@ -4206,6 +4363,7 @@ struct AccessibilityInfo {
     bool hasSelected = false;
     bool expanded = false;
     bool hasExpanded = false;
+    bool activeDescendant = false;
     bool disabled = false;
 };
 
@@ -4248,6 +4406,8 @@ struct El {
     intptr_t clickActionArg = 0;
 
     Listener onHover;
+
+    Listener onMouseMove;
     Listener onScroll;
     ActionSlot* actions = nullptr;
 
@@ -4265,6 +4425,11 @@ struct El {
 
     Style hoverStyle = {};
     uint32_t hoverSet = 0;
+
+    Style activeStyle = {};
+    uint32_t activeSet = 0;
+    Style focusStyle = {};
+    uint32_t focusSet = 0;
     Style dragOverStyle = {};
     uint32_t dragOverSet = 0;
     Str dragOverKind = {};
@@ -4279,6 +4444,13 @@ struct El {
     Listener onDrop;
 
     gpui::Bounds* boundsOut = nullptr;
+
+    bool lineSpan = false;
+    float lineSpanHeight = 0;
+
+    bool lineClamp = false;
+    float lineClampCap = 0;
+    Listener onLineClamp;
 
     SliderState* slider = nullptr;
     Axis sliderAxis = Axis::Horizontal;
@@ -4354,11 +4526,13 @@ struct El {
     gpui::Bounds* rangeOut = nullptr;
     float* caretOutX = nullptr;
     float* caretOutY = nullptr;
-    Rgba selColor = Rgba8(0x6b, 0xb3, 0xf0, 90);
+    Rgba selColor{Rgba8(0x6b, 0xb3, 0xf0, 90)};
 
     int markLo = -1;
     int markHi = -1;
     bool selectable = false;
+
+    EntityId selectionOwner = {};
 
     const SelSource* selSrc = nullptr;
     bool selJoin = false;
@@ -4366,6 +4540,8 @@ struct El {
     int caretOff = -1;
     Rgba caretColor = {};
     float caretW = 2;
+
+    bool caretLineEndAffinity = false;
 
     uint64_t layoutNode = 0;
     float laidFont = 0;
@@ -4470,6 +4646,7 @@ struct El {
     El* AriaToggled(AccessibilityToggled toggled);
     El* AriaSelected(bool selected);
     El* AriaExpanded(bool expanded);
+    El* AriaActiveDescendant(bool active = true);
     El* AriaNumericValue(float value);
     El* AriaMinNumericValue(float value);
     El* AriaMaxNumericValue(float value);
@@ -4500,6 +4677,7 @@ struct El {
 
     El* OnScroll(Listener l);
     El* OnHover(Listener l);
+    El* OnMouseMove(Listener l);
     El* OnMouseDown(Listener l, DispatchPhase phase = DispatchPhase::Bubble);
     El* OnMouseUp(Listener l, DispatchPhase phase = DispatchPhase::Bubble);
     El* OnDragMove(Listener l);
@@ -4515,9 +4693,13 @@ struct El {
     El* Refine(const Style& s, uint32_t fields);
 
     El* Hover(const struct StateStyle& s);
+    El* Active(const struct StateStyle& s);
+    El* Focus(const struct StateStyle& s);
 
     El* DragOver(Str dragKind, const struct StateStyle& s);
     El* BoundsOut(gpui::Bounds* out);
+    El* ReportLineSpan(float lineHeight);
+    El* LineClamp(float cap, Listener onChange = {});
     El* Cursor(CursorKind c);
     El* BindSlider(SliderState* s, Axis axis = Axis::Horizontal);
     El* BindSliderBounds(SliderState* s);
@@ -4533,7 +4715,8 @@ struct El {
     El* Spans(const TextSpan* runs, int n);
 
     El* MarkRange(int lo, int hi);
-    El* Caret(int off, Rgba color, float width = 2);
+    El* Caret(int off, Rgba color, float width = 2,
+              bool lineEndAffinity = false);
     El* Child(El* c);
     El* Bold();
     El* Semibold();
@@ -4544,6 +4727,7 @@ struct El {
     El* Strikethrough();
     El* Italic();
     El* Selectable();
+    El* SelectionOwner(EntityId owner);
 
     El* SelSrc(const SelSource* s, bool join);
     El* Wrap();
@@ -4565,6 +4749,8 @@ struct El {
     El* Right(float v);
     El* LeftRel(float frac);
     El* RightRel(float frac);
+    El* TopRel(float frac);
+    El* BottomRel(float frac);
     El* HoverBg(Background c);
     El* HoverFg(Rgba c);
 
@@ -4620,6 +4806,7 @@ struct HitRect {
     Func0 onClick;
     Listener listener;
     Listener onHover;
+    Listener onMouseMove;
     Listener onMouseDown;
     Listener onMouseUp;
 
@@ -4720,6 +4907,7 @@ struct TextHit {
     float maxW = 0;
     bool wrap = false;
     int docOff = 0;
+    EntityId owner = {};
 
     const SelSource* src = nullptr;
 
@@ -4806,6 +4994,7 @@ struct InspectorState {
 
 struct PaintCtx {
     App* app = nullptr;
+    Window* window = nullptr;
     PaintApp* pa = nullptr;
     PaintTarget* rt = nullptr;
 
@@ -4837,6 +5026,9 @@ struct PaintCtx {
 
     int hitParent = -1;
 
+    Bounds hitMask = {};
+    bool hasHitMask = false;
+
     bool picking = false;
     bool pickHit = false;
 
@@ -4860,6 +5052,15 @@ struct PaintCtx {
 
     PaintCtx() = default;
 };
+
+struct LineSpan {
+    float top = 0;
+    float bottom = 0;
+    float lineHeight = 0;
+};
+
+bool LineSafeClipBottom(const LineSpan* spans, int count, float boxBottom,
+                        float contentBottom, float* outBottom);
 
 struct FocusRect {
     int id = 0;
@@ -5224,12 +5425,32 @@ enum class DiagnosticSeverity : uint8_t {
     Info
 };
 
+enum class DiagnosticTag : uint8_t {
+    Unnecessary = 1,
+    Deprecated = 2
+};
+
+struct DiagnosticRelatedInformation {
+    Str uri = {};
+    Selection range = {};
+    Str message = {};
+};
+
+using RelatedInformation = DiagnosticRelatedInformation;
+
 struct Diagnostic {
     Selection range = {};
     DiagnosticSeverity severity = DiagnosticSeverity::Info;
     Str message = {};
     Str source = {};
     Str code = {};
+    Str codeDescriptionUri = {};
+    const DiagnosticRelatedInformation* relatedInformation = nullptr;
+    int nRelatedInformation = 0;
+    const DiagnosticTag* tags = nullptr;
+    int nTags = 0;
+
+    Str data = {};
 };
 
 struct TextEditItem {
@@ -5404,6 +5625,8 @@ struct CompletionSession {
     int offset = 0;
     int selected = 0;
 
+    Str query = {};
+
     Vec<CompletionItem> items;
 
     uint64_t revision = 0;
@@ -5433,6 +5656,8 @@ using OverlayActionFn = bool (*)(void* data, InputOverlayKind kind,
 struct InputState {
     InputKind kind = InputKind::Input;
     LayoutMode mode = {};
+
+    FocusHandle focus = {};
 
     Vec<char> text;
     Selection selectedRange = {};
@@ -5516,6 +5741,8 @@ struct InputState {
 
     InlineCompletionFn inlineCompletionProvider = nullptr;
     void* inlineCompletionData = nullptr;
+
+    float inlineCompletionDebounceMs = kInlineCompletionDebounceMs;
     InlineCompletion inlineCompletion;
 
     SemanticTokensFn semanticTokensProvider = nullptr;
@@ -5550,6 +5777,10 @@ struct InputState {
 
     Bounds inputBounds = {};
 
+    Selection popoverTriggerRange = {};
+    Bounds popoverTriggerBounds = {};
+    Bounds popoverBounds = {};
+
     float scrollX = 0;
     float scrollY = 0;
     float viewW = 0;
@@ -5570,6 +5801,8 @@ struct InputState {
     int preferredColumn = -1;
 
     float preferredX = -1;
+
+    bool cursorLineEndAffinity = false;
 
     ~InputState();
 };
@@ -5622,8 +5855,12 @@ int InputPreviousStartOfWord(const InputState* s);
 int InputNextEndOfWord(const InputState* s);
 
 void InputMoveTo(InputState* s, App* app, Window* win, int offset);
+void InputMoveToWithAffinity(InputState* s, App* app, Window* win, int offset,
+                             bool lineEndAffinity);
 
 void InputSelectTo(InputState* s, App* app, Window* win, int offset);
+void InputSelectToWithAffinity(InputState* s, App* app, Window* win,
+                               int offset, bool lineEndAffinity);
 void InputSelectAll(InputState* s, App* app, Window* win);
 void InputUnselect(InputState* s, App* app, Window* win);
 void InputSetSelectedRange(InputState* s, App* app, Window* win, int a, int b);
@@ -5799,7 +6036,8 @@ void InputUpdateSearch(InputState* s);
 void InputFocus(InputState* s, App* app, Window* win);
 void InputBlur(InputState* s, App* app, Window* win);
 
-int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x, float y);
+int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x, float y,
+                          bool* lineEndAffinity = nullptr);
 
 int InputFoldIconAt(const InputState* s, float x, float y);
 
@@ -5927,7 +6165,8 @@ void TextMeasClear(PaintCtx* ctx);
 
 bool TextPointAt(PaintCtx* ctx, Str s, float fontSize, float maxW, bool wrap,
                  int off, float* outX, float* outY, float* outH,
-                 bool mono = false, float lineHeight = 0);
+                 bool mono = false, float lineHeight = 0,
+                 bool lineEndAffinity = true);
 int TextIndexAt(PaintCtx* ctx, Str s, float fontSize, float maxW, bool wrap,
                 float relX, float relY, bool mono = false,
                 float lineHeight = 0);
@@ -5980,6 +6219,9 @@ int CopyTextHits(PaintCtx* ctx, int selA, int selB, char* out, int cap);
 
 int CopyTextHitsIn(PaintCtx* ctx, int selA, int selB, int scope, char* out,
                    int cap, SelectionFormat fmt = SelectionFormat::Plain);
+int CopyTextHitsInEntity(PaintCtx* ctx, int selA, int selB, int scope,
+                         EntityId owner, char* out, int cap,
+                         SelectionFormat fmt = SelectionFormat::Plain);
 
 bool TextMultiClickRange(PaintCtx* ctx, float x, float y, int clickCount,
                          int* outA, int* outB);
@@ -6204,6 +6446,8 @@ struct Window {
     Vec<FocusRect> focusEls;
 
     int pendingTrap = 0;
+
+    int previousTrap = 0;
 
     int pendingTrapHost = 0;
     Vec<KeyedSlot> keyed;
@@ -6594,6 +6838,8 @@ void ClipboardSetText(Window* win, Str text);
 
 Str ClipboardGetText(Arena* a, Window* win);
 
+void WindowSetTextContentType(Window* win, Str value);
+
 void OpenUrl(Str url);
 
 struct PathPrompt {
@@ -6723,6 +6969,11 @@ void AssetsClear();
 
 int AssetsRootCount();
 void AssetsAddRoot(Str dir);
+
+using AssetLoadFn = bool (*)(void* user, Str relPath, Vec<uint8_t>* out);
+using AssetExistsFn = bool (*)(void* user, Str relPath);
+int AssetsAddSource(void* user, AssetLoadFn load, AssetExistsFn exists);
+void AssetsRemoveSource(int id);
 
 void AssetsAddDefaultRoots(Str exampleName);
 bool AssetsLoad(Str relPath, Vec<uint8_t>* out);
@@ -7749,6 +8000,56 @@ struct DatePicker {
 };
 }
 
+#line 1 "src/base/geometry.h"
+
+namespace gpui {
+
+enum class Placement : uint8_t {
+    Top,
+    Bottom,
+    Left,
+    Right
+};
+
+enum class Side : uint8_t {
+    Left,
+    Right
+};
+
+inline bool SideIsLeft(Side s) {
+    return s == Side::Left;
+}
+
+inline bool SideIsRight(Side s) {
+    return s == Side::Right;
+}
+
+inline bool AxisIsHorizontal(Axis a) {
+    return a == Axis::Horizontal;
+}
+
+inline bool AxisIsVertical(Axis a) {
+    return a == Axis::Vertical;
+}
+
+inline bool PlacementIsHorizontal(Placement p) {
+    return p == Placement::Left || p == Placement::Right;
+}
+
+inline bool PlacementIsVertical(Placement p) {
+    return p == Placement::Top || p == Placement::Bottom;
+}
+
+inline Axis PlacementAxis(Placement p) {
+    return PlacementIsHorizontal(p) ? Axis::Horizontal : Axis::Vertical;
+}
+
+inline Edges EdgesAll(float value) {
+    return Edges::New(value, value, value, value);
+}
+
+}
+
 #line 1 "src/base/dock.h"
 
 namespace gpui {
@@ -7764,6 +8065,29 @@ const float kDockDragPreviewH = 30.f;
 
 extern const Str kDockPanelDrag;
 extern const Str kDockResizeDrag;
+
+struct NodeId {
+    uint64_t value = 0;
+
+    static NodeId FromU64(uint64_t raw) { return NodeId{raw}; }
+    uint64_t AsU64() const { return value; }
+};
+
+inline bool operator==(NodeId a, NodeId b) { return a.value == b.value; }
+inline bool operator!=(NodeId a, NodeId b) { return !(a == b); }
+
+struct PanelId {
+    uint64_t value = 0;
+
+    static PanelId FromU64(uint64_t raw) { return PanelId{raw}; }
+    static PanelId FromEntity(EntityId id) {
+        return PanelId{((uint64_t)id.gen << 32) | (uint32_t)id.index};
+    }
+    uint64_t AsU64() const { return value; }
+};
+
+inline bool operator==(PanelId a, PanelId b) { return a.value == b.value; }
+inline bool operator!=(PanelId a, PanelId b) { return !(a == b); }
 
 enum class DockPlacement : uint8_t {
     Center,
@@ -7783,6 +8107,57 @@ enum class DockDrop : uint8_t {
 DockDrop DockDropAt(Bounds b, float x, float y);
 
 Bounds DockDropPlaceholder(Bounds b, DockDrop d);
+
+bool split_placement_at(Bounds bounds, Point position, Placement* out);
+
+struct DropPlaceholderBounds {
+    Point origin = {};
+    Size size = {};
+
+    static DropPlaceholderBounds ForPlacement(Bounds bounds,
+                                               const Placement* placement);
+    Bounds In(Bounds parent) const {
+        return {parent.x + origin.x, parent.y + origin.y, size.w, size.h};
+    }
+};
+
+struct DragPanel {
+    PanelId panel = {};
+    NodeId source = {};
+    Point dragOffset = {};
+    Size previewSize = {};
+    uint64_t dragSessionId = 0;
+
+    static DragPanel New(PanelId panel, NodeId source);
+};
+
+struct AnyDrag {
+    void* value = nullptr;
+
+    uint64_t type = 0;
+};
+
+enum class DropTarget : uint8_t {
+    Canvas,
+    Group
+};
+
+struct DropTargetValue {
+    DropTarget kind = DropTarget::Canvas;
+    NodeId node = {};
+    bool hasPlacement = false;
+    Placement placement = Placement::Top;
+};
+
+struct DropIndicator {
+    Bounds bounds = {};
+    bool hasPlacement = false;
+    Placement placement = Placement::Top;
+    DropPlaceholderBounds from = {};
+    DropPlaceholderBounds to = {};
+    uint64_t dragSessionId = 0;
+    uint64_t epoch = 0;
+};
 
 const int kDockSideBase = 1 << 20;
 
@@ -7805,20 +8180,51 @@ enum class DockPanelStyle : uint8_t {
     TabBar
 };
 
+struct PanelStateNode;
+
 struct DockPanelDef {
 
     Str name = {};
     Str title = {};
+    PanelId id = {};
     El* (*render)(Ctx* cx, void* data) = nullptr;
 
+    El* (*titleEl)(Ctx* cx, void* data) = nullptr;
+
+    bool (*titleStyle)(Ctx* cx, void* data, Rgba* background,
+                       Rgba* foreground) = nullptr;
+
     El* (*titleSuffix)(Ctx* cx, void* data) = nullptr;
+
+    El* (*toolbarButtons)(Ctx* cx, void* data) = nullptr;
+
+    void (*dropdownMenu)(Ctx* cx, void* data, void* menu) = nullptr;
+
+    void (*dump)(void* data, PanelStateNode* out) = nullptr;
 
     Str tabName = {};
     void* data = nullptr;
     bool closable = true;
 
     bool visible = true;
+
+    void (*setActive)(Ctx* cx, void* data, bool active) = nullptr;
+    void (*setZoomed)(Ctx* cx, void* data, bool zoomed) = nullptr;
+    void (*onAddedTo)(Ctx* cx, void* data, int node) = nullptr;
+    void (*onRemoved)(Ctx* cx, void* data) = nullptr;
+    bool canZoom = true;
     DockPanelControl zoomable = DockPanelControl::Menu;
+
+    bool innerPadding = true;
+};
+
+using Panel = DockPanelDef;
+using PanelView = DockPanelDef;
+
+enum class PanelEvent : uint8_t {
+    ZoomIn,
+    ZoomOut,
+    LayoutChanged
 };
 
 struct DockNode {
@@ -7849,6 +8255,38 @@ struct DockSide {
     bool open = true;
     bool collapsible = true;
     float size = 200;
+
+    static DockSide New(float value) {
+        DockSide dock;
+        dock.size = std::max(value, kDockPanelMinSize);
+        return dock;
+    }
+    bool IsOpen() const { return open; }
+    void SetOpen(bool value) { open = value; }
+    bool IsCollapsible() const { return collapsible; }
+    void SetCollapsible(bool value) { collapsible = value; }
+    float GetSize() const { return size; }
+    void SetSize(float value) { size = std::max(value, kDockPanelMinSize); }
+    bool IsResizing() const { return resizing; }
+    void SetResizing(bool value) { resizing = value; }
+
+    bool resizing = false;
+};
+
+using Dock = DockSide;
+
+struct DockSizing {
+    DockPlacement placement = DockPlacement::Center;
+    Bounds area = {};
+    float oppositeDockSize = 0;
+
+    static DockSizing New(DockPlacement placement);
+    DockSizing WithAreaBounds(Bounds value) const;
+    DockSizing WithAreaWidth(float value) const;
+    DockSizing WithAreaHeight(float value) const;
+    DockSizing WithOppositeDockSize(float value) const;
+    float SizeFromPointer(Point pointer) const;
+    float Clamp(float value) const;
 };
 
 enum class DockEventKind : uint8_t {
@@ -7876,6 +8314,9 @@ struct DockState {
     DockPanelStyle panelStyle = DockPanelStyle::Auto;
 
     bool toggleButtonVisible = true;
+
+    bool hasTilesScrollbarMode = false;
+    ScrollbarMode tilesScrollbarMode = ScrollbarMode::Always;
 
     bool hasVersion = false;
     int version = 0;
@@ -8005,7 +8446,10 @@ struct DockCtx {
     DockPlacement placement = DockPlacement::Left;
     float size = 0;
     bool open = true;
+    bool collapsible = true;
 };
+
+using DockContext = DockCtx;
 
 struct DockHandleCtx {
     Axis axis = Axis::Horizontal;
@@ -8019,6 +8463,54 @@ struct DockTabGroup {
     int node = -1;
 
     bool collapsed = false;
+};
+
+using TabGroupContext = DockTabGroup;
+
+enum class TabGroupEvent : uint8_t {
+    Drop,
+    DragDrop,
+    ClosePanel,
+    ActiveChanged,
+    ZoomIn,
+    ZoomOut
+};
+
+struct TabGroupConstraints {
+    bool alone = true;
+    bool dockLocked = true;
+    bool collapsed = false;
+    bool closable = false;
+
+    static TabGroupConstraints Sealed() { return {}; }
+    static TabGroupConstraints InSplit(bool isAlone) {
+        TabGroupConstraints value;
+        value.alone = isAlone;
+        value.dockLocked = false;
+        value.closable = true;
+        return value;
+    }
+    TabGroupConstraints DockLocked(bool value) const {
+        TabGroupConstraints copy = *this;
+        copy.dockLocked = value;
+        return copy;
+    }
+    TabGroupConstraints Collapsed(bool value) const {
+        TabGroupConstraints copy = *this;
+        copy.collapsed = value;
+        return copy;
+    }
+    TabGroupConstraints Closable(bool value) const {
+        TabGroupConstraints copy = *this;
+        copy.closable = value;
+        return copy;
+    }
+};
+
+struct TabGroup {
+    Entity<DockState> state = {};
+    int node = -1;
+    TabGroupConstraints constraints = {};
 };
 
 int DockGroupCount(const DockTabGroup* g);
@@ -8067,9 +8559,178 @@ struct DockRenderer {
     El* (*dragPreview)(Ctx* cx, void* data, const DockPanelDef* def) = nullptr;
 };
 
+using DockAreaRenderer = DockRenderer;
+using TabGroupRenderer = DockRenderer;
+using TilesRenderer = DockRenderer;
+
 struct DockArea {
     static El* New(Ctx* cx, Str id, Entity<DockState> state,
                    const DockRenderer* r);
+};
+
+}
+
+#line 1 "src/base/dock_layout.h"
+
+namespace gpui {
+
+enum class RootKind : uint8_t {
+    Split,
+    Any
+};
+
+struct TilePanel {
+    PanelId panel = {};
+    Bounds bounds = {};
+    int zIndex = 0;
+
+    static TilePanel New(PanelId panel, Bounds bounds);
+    TilePanel WithZIndex(int value) const;
+    TilePanel WithBounds(Bounds value) const;
+};
+
+enum class PaneKind : uint8_t {
+    Split,
+    Tabs,
+    Tiles
+};
+
+struct PaneNode;
+
+struct PaneRef {
+    PaneKind kind = PaneKind::Split;
+    Axis axis = Axis::Horizontal;
+    const Vec<PaneNode*>* children = nullptr;
+    const Vec<float>* sizes = nullptr;
+    const Vec<uint8_t>* sizeKnown = nullptr;
+    const Vec<PanelId>* panels = nullptr;
+    const Vec<TilePanel>* tiles = nullptr;
+    int activeIx = 0;
+};
+
+struct PaneNode {
+    NodeId nodeId = {};
+    PaneKind paneKind = PaneKind::Split;
+    Axis axis = Axis::Horizontal;
+    Vec<PaneNode*> children;
+
+    Vec<float> sizes;
+    Vec<uint8_t> sizeKnown;
+    Vec<PanelId> panels;
+    int activeIx = 0;
+    Vec<TilePanel> tiles;
+
+    static PaneNode* Split(NodeId id, Axis axis);
+    static PaneNode* Tabs(NodeId id);
+    static PaneNode* Tiles(NodeId id);
+    NodeId Id() const { return nodeId; }
+    PaneRef Kind() const;
+    void Walk(Func1<const PaneNode*> visit) const;
+    bool Empty() const;
+    ~PaneNode();
+};
+
+enum class InsertTargetKind : uint8_t {
+    Tabs,
+    Split,
+    Tile
+};
+
+struct InsertTarget {
+    InsertTargetKind kind = InsertTargetKind::Tabs;
+    NodeId node = {};
+    int ix = -1;
+    bool activate = true;
+    Placement placement = Placement::Right;
+    bool hasSize = false;
+    float size = 0;
+    Bounds bounds = {};
+
+    static InsertTarget Tabs(NodeId node, int ix = -1,
+                             bool activate = true);
+    static InsertTarget Split(NodeId node, Placement placement,
+                              const float* size = nullptr);
+    static InsertTarget Tile(NodeId node, Bounds bounds);
+};
+
+struct EditResult {
+    bool didChange = false;
+    bool Changed() const { return didChange; }
+};
+
+struct DockLayout;
+
+struct PaneTree {
+    PaneNode* root = nullptr;
+    RootKind rootKind = RootKind::Any;
+
+    explicit PaneTree(RootKind kind = RootKind::Any);
+    PaneTree(const PaneTree&) = delete;
+    PaneTree& operator=(const PaneTree&) = delete;
+    ~PaneTree();
+
+    PaneNode* Root() { return root; }
+    const PaneNode* Root() const { return root; }
+    RootKind GetRootKind() const { return rootKind; }
+    NodeId AllocateNodeId();
+    PaneNode* FindNode(NodeId id);
+    const PaneNode* FindNode(NodeId id) const;
+    bool FindPanelNode(PanelId panel, NodeId* out) const;
+    bool ContainsPanel(PanelId panel) const;
+    void NodeIds(Vec<NodeId>* out) const;
+    void Panels(Vec<PanelId>* out) const;
+
+    NodeId SetRootSplit(Axis axis);
+    NodeId SetRootTabs(const PanelId* panels, int count, int activeIx = 0);
+    NodeId SetRootTiles(const TilePanel* panels, int count);
+    NodeId AddSplit(NodeId parent, Axis axis, const float* size = nullptr);
+    NodeId AddTabs(NodeId parent, const PanelId* panels, int count,
+                   const float* size = nullptr);
+
+    EditResult InsertPanel(PanelId panel, InsertTarget target);
+    EditResult RemovePanel(PanelId panel);
+    EditResult MovePanel(PanelId panel, InsertTarget target);
+    EditResult Split(NodeId at, PanelId panel, Placement placement,
+                     const float* size = nullptr);
+    EditResult SetActive(NodeId node, int ix);
+    EditResult SetSizes(NodeId node, const float* sizes,
+                        const uint8_t* known, int count);
+    EditResult SetTileBounds(PanelId panel, Bounds bounds);
+    EditResult BringToFront(PanelId panel);
+    void Normalize();
+    bool IsNormalized() const;
+
+    static PaneTree* FromLayout(DockLayout* layout, RootKind kind,
+                                Vec<DockPanelDef>* panels = nullptr);
+
+  private:
+    bool ApplyInsert(PanelId panel, InsertTarget target);
+    bool DetachPanel(PanelId panel);
+    bool InsertBeside(NodeId at, PanelId panel, Placement placement,
+                      const float* size);
+    int MaxZIndex() const;
+};
+
+struct DockLayout {
+    PaneKind kind = PaneKind::Split;
+    Axis axis = Axis::Horizontal;
+    Vec<DockLayout*> children;
+    Vec<float> sizes;
+    Vec<uint8_t> sizeKnown;
+    Vec<PanelId> panelIds;
+    Vec<DockPanelDef> panelViews;
+    Vec<Bounds> tileBounds;
+    int activeIx = 0;
+
+    static DockLayout* HSplit();
+    static DockLayout* VSplit();
+    static DockLayout* Tabs();
+    static DockLayout* Tiles();
+    DockLayout* Child(DockLayout* child, const float* size = nullptr);
+    DockLayout* Panel(PanelId id, DockPanelDef view = {});
+    DockLayout* Tile(PanelId id, Bounds bounds, DockPanelDef view = {});
+    DockLayout* ActiveIndex(int ix);
+    ~DockLayout();
 };
 
 }
@@ -8126,6 +8787,9 @@ struct JsonWriter {
     void Bool(const char* key, bool v);
     void String(const char* key, Str v);
     void Null(const char* key);
+
+    void Raw(const char* key, Str json);
+    void Value(const char* key, const JsonValue* value);
 };
 
 }
@@ -8145,6 +8809,10 @@ const float kTileGridSize = 8.f;
 
 const float kTileKeepVisible = 64.f;
 
+const Size MINIMUM_SIZE = {kTileMinW, kTileMinH};
+const float DRAG_BAR_HEIGHT = kTileDragBarH;
+const float HANDLE_SIZE = kTileHandleSize;
+
 extern const Str kTileMoveDrag;
 extern const Str kTileResizeDrag;
 
@@ -8155,6 +8823,37 @@ enum class TileSide : uint8_t {
     Top,
     Bottom,
     BottomRight
+};
+
+using ResizeSide = TileSide;
+
+struct ResizeDrag {
+    ResizeSide side = ResizeSide::None;
+    Point lastPosition = {};
+    Bounds lastBounds = {};
+
+    static ResizeDrag New(ResizeSide side, Point position, Bounds bounds) {
+        return ResizeDrag{side, position, bounds};
+    }
+    ResizeDrag WithLastPosition(Point value) const {
+        ResizeDrag copy = *this;
+        copy.lastPosition = value;
+        return copy;
+    }
+    ResizeDrag WithLastBounds(Bounds value) const {
+        ResizeDrag copy = *this;
+        copy.lastBounds = value;
+        return copy;
+    }
+};
+
+enum class TilesEvent : uint8_t {
+    BoundsChanged,
+    BringToFront,
+    ClosePanel,
+    DragDrop,
+    ZoomIn,
+    ZoomOut
 };
 
 const int kMaxTileChanges = 64;
@@ -8177,6 +8876,7 @@ struct TileChange {
 };
 
 struct TilesState {
+    NodeId node = {};
 
     Vec<TileItem> items;
 
@@ -8203,6 +8903,8 @@ struct TilesState {
     int cursor = 0;
     bool ignoring = false;
 
+    int zoomedPanel = -1;
+
     static void OnMoveDown(TilesState* self, Ctx* cx, const MouseDownEvent* ev,
                            intptr_t ix);
     static void OnResizeDown(TilesState* self, Ctx* cx,
@@ -8219,6 +8921,26 @@ struct TilesState {
                          intptr_t ix);
 
     ~TilesState() { items.Reset(); }
+};
+
+struct TileContext {
+    TilesState* state = nullptr;
+    NodeId node = {};
+    int ix = -1;
+
+    const TileItem* Item() const {
+        return state && ix >= 0 && ix < state->items.len ? &state->items[ix]
+                                                         : nullptr;
+    }
+    void BeginMove(Point pointer) const;
+    void MoveTo(Point pointer) const;
+    void EndMove() const;
+    void BeginResize(ResizeSide side, Point pointer) const;
+    void ResizeTo(Point pointer) const;
+    void EndResize() const;
+    void BringToFront() const;
+    void ToggleZoom() const;
+    void Close() const;
 };
 
 inline int TileResizePack(int ix, TileSide side) {
@@ -8272,6 +8994,18 @@ bool TilesCanRedo(const TilesState* s);
 void TilesUndo(TilesState* s);
 void TilesRedo(TilesState* s);
 
+bool snap_edge(float edge, const float* candidates, int count,
+               float threshold, float* out);
+Bounds compute_resized_bounds(Bounds previous, const float* newX,
+                              const float* newY, const float* newW,
+                              const float* newH, const Bounds* others,
+                              int count, float gridSize);
+float round_to_grid(float value, float gridSize);
+Point magnetic_snap(Bounds moving, const Bounds* others, int count,
+                    float threshold);
+Point apply_boundary_constraints(Point origin, float draggingWidth);
+Size content_size(const Bounds* tiles, int count);
+
 }
 
 #line 1 "src/base/dock_state.h"
@@ -8284,6 +9018,8 @@ enum class PanelInfoKind : uint8_t {
     Tabs,
     Tiles
 };
+
+using PanelInfo = PanelInfoKind;
 
 struct TileMeta {
     Bounds bounds = {10, 10, 200, 200};
@@ -8304,6 +9040,23 @@ struct PanelStateNode {
     Vec<TileMeta> metas;
 
     Str info = {};
+    bool infoIsJson = false;
+};
+
+using PanelState = PanelStateNode;
+
+struct PanelSource {
+    void* data = nullptr;
+    Str (*panelName)(void* data, PanelId id) = nullptr;
+    bool (*isVisible)(void* data, PanelId id) = nullptr;
+    void (*dump)(void* data, PanelId id, PanelState* out) = nullptr;
+};
+
+struct PanelBuilder {
+    void* data = nullptr;
+    DockPanelDef (*build)(void* data, const PanelState* state,
+                          const PanelInfo* info, Window* win,
+                          App* app) = nullptr;
 };
 
 struct DockSideState {
@@ -8349,12 +9102,51 @@ struct DockInvalidPanel {
 };
 
 bool DockLoad(DockState* s, const DockAreaState* st, Arena* a,
-              El* (*invalidRender)(Ctx* cx, void* data) = nullptr);
+              El* (*invalidRender)(Ctx* cx, void* data) = nullptr,
+              App* app = nullptr, Window* win = nullptr,
+              Entity<DockState> dockArea = {});
 
 int TilesToMetas(const TilesState* s, TileMeta* out, int* outPanels, int cap);
 
 void TilesFromMetas(TilesState* s, const TileMeta* metas, const int* panels,
                     int n);
+
+}
+
+#line 1 "src/base/dock_registry.h"
+
+namespace gpui {
+
+struct PanelBuildContext {
+    Entity<DockState> dockArea = {};
+    const PanelState* state = nullptr;
+    const PanelInfo* info = nullptr;
+};
+
+using PanelRegistryBuild = DockPanelDef (*)(const PanelBuildContext* context,
+                                            Window* win, App* app,
+                                            void* data);
+
+struct PanelRegistryEntry {
+    Str name = {};
+    PanelRegistryBuild build = nullptr;
+    void* data = nullptr;
+};
+
+struct PanelRegistry {
+    Arena* arena = nullptr;
+    Vec<PanelRegistryEntry> items;
+
+    PanelRegistry();
+    ~PanelRegistry();
+    void Register(Str panelName, PanelRegistryBuild build, void* data);
+    bool BuildPanel(Str panelName, const PanelBuildContext* context,
+                    Window* win, App* app, DockPanelDef* out) const;
+};
+
+PanelRegistry* PanelRegistryGlobal(App* app);
+void register_panel(App* app, Str panelName, PanelRegistryBuild build,
+                    void* data = nullptr);
 
 }
 
@@ -8391,56 +9183,6 @@ bool FocusTrapEnter(Window* win, int trapId, bool backward = false);
 void FocusTrapArm(Window* win, int trapId, int hostFocusId = 0);
 
 void FocusTrapApplyPending(Window* win);
-
-}
-
-#line 1 "src/base/geometry.h"
-
-namespace gpui {
-
-enum class Placement : uint8_t {
-    Top,
-    Bottom,
-    Left,
-    Right
-};
-
-enum class Side : uint8_t {
-    Left,
-    Right
-};
-
-inline bool SideIsLeft(Side s) {
-    return s == Side::Left;
-}
-
-inline bool SideIsRight(Side s) {
-    return s == Side::Right;
-}
-
-inline bool AxisIsHorizontal(Axis a) {
-    return a == Axis::Horizontal;
-}
-
-inline bool AxisIsVertical(Axis a) {
-    return a == Axis::Vertical;
-}
-
-inline bool PlacementIsHorizontal(Placement p) {
-    return p == Placement::Left || p == Placement::Right;
-}
-
-inline bool PlacementIsVertical(Placement p) {
-    return p == Placement::Top || p == Placement::Bottom;
-}
-
-inline Axis PlacementAxis(Placement p) {
-    return PlacementIsHorizontal(p) ? Axis::Horizontal : Axis::Vertical;
-}
-
-inline Edges EdgesAll(float value) {
-    return Edges::New(value, value, value, value);
-}
 
 }
 
@@ -8635,17 +9377,23 @@ struct HoverCardState {
     int openDelayMs = 600;
     int closeDelayMs = 300;
 
+    Listener onOpenChange = {};
+
     int timer = 0;
 
     static void OnOpen(HoverCardState* self, Ctx* cx, const TickEvent* ev);
     static void OnClose(HoverCardState* self, Ctx* cx, const TickEvent* ev);
 };
 
+struct HoverCardOpenChangeEvent {
+    bool open = false;
+};
+
 void HoverCardTriggerHover(HoverCardState* self, Ctx* cx, const HoverEvent* ev);
 void HoverCardContentHover(HoverCardState* self, Ctx* cx, const HoverEvent* ev);
 
 void HoverCardSetDelays(Ctx* cx, Entity<HoverCardState> state, int openMs,
-                        int closeMs);
+                        int closeMs, Listener onOpenChange = {});
 bool HoverCardIsOpen(Ctx* cx, Entity<HoverCardState> state);
 
 Entity<HoverCardState> HoverCardStateFor(Ctx* cx, Str id);
@@ -8664,6 +9412,7 @@ struct HoverCard {
     bool IsOpen() const;
     HoverCard* Trigger(El* trigger);
     HoverCard* Content(El* content);
+    HoverCard* OnOpenChange(Listener fn);
     El* IntoEl();
 };
 }
@@ -8703,20 +9452,560 @@ uint32_t IndexPathClickId(IndexPath p);
 
 }
 
+#line 1 "src/base/input_core.h"
+
+namespace gpui {
+
+struct InputMode {
+    static constexpr InputKind KIND = InputKind::Input;
+    static constexpr bool MULTI_LINE = false;
+    static constexpr bool CODE_EDITOR = false;
+};
+
+struct TextareaMode {
+    static constexpr InputKind KIND = InputKind::Textarea;
+    static constexpr bool MULTI_LINE = true;
+    static constexpr bool CODE_EDITOR = false;
+};
+
+struct EditorMode {
+    static constexpr InputKind KIND = InputKind::Editor;
+    static constexpr bool MULTI_LINE = true;
+    static constexpr bool CODE_EDITOR = true;
+};
+
+struct InputModeKind {
+    InputKind kind = InputKind::Input;
+
+    static InputModeKind Of(const InputState* state);
+    bool IsMultiLine() const;
+    bool IsCodeEditor() const;
+};
+
+struct MultiLineMode {
+    InputKind kind = InputKind::Textarea;
+
+    static bool Includes(InputKind kind);
+    bool IsEditor() const { return kind == InputKind::Editor; }
+};
+
+struct InputExtras {
+    const InputState* state = nullptr;
+
+    bool HasSemanticTokens() const;
+    bool HasDocumentColors() const;
+    bool HasHover() const;
+    bool HasInlineCompletion() const;
+};
+
+struct EditorExtras : InputExtras {
+    static EditorExtras Of(const InputState* state);
+    bool HasDefinition() const;
+    bool HasCodeActions() const;
+};
+
+using InputBaseState = InputState;
+using EditorState = InputState;
+using TextareaState = InputState;
+
+struct InputContextMenuCapabilities {
+    bool disabled = false;
+    bool readonly = false;
+    bool codeEditor = false;
+    bool selection = false;
+    bool masked = false;
+    bool goToDefinition = false;
+    bool codeActions = false;
+
+    static InputContextMenuCapabilities New() { return {}; }
+    static InputContextMenuCapabilities Of(const InputState* state);
+    InputContextMenuCapabilities Disabled(bool value) const;
+    InputContextMenuCapabilities Readonly(bool value) const;
+    InputContextMenuCapabilities CodeEditor(bool value) const;
+    InputContextMenuCapabilities Selection(bool value) const;
+    InputContextMenuCapabilities Masked(bool value) const;
+    InputContextMenuCapabilities GoToDefinition(bool value) const;
+    InputContextMenuCapabilities CodeActions(bool value) const;
+    bool IsDisabled() const { return disabled; }
+    bool IsReadonly() const { return readonly; }
+    bool IsEditable() const { return !disabled && !readonly; }
+    bool IsCodeEditor() const { return codeEditor; }
+    bool HasSelection() const { return selection; }
+    bool IsMasked() const { return masked; }
+    bool IsCopyable() const { return selection && !masked; }
+    bool HasDefinition() const { return goToDefinition; }
+    bool HasCodeActions() const { return codeActions; }
+};
+
+struct InputPresentation {
+    FocusHandle focus = {};
+    bool disabled = false;
+    bool readonly = false;
+    bool loading = false;
+    bool masked = false;
+    bool multiLine = false;
+    bool codeEditor = false;
+    int textAlign = 0;
+    Str placeholder = {};
+    Str maskPlaceholder = {};
+
+    static InputPresentation Of(Arena* a, const InputState* state);
+    bool IsEditable() const { return !disabled && !readonly; }
+};
+
+struct InputStyles {
+    Style focused = {};
+    uint32_t focusedFields = 0;
+    Style disabled = {};
+    uint32_t disabledFields = 0;
+
+    InputStyles& Focused(const Style& style, uint32_t fields);
+    InputStyles& Disabled(const Style& style, uint32_t fields);
+    void Apply(Style* style, bool isFocused, bool isDisabled) const;
+};
+
+enum class NativeMenuItemKind : uint8_t {
+    Separator,
+    Action
+};
+
+struct NativeMenuItem {
+    NativeMenuItemKind kind = NativeMenuItemKind::Separator;
+    Str label = {};
+    bool disabled = false;
+    InputAction action = InputAction::None;
+    bool goToDefinition = false;
+};
+
+struct NativeMenu {
+    Arena* arena = nullptr;
+    Vec<NativeMenuItem> items;
+
+    NativeMenu();
+    NativeMenu(const NativeMenu&) = delete;
+    NativeMenu& operator=(const NativeMenu&) = delete;
+    ~NativeMenu();
+    NativeMenu& Menu(Str label, InputAction action);
+    NativeMenu& MenuWithDisabled(Str label, bool disabled,
+                                 InputAction action);
+    NativeMenu& Separator();
+    bool IsEmpty() const { return items.len == 0; }
+};
+
+void InputDefaultNativeMenu(const InputState* state, NativeMenu* out);
+bool InputPerformNativeMenuItem(InputState* state, App* app, Window* win,
+                                const NativeMenuItem& item);
+
+}
+
+#line 1 "src/base/input_rope.h"
+
+namespace gpui {
+
+struct InputEdit {
+    int startByte = 0;
+    int oldEndByte = 0;
+    int newEndByte = 0;
+    RopePoint startPosition = {};
+    RopePoint oldEndPosition = {};
+    RopePoint newEndPosition = {};
+
+    static InputEdit New(Str oldText, Selection range, Str inserted);
+};
+
+struct RopeLines {
+    Str rope = {};
+    int row = 0;
+    int endRow = 0;
+
+    static RopeLines New(Str rope);
+    bool Next(Str* out);
+    int Len() const { return std::max(0, endRow - row); }
+};
+
+struct RopeExt {
+    Str text = {};
+
+    static RopeExt Of(Str text) { return RopeExt{text}; }
+    int LineStartOffset(int row) const;
+    int LineEndOffset(int row) const;
+    Str SliceLine(int row) const;
+    Str SliceLines(int firstRow, int endRow) const;
+    RopeLines IterLines() const;
+    int LinesLen() const;
+    int LineLen(int row) const;
+    int CharAt(int offset, uint32_t* out) const;
+    RopePoint OffsetToPoint(int offset) const;
+    int PointToOffset(RopePoint point) const;
+    int OffsetUtf16ToOffset(int offset) const;
+    int OffsetToOffsetUtf16(int offset) const;
+    int ClipOffset(int offset, Bias bias) const;
+    bool WordRange(int offset, Selection* out) const;
+    Str WordAt(int offset) const;
+};
+
+}
+
+#line 1 "src/base/input_editor.h"
+
+namespace gpui {
+
+struct TabSize {
+    int tabSize = 2;
+    bool hardTabs = false;
+
+    Str ToString(Arena* a) const;
+    int IndentCount(Str line) const;
+};
+
+struct TextDecoration {
+    Selection range = {};
+    TextSpan style = {};
+
+    static TextDecoration New(Selection range, const TextSpan& style);
+};
+
+struct DecorationCollectionsState;
+
+struct TextDecorationCollection {
+    DecorationCollectionsState* state = nullptr;
+    uint64_t id = 0;
+
+    TextDecorationCollection() = default;
+    TextDecorationCollection(const TextDecorationCollection& other);
+    TextDecorationCollection& operator=(const TextDecorationCollection& other);
+    ~TextDecorationCollection();
+
+    bool Set(const TextDecoration* decorations, int n);
+    bool Append(const TextDecoration* decorations, int n);
+    void Clear();
+    int GetRanges(Selection* out, int cap) const;
+    bool IsValid() const;
+};
+
+struct DecorationCollections {
+    DecorationCollectionsState* state = nullptr;
+
+    explicit DecorationCollections(InputState* input = nullptr);
+    DecorationCollections(const DecorationCollections&) = delete;
+    DecorationCollections& operator=(const DecorationCollections&) = delete;
+    ~DecorationCollections();
+
+    TextDecorationCollection Create(const TextDecoration* decorations = nullptr,
+                                    int n = 0);
+    void AdjustForEdit(Selection editedRange, int insertedLen);
+    void Clear();
+
+    int BuildSpans(TextSpan* out, int cap) const;
+};
+
+struct DiagnosticEntry {
+    Selection range = {};
+    Diagnostic diagnostic = {};
+};
+
+struct DiagnosticSummary {
+    int count = 0;
+    int start = 0;
+    int end = 0;
+};
+
+struct DiagnosticSet {
+    Arena* arena = nullptr;
+    Str text = {};
+    Vec<DiagnosticEntry> diagnostics;
+
+    explicit DiagnosticSet(Str text = {});
+    DiagnosticSet(const DiagnosticSet&) = delete;
+    DiagnosticSet& operator=(const DiagnosticSet&) = delete;
+    ~DiagnosticSet();
+
+    void Reset(Str value);
+    void Push(const Diagnostic& diagnostic);
+    void Extend(const Diagnostic* values, int n);
+    int Len() const { return diagnostics.len; }
+    bool IsEmpty() const { return diagnostics.len == 0; }
+    void Clear();
+    DiagnosticSummary Summary() const;
+    int Range(Selection range, const DiagnosticEntry** out, int cap) const;
+    const DiagnosticEntry* ForOffset(int offset) const;
+    const DiagnosticEntry* At(int index) const;
+};
+
+struct BufferPoint {
+    int line = 0;
+    int col = 0;
+
+    static BufferPoint New(int line, int col) { return {line, col}; }
+};
+
+struct DisplayPoint {
+    int row = 0;
+    int col = 0;
+
+    static DisplayPoint New(int row, int col) { return {row, col}; }
+};
+
+enum class WrappingIndent : uint8_t {
+    None,
+    Same
+};
+
+struct DisplayMapRow {
+    int bufferLine = 0;
+    int startCol = 0;
+    int endCol = 0;
+};
+
+struct DisplayMap {
+    Str text = {};
+    int wrapColumns = 0;
+    WrappingIndent wrappingIndent = WrappingIndent::Same;
+    TabSize tab = {};
+    FoldMap foldMap;
+    Vec<DisplayMapRow> rows;
+
+    explicit DisplayMap(int wrapColumns = 0);
+    DisplayMap(const DisplayMap&) = delete;
+    DisplayMap& operator=(const DisplayMap&) = delete;
+    ~DisplayMap();
+
+    void SetText(Str value);
+    void OnTextChanged(Str value);
+    void SetWrapColumns(int columns);
+    void SetWrappingIndent(WrappingIndent indent);
+    void SetTabSize(TabSize value);
+    BufferPoint ClipBufferPoint(BufferPoint point) const;
+    DisplayPoint BufferPosToDisplayPos(BufferPoint point) const;
+    BufferPoint DisplayPosToBufferPos(DisplayPoint point) const;
+    int DisplayRowCount() const { return rows.len; }
+    int WrapRowCount() const;
+    int BufferLineCount() const;
+    int DisplayRowToBufferLine(int row) const;
+    Selection BufferLineToDisplayRowRange(int line) const;
+    bool IsBufferLineHidden(int line) const;
+    int BufferLineToDisplayRow(int line) const;
+    void SetFoldCandidates(const FoldRange* ranges, int n);
+    void SetFolded(int startLine, bool folded);
+    void ToggleFold(int startLine);
+    bool IsFoldedAt(int startLine) const;
+    bool IsFoldCandidate(int startLine) const;
+    void ClearFolds();
+    void AdjustFoldsForEdit(Str oldText, Selection editedRange, Str inserted);
+
+  private:
+    void Rebuild();
+};
+
+struct HighlightStyleResolver {
+    void* data = nullptr;
+    bool (*style)(void* data, Str name, TextSpan* out) = nullptr;
+
+    bool Style(Str name, TextSpan* out) const;
+};
+
+using SharedHighlightStyleResolver = HighlightStyleResolver;
+
+struct InputHighlighter {
+    void* data = nullptr;
+    Str (*language)(void* data) = nullptr;
+    void (*update)(void* data, const InputEdit* edit, Str text,
+                   bool folding) = nullptr;
+    int (*styles)(void* data, Selection range,
+                  const HighlightStyleResolver* resolver, TextSpan* out,
+                  int cap) = nullptr;
+    int (*foldRanges)(void* data, Str text, Selection changedRange,
+                      FoldRange* out, int cap) = nullptr;
+
+    Str Language() const;
+    void Update(const InputEdit* edit, Str text, bool folding) const;
+    int Styles(Selection range, const HighlightStyleResolver* resolver,
+               TextSpan* out, int cap) const;
+    int FoldRanges(Str text, Selection changedRange, FoldRange* out,
+                   int cap) const;
+};
+
+struct InputHighlighterFactory {
+    void* data = nullptr;
+    bool (*create)(void* data, Str language, InputHighlighter* out) = nullptr;
+
+    bool Create(Str language, InputHighlighter* out) const;
+};
+
+struct FoldIconRenderer {
+    void* data = nullptr;
+    El* (*render)(void* data, Ctx* cx, int line, bool folded) = nullptr;
+
+    El* Render(Ctx* cx, int line, bool folded) const;
+};
+
+}
+
+#line 1 "src/base/input_lsp.h"
+
+namespace gpui {
+
+struct CompletionMenuOptions {
+    float maxWidth = kCompletionMenuMaxW;
+
+    static CompletionMenuOptions Default() { return {}; }
+};
+
+struct CompletionProvider {
+    void* data = nullptr;
+    CompletionFn completions = nullptr;
+    InlineCompletionFn inlineCompletion = nullptr;
+    CompletionTriggerFn isCompletionTrigger = nullptr;
+    CompletionResolveFn resolveCompletions = nullptr;
+    float inlineCompletionDebounceMs = kInlineCompletionDebounceMs;
+
+    bool IsValid() const { return completions != nullptr; }
+    void Install(InputState* state,
+                 CompletionMenuOptions options = {}) const;
+};
+
+struct CodeActionProvider {
+    void* data = nullptr;
+    Str (*id)(void* data) = nullptr;
+    CodeActionFn codeActions = nullptr;
+    CodeActionPerformFn performCodeAction = nullptr;
+
+    bool IsValid() const { return codeActions != nullptr; }
+    Str Id() const { return id ? id(data) : Str{}; }
+    void Install(InputState* state) const;
+};
+
+struct DefinitionProvider {
+    void* data = nullptr;
+    DefinitionFn definitions = nullptr;
+
+    bool IsValid() const { return definitions != nullptr; }
+    void Install(InputState* state) const;
+};
+
+struct DocumentColorProvider {
+    void* data = nullptr;
+    DocumentColorFn documentColors = nullptr;
+
+    bool IsValid() const { return documentColors != nullptr; }
+    void Install(InputState* state) const;
+};
+
+struct HoverProvider {
+    void* data = nullptr;
+    HoverFn hover = nullptr;
+
+    bool IsValid() const { return hover != nullptr; }
+    void Install(InputState* state) const;
+};
+
+struct DocumentRangeSemanticTokensProvider {
+    void* data = nullptr;
+    const Str* legend = nullptr;
+    int nLegend = 0;
+    SemanticTokensFn semanticTokens = nullptr;
+
+    bool IsValid() const { return semanticTokens != nullptr; }
+    void Install(InputState* state) const;
+};
+
+struct ShowDocumentHandler {
+    void* data = nullptr;
+    ShowDocumentFn show = nullptr;
+
+    bool IsValid() const { return show != nullptr; }
+    bool Show(Str uri, bool external, Selection selection) const;
+    void Install(InputState* state) const;
+};
+
+struct CompletionMenuState {
+    bool open = false;
+    int triggerStartOffset = -1;
+    Str query = {};
+    const CompletionItem* items = nullptr;
+    int nItems = 0;
+    int selected = 0;
+    uint64_t revision = 0;
+
+    static CompletionMenuState Of(const InputState* state);
+    bool IsOpen() const { return open; }
+    uint64_t Revision() const { return revision; }
+};
+
+struct CodeActionMenuState {
+    bool open = false;
+    const CodeActionItem* items = nullptr;
+    int nItems = 0;
+    int selected = 0;
+    uint64_t revision = 0;
+
+    static CodeActionMenuState Of(const InputState* state);
+    bool IsOpen() const { return open; }
+    uint64_t Revision() const { return revision; }
+};
+
+struct HoverPopoverState {
+    Selection symbolRange = {};
+    Str hover = {};
+    bool open = false;
+
+    static HoverPopoverState Of(const InputState* state);
+};
+
+struct Lsp {
+    InputState* state = nullptr;
+    CompletionProvider completionProvider = {};
+    Vec<CodeActionProvider> codeActionProviders;
+    HoverProvider hoverProvider = {};
+    DefinitionProvider definitionProvider = {};
+    DocumentColorProvider documentColorProvider = {};
+    DocumentRangeSemanticTokensProvider semanticTokensProvider = {};
+    ShowDocumentHandler showDocument = {};
+    CompletionMenuOptions completionMenu = {};
+
+    Lsp() = default;
+    Lsp(const Lsp&) = delete;
+    Lsp& operator=(const Lsp&) = delete;
+
+    Lsp& Completion(const CompletionProvider& provider);
+    Lsp& AddCodeAction(const CodeActionProvider& provider);
+    Lsp& Hover(const HoverProvider& provider);
+    Lsp& Definition(const DefinitionProvider& provider);
+    Lsp& DocumentColors(const DocumentColorProvider& provider);
+    Lsp& SemanticTokens(
+        const DocumentRangeSemanticTokensProvider& provider);
+    Lsp& ShowDocuments(const ShowDocumentHandler& handler);
+    Lsp& CompletionMenu(const CompletionMenuOptions& options);
+    void Install(InputState* input);
+    void Update();
+    void Reset();
+    int DocumentColorsForRange(Selection visible, DocumentColor* out,
+                               int cap) const;
+    int SemanticTokensForRange(Selection visible,
+                               const HighlightStyleResolver& resolver,
+                               TextSpan* out, int cap) const;
+};
+
+}
+
 #line 1 "src/base/input.h"
 
 namespace gpui {
 
+struct SemanticThemeTokens;
+
 struct InputBase {
     static El* New(Ctx* cx, Str id, bool interactive = false,
                    AccessibilityRole role = AccessibilityRole::TextInput);
+    static El* New(Ctx* cx, Str id, const InputPresentation& presentation,
+                   const InputStyles& styles = {});
 };
 
 struct InputEditorStyle {
-    Rgba foreground = Rgb(0x17, 0x17, 0x17);
-    Rgba mutedForeground = Rgb(0x73, 0x73, 0x73);
-    Rgba caret = Rgb(0x17, 0x17, 0x17);
-    Rgba selection = Rgba8(0x6b, 0xb3, 0xf0, 90);
+    Rgba foreground = {0, 0, 0, 0};
+    Rgba mutedForeground = {0, 0, 0, 0};
+    Rgba caret = {0, 0, 0, 0};
+    Rgba selection = {0, 0, 0, 0};
     float fontSize = 12;
 
     bool mono = false;
@@ -8736,6 +10025,7 @@ struct InputEditorStyle {
     Rgba currentMatchBg = {0, 0, 0, 0};
 
     Rgba background = {0, 0, 0, 0};
+    Rgba border = {0, 0, 0, 0};
 
     Rgba linkText = {0, 0, 0, 0};
 
@@ -8746,6 +10036,9 @@ struct InputEditorStyle {
 
     int indentWidth = 4;
 };
+
+InputEditorStyle InputEditorStyleResolve(const InputEditorStyle& projected,
+                                         const SemanticThemeTokens& tokens);
 
 struct Input {
     static El* New(Ctx* cx, InputState* state);
@@ -8944,9 +10237,9 @@ struct Measure {
 Measure MeasureBegin(Str name);
 void MeasureEnd(Measure* measure);
 
-using MeasureFn = void (*)(void* user);
-void MeasureRun(Str name, MeasureFn fn, void* user);
-void MeasureRunIf(Str name, bool enabled, MeasureFn fn, void* user);
+using MeasureFn = Func0;
+void MeasureRun(Str name, MeasureFn fn);
+void MeasureRunIf(Str name, bool enabled, MeasureFn fn);
 
 }
 
@@ -9269,8 +10562,21 @@ struct NumberInput {
 
 namespace gpui {
 
+enum class OtpEventKind : uint8_t {
+    Change,
+    Complete,
+    Focus,
+    Blur,
+};
+
+struct OtpEvent {
+    OtpEventKind kind = OtpEventKind::Change;
+};
+
 struct OtpState {
-    char value[16] = {};
+    EntityId self = {};
+
+    char value[65] = {};
     int len = 0;
     int length = 6;
     bool masked = false;
@@ -9278,6 +10584,8 @@ struct OtpState {
     bool focused = false;
 
     EntityId blink = {};
+
+    Listener onChange = {};
 
     FocusHandle focus = {};
 };
@@ -9387,6 +10695,8 @@ struct PopoverState {
     Listener onDismiss = {};
 };
 
+void PopoverInitKeys();
+
 void PopoverSetOpenFocused(PopoverState* s, Ctx* cx, bool open);
 
 bool PopoverIsOpen(Ctx* cx, Entity<PopoverState> state);
@@ -9394,6 +10704,7 @@ void PopoverSetOpen(Ctx* cx, Entity<PopoverState> state, bool open);
 
 void PopoverToggle(PopoverState* self, Ctx* cx, const MouseDownEvent* ev,
                    intptr_t button);
+void PopoverConfirm(PopoverState* self, Ctx* cx, const ActionEvent* ev);
 void PopoverDismiss(PopoverState* self, Ctx* cx, const ClickEvent* ev);
 void PopoverDismissOnMouseDown(PopoverState* self, Ctx* cx,
                                const MouseDownEvent* ev);
@@ -9490,7 +10801,8 @@ float ProgressClampValue(float value);
 
 struct Progress {
     static El* New(Ctx* cx, Str id, float value = 0,
-                   bool indeterminate = false);
+                   bool indeterminate = false,
+                   Str accessibilityLabel = {});
 };
 
 struct ProgressTrack {
@@ -9544,6 +10856,11 @@ void ResizableAdjustToContainer(float* sizes, int n, float containerSize);
 
 const float kResizeHandleSize = 1.f;
 const float kResizeHandlePadding = 4.f;
+
+namespace base_theme {
+struct Theme;
+}
+Rgba ResizableHandleColor(const base_theme::Theme& theme, bool active);
 
 struct ResizeHandleState {
     bool active = false;
@@ -9639,8 +10956,9 @@ struct ResizableState {
     void Clear();
 };
 
-enum class ResizablePanelEvent : uint8_t {
-    Resized,
+struct ResizablePanelEvent {
+    const float* sizes = nullptr;
+    int count = 0;
 };
 
 float ResizablePanelSize(const ResizableState* s, int ix, float declared);
@@ -10426,7 +11744,7 @@ namespace gpui {
 
 struct Table {
     static El* New(Ctx* cx, Str id, int rowCount = -1,
-                   int columnCount = -1);
+                   int columnCount = -1, Str accessibilityLabel = {});
 };
 struct TableHeader {
     static El* New(Ctx* cx, Str id);
@@ -10741,6 +12059,11 @@ void WindowSelectionClear(Window* win);
 int WindowSelectionText(Window* win, char* out, int cap);
 int WindowSelectionTextAs(Window* win, char* out, int cap, SelectionFormat fmt);
 
+int WindowSelectionTextForEntity(Window* win, EntityId owner, char* out,
+                                 int cap, SelectionFormat fmt);
+bool WindowSelectionHasEntity(const Window* win, EntityId owner);
+void WindowSelectionSelectAll(Window* win, EntityId owner);
+
 void WindowSelectionSetFormat(Window* win, SelectionFormat fmt);
 SelectionFormat WindowSelectionFormat(Window* win);
 
@@ -10756,6 +12079,11 @@ void WindowSelectionFinishFrame(Window* win);
 namespace gpui {
 
 namespace base_theme {
+
+enum class ThemeAppearance : uint8_t {
+    Light,
+    Dark,
+};
 
 struct ScrollbarTheme {
     ScrollbarMode mode = ScrollbarMode::Scrolling;
@@ -10784,11 +12112,14 @@ struct ScrollbarTheme {
 };
 
 struct ResizableTheme {
-    Rgba handle = {};
-    Rgba activeHandle = {};
+    Rgba handle = {0, 0, 0, 0};
+    Rgba activeHandle = {0, 0, 0, 0};
+    bool hasHandle = false;
+    bool hasActiveHandle = false;
 };
 
 struct Theme {
+    ThemeAppearance appearance = ThemeAppearance::Light;
     SemanticThemeTokens tokens;
     ScrollbarTheme scrollbar = {};
     ResizableTheme resizable = {};
@@ -10801,6 +12132,7 @@ struct Theme {
 
 using BaseScrollbarTheme = base_theme::ScrollbarTheme;
 using BaseResizableTheme = base_theme::ResizableTheme;
+using BaseThemeAppearance = base_theme::ThemeAppearance;
 using BaseTheme = base_theme::Theme;
 
 BaseTheme* BaseThemeGlobal(App* app);
@@ -11354,6 +12686,9 @@ struct VirtualListFrameState {
 
 using VirtualRowFn = El* (*)(void* user, Ctx* cx, int ix);
 
+using VirtualRangeFn = void (*)(void* user, Ctx* cx, int first, int end,
+                                El** out);
+
 struct VirtualListOpts {
     int count = 0;
     float rowH = 32;
@@ -11377,6 +12712,7 @@ struct VirtualListOpts {
 
     float pad = 0;
     VirtualRowFn row = nullptr;
+    VirtualRangeFn range = nullptr;
     void* user = nullptr;
 };
 
@@ -12267,13 +13603,13 @@ inline Str UiSizeAsStr(UiSize s) {
 }
 
 inline UiSize UiSizeFromStr(Str text) {
-    if (StrEqI(text, StrL("xs")) || StrEqI(text, StrL("xsmall"))) {
+    if (StrEqI(text, "xs") || StrEqI(text, "xsmall")) {
         return UiSize::XSmall;
     }
-    if (StrEqI(text, StrL("sm")) || StrEqI(text, StrL("small"))) {
+    if (StrEqI(text, "sm") || StrEqI(text, "small")) {
         return UiSize::Small;
     }
-    if (StrEqI(text, StrL("lg")) || StrEqI(text, StrL("large"))) {
+    if (StrEqI(text, "lg") || StrEqI(text, "large")) {
         return UiSize::Large;
     }
     return UiSize::Medium;
@@ -12934,6 +14270,7 @@ struct Button {
     bool hasCustom = false;
     Rgba custom = {};
     Str tooltip = {};
+    Str accessibilityLabel = {};
     Str accessibilityId = {};
     AccessibilityRole accessibilityRole = AccessibilityRole::None;
     bool hasAccessibilityRole = false;
@@ -12999,6 +14336,7 @@ struct Button {
     Button* TabStop(bool v);
     Button* FocusRing(bool v);
     Button* Tooltip(Str s);
+    Button* AccessibilityLabel(Str s);
     Button* AccessibilityId(Str s);
     Button* Role(AccessibilityRole role);
 
@@ -15395,6 +16733,51 @@ namespace gpui {
 
 namespace component {
 
+using Panel = DockPanelDef;
+using PanelView = DockPanelDef;
+using PanelStyle = DockPanelStyle;
+using PanelControl = DockPanelControl;
+
+struct TitleStyle {
+    Rgba background = {};
+    Rgba foreground = {};
+};
+
+struct PanelHandle {
+    PanelView view = {};
+
+    static PanelHandle New(const PanelView& panel);
+    static PanelHandle FromView(const PanelView& panel);
+    static const PanelView* Of(const PanelView* panel);
+    const PanelView* Get() const;
+    PanelView IntoPanelView() const;
+};
+
+PanelHandle panel_handle(const PanelView& panel);
+
+struct DragPanelPreview {
+    Ctx* cx = nullptr;
+    const PanelView* panel = nullptr;
+
+    static DragPanelPreview* New(Ctx* cx, const PanelView* panel);
+    El* IntoEl();
+};
+
+struct DockSkin {
+    Entity<DockState> state = {};
+
+    static DockSkin New(Entity<DockState> state);
+    PanelStyle GetPanelStyle(App* app) const;
+    void SetPanelStyle(App* app, Window* win, PanelStyle style);
+    bool IsToggleButtonVisible(App* app) const;
+    void SetToggleButtonVisible(App* app, Window* win, bool visible);
+    bool HasTilesScrollbarMode(App* app) const;
+    ScrollbarMode GetTilesScrollbarMode(App* app) const;
+    void SetTilesScrollbarMode(App* app, Window* win, bool hasMode,
+                               ScrollbarMode mode = ScrollbarMode::Always);
+    const DockRenderer* Renderer() const;
+};
+
 El* DockInvalidPanelRender(Ctx* cx, void* data);
 
 const float kDockTabBarH = 30;
@@ -15404,8 +16787,10 @@ struct DockArea {
     Ctx* cx = nullptr;
     Str id = {};
     Entity<DockState> state = {};
+    const DockSkin* skin = nullptr;
 
     static DockArea* New(Ctx* cx, Str id, Entity<DockState> state);
+    DockArea* WithSkin(const DockSkin* value);
     El* IntoEl();
 };
 
@@ -15418,11 +16803,21 @@ namespace gpui {
 
 namespace component {
 
+struct DragMoving {
+    int node = -1;
+};
+
+struct DragResizing {
+    int node = -1;
+};
+
 struct TilePanelDef {
     Str title = {};
     El* content = nullptr;
 
     El* suffix = nullptr;
+    PanelView view = {};
+    bool hasView = false;
 };
 
 struct Tiles {
@@ -15430,12 +16825,15 @@ struct Tiles {
     Ctx* cx = nullptr;
     Str id = {};
     Entity<TilesState> state = {};
+    const DockSkin* skin = nullptr;
 
     ArenaVec<TilePanelDef> panels;
 
     static Tiles* New(Ctx* cx, Str id, Entity<TilesState> state);
 
     Tiles* Panel(Str title, El* content, El* suffix = nullptr);
+    Tiles* Panel(PanelHandle panel, El* content = nullptr);
+    Tiles* WithSkin(const DockSkin* value);
     El* IntoEl();
 };
 
@@ -15799,6 +17197,7 @@ struct HoverCard {
     bool open = false;
     int openDelayMs = 600;
     int closeDelayMs = 300;
+    Listener onOpenChange = {};
 
     HoverCardAnchor anchor = HoverCardAnchor::TopCenter;
 
@@ -15809,6 +17208,7 @@ struct HoverCard {
     HoverCard* Open(bool v);
     HoverCard* OpenDelay(int ms);
     HoverCard* CloseDelay(int ms);
+    HoverCard* OnOpenChange(Listener fn);
     HoverCard* Anchor(HoverCardAnchor a);
     El* IntoEl();
 };
@@ -15890,6 +17290,40 @@ struct Icon {
 namespace gpui {
 
 namespace component {
+
+namespace input_syntax {
+struct Tree {};
+}
+
+enum class AnyInputKind : uint8_t {
+    None,
+    Input,
+    Textarea,
+    Editor,
+    Otp
+};
+
+struct AnyInputState {
+    AnyInputKind kind = AnyInputKind::None;
+    InputState* text = nullptr;
+    Entity<OtpState> otp = {};
+
+    static AnyInputState From(InputState* state);
+    static AnyInputState FromInput(InputState* state);
+    static AnyInputState FromTextarea(InputState* state);
+    static AnyInputState FromEditor(InputState* state);
+    static AnyInputState FromOtp(Entity<OtpState> state);
+    InputState* AsInput() const;
+    InputState* AsTextarea() const;
+    InputState* AsEditor() const;
+    Entity<OtpState> AsOtp() const;
+    Str Value(Arena* a, App* app) const;
+    FocusHandle FocusHandleOf(const Window* window, App* app) const;
+    bool operator==(const AnyInputState& other) const;
+    bool operator!=(const AnyInputState& other) const {
+        return !(*this == other);
+    }
+};
 
 enum class InputAlign : uint8_t {
     Left,
@@ -16014,6 +17448,111 @@ struct SearchPanel {
     InputState* target = nullptr;
 
     static SearchPanel* New(Ctx* cx, Str id, InputState* target);
+    El* IntoEl();
+};
+
+struct NativeMenu;
+using EditorContextMenuFn = NativeMenu* (*)(Ctx* cx, NativeMenu* empty,
+                                            void* data);
+
+struct Editor {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    Str id = {};
+    InputState* state = nullptr;
+    float height = 0;
+    float fontSize = 0;
+    bool appearance = true;
+    bool bordered = true;
+    bool disabled = false;
+    bool readonly = false;
+    int tabIndex = 0;
+    AccessibilityRole accessibilityRole =
+        AccessibilityRole::MultilineTextInput;
+    Str ariaLabel = {};
+    EditorContextMenuFn contextMenu = nullptr;
+    void* contextMenuData = nullptr;
+
+    Str language = {};
+    const TextSpan* decorations = nullptr;
+    int nDecorations = 0;
+    bool activeLine = false;
+    bool indentGuides = false;
+    bool searchable = true;
+    bool folding = false;
+    const Diagnostic* diagnostics = nullptr;
+    int nDiagnostics = 0;
+    gpui::Style style = {};
+    uint32_t styleFields = 0;
+
+    static Editor* New(Ctx* cx, InputState* state);
+    static Editor* New(Ctx* cx, Str id, InputState* state);
+    Editor* H(float value);
+    Editor* Font(float value);
+    Editor* Appearance(bool value);
+    Editor* Bordered(bool value);
+    Editor* Disabled(bool value);
+    Editor* Readonly(bool value = true);
+    Editor* TabIndex(int value);
+    Editor* Role(AccessibilityRole value);
+    Editor* AriaLabel(Str value);
+    Editor* ContextMenu(EditorContextMenuFn fn, void* data = nullptr);
+    Editor* Language(Str value);
+    Editor* Decorations(const TextSpan* runs, int n);
+    Editor* ActiveLine(bool value = true);
+    Editor* IndentGuides(bool value = true);
+    Editor* Searchable(bool value);
+    Editor* Diagnostics(const Diagnostic* items, int n);
+    Editor* Folding(bool value = true);
+    Editor* Refine(const gpui::Style& value, uint32_t fields);
+    El* IntoEl();
+};
+
+struct CompletionMenu {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    InputState* editor = nullptr;
+    Str query = {};
+
+    static CompletionMenu* New(Ctx* cx, InputState* editor);
+    CompletionMenu* UpdateQuery(int startOffset, Str query);
+    CompletionMenu* Show(int offset, const CompletionItem* items, int n);
+    void Hide();
+    bool HandleAction(InputAction action);
+    El* IntoEl();
+};
+
+struct CodeActionMenu {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    InputState* state = nullptr;
+
+    static CodeActionMenu* New(Ctx* cx, InputState* state);
+    CodeActionMenu* Show(int offset, const CodeActionItem* items, int n);
+    void Hide();
+    bool HandleAction(InputAction action);
+    El* IntoEl();
+};
+
+struct DiagnosticPopover {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    InputState* state = nullptr;
+    int diagnostic = -1;
+
+    static DiagnosticPopover* New(Ctx* cx, InputState* state, int diagnostic);
+    El* IntoEl();
+};
+
+struct HoverPopover {
+    Arena* a = nullptr;
+    Ctx* cx = nullptr;
+    InputState* editor = nullptr;
+    Selection symbolRange = {};
+    Str hover = {};
+
+    static HoverPopover* New(Ctx* cx, InputState* editor,
+                             Selection symbolRange, Str hover);
     El* IntoEl();
 };
 
@@ -17952,7 +19491,7 @@ inline bool SettingValueSame(const T& a, const T& b) {
 
 template <>
 inline bool SettingValueSame<Str>(const Str& a, const Str& b) {
-    return StrSame(a, b);
+    return base::StrEq(a, b);
 }
 
 template <typename T>
@@ -18559,6 +20098,22 @@ struct StatusBar {
 }
 
 #line 1 "src/ui/styled.h"
+
+namespace gpui::component {
+
+inline El* RaisedShadow(El* element) {
+    if (!element) {
+        return nullptr;
+    }
+    Rgba ink = Rgba8(0, 0, 0, 26);
+    BoxShadow shadows[] = {
+        {0, 1, 1.5f, 0, ink, false},
+        {0, 1, 1.f, -1.f, ink, false},
+    };
+    return element->Shadows(shadows, 2);
+}
+
+}
 
 #line 1 "src/ui/stepper.h"
 
@@ -19377,11 +20932,446 @@ struct Tag {
 }
 }
 
+#line 1 "src/markdown/mdast.h"
+
+namespace markdown {
+
+using base::Arena;
+using base::ArenaPtr;
+using base::ArenaPtrGet;
+using base::ArenaPtrOf;
+using base::ArenaStr;
+using base::ArenaStrGet;
+using base::ArenaVec;
+using base::kArenaStrNone;
+using base::Str;
+
+struct Node;
+
+using ArenaNode = ArenaPtr<Node>;
+
+struct UnistPoint {
+    int32_t line = 1;
+    int32_t column = 1;
+    int32_t offset = 0;
+};
+
+struct UnistPosition {
+    UnistPoint start = {};
+    UnistPoint end = {};
+};
+
+UnistPosition GetUnistPosition(Str md, uint32_t start, uint32_t end);
+
+enum class ReferenceKind : uint8_t {
+    Shortcut,
+    Collapsed,
+    Full,
+};
+
+enum class AlignKind : uint8_t {
+    Left,
+    Right,
+    Center,
+    None,
+};
+
+using ArenaAlign = uint32_t;
+constexpr ArenaAlign kArenaAlignNone = 0;
+
+static_assert((int)AlignKind::None < 4, "an alignment has to fit in 2 bits");
+
+ArenaAlign ArenaAlignNew(Arena* a, int32_t count);
+int32_t ArenaAlignCount(Arena* a, ArenaAlign al);
+AlignKind ArenaAlignAt(Arena* a, ArenaAlign al, int32_t i);
+void ArenaAlignSet(Arena* a, ArenaAlign al, int32_t i, AlignKind k);
+
+enum class NodeKind : uint8_t {
+    Root,
+    Blockquote,
+    FootnoteDefinition,
+    List,
+    Toml,
+    Yaml,
+    Break,
+    InlineCode,
+    InlineMath,
+    Delete,
+    Emphasis,
+    FootnoteReference,
+    Html,
+    Image,
+    ImageReference,
+    Link,
+    LinkReference,
+    Strong,
+    Text,
+    Code,
+    Math,
+    Heading,
+    Table,
+    ThematicBreak,
+    TableRow,
+    TableCell,
+    ListItem,
+    Definition,
+    Paragraph,
+};
+
+enum class NodeStrKind : uint8_t {
+
+    Value,
+
+    Url,
+
+    Title,
+
+    Alt,
+
+    Identifier,
+
+    Label,
+
+    Lang,
+    Meta,
+
+    PerKind,
+};
+
+enum NodeFlag : uint8_t {
+
+    NodeHasStart = 1 << 0,
+
+    NodeOrdered = 1 << 1,
+
+    NodeSpread = 1 << 2,
+
+    NodeChecked = 1 << 3,
+    NodeHasChecked = 1 << 4,
+
+    NodeRefKindMask = 3 << 6,
+};
+
+struct Node {
+
+    ArenaNode lastKid = {};
+
+    ArenaNode sibling = {};
+
+    ArenaStr firstStr = kArenaStrNone;
+
+    NodeKind kind = NodeKind::Root;
+
+    uint8_t flags = 0;
+
+    bool Has(NodeFlag f) const { return (flags & f) != 0; }
+    void Set(NodeFlag f, bool on) {
+        flags = on ? (uint8_t)(flags | f) : (uint8_t)(flags & ~f);
+    }
+};
+
+static_assert(sizeof(Node) == 3 * 4 + 4,
+              "Node has picked up padding; order the fields largest first");
+
+static_assert(alignof(Node) == 4, "a Node holds nothing wider than a word");
+
+uint32_t NodePerKind(Arena* a, const Node* n);
+void NodeSetPerKind(Arena* a, Node* n, uint32_t word);
+
+Str NodeGetStr(Arena* a, const Node* n, NodeStrKind k);
+
+int32_t NodeGetStrLen(Arena* a, const Node* n, NodeStrKind k);
+
+bool NodeHasStr(Arena* a, const Node* n, NodeStrKind k);
+
+void NodeSetStr(Arena* a, Node* n, NodeStrKind k, Str s);
+
+void NodeClearStr(Arena* a, Node* n, NodeStrKind k);
+
+void NodeGrowStr(Arena* a, Node* n, NodeStrKind k, Str more);
+
+inline ReferenceKind NodeRefKind(const Node* n) {
+    return (ReferenceKind)((n->flags & NodeRefKindMask) >> 6);
+}
+
+inline void NodeSetRefKind(Node* n, ReferenceKind k) {
+    n->flags = (uint8_t)((n->flags & ~NodeRefKindMask) |
+                         (((uint8_t)k & 3) << 6));
+}
+
+Node* NodeNew(Arena* a, NodeKind kind);
+
+inline void NodeAddChild(Arena* a, Node* parent, Node* child) {
+    ArenaNode at = ArenaPtrOf(a, child);
+    if (parent->lastKid.IsSet()) {
+        Node* last = ArenaPtrGet(a, parent->lastKid);
+        child->sibling = last->sibling;
+        last->sibling = at;
+    } else {
+
+        child->sibling = at;
+    }
+    parent->lastKid = at;
+}
+
+inline Node* NodeLastChild(Arena* a, const Node* n) {
+    return n->lastKid.IsSet() ? ArenaPtrGet(a, n->lastKid) : nullptr;
+}
+
+inline ArenaNode NodeFirstKid(Arena* a, const Node* n) {
+    Node* last = NodeLastChild(a, n);
+    return last ? last->sibling : ArenaNode{};
+}
+
+inline Node* NodeFirstChild(Arena* a, const Node* n) {
+    ArenaNode first = NodeFirstKid(a, n);
+    return first.IsSet() ? ArenaPtrGet(a, first) : nullptr;
+}
+
+inline Node* NodeChild(Arena* a, const Node* n, int i) {
+    if (i < 0 || !n->lastKid.IsSet()) {
+        return nullptr;
+    }
+    Node* last = ArenaPtrGet(a, n->lastKid);
+    Node* at = ArenaPtrGet(a, last->sibling);
+    for (int k = 0; k < i; k++) {
+        if (at == last) {
+            return nullptr;
+        }
+        at = ArenaPtrGet(a, at->sibling);
+    }
+    return at;
+}
+
+inline int NodeChildCount(Arena* a, const Node* n) {
+    if (!n->lastKid.IsSet()) {
+        return 0;
+    }
+    Node* last = ArenaPtrGet(a, n->lastKid);
+    int count = 1;
+    for (Node* at = ArenaPtrGet(a, last->sibling); at != last;
+         at = ArenaPtrGet(a, at->sibling)) {
+        count++;
+    }
+    return count;
+}
+
+struct NodeKidsRange {
+    Arena* a;
+    ArenaNode at;
+    ArenaNode last;
+
+    struct Iter {
+        Arena* a;
+        ArenaNode at;
+        ArenaNode last;
+
+        Node* operator*() const { return ArenaPtrGet(a, at); }
+        Iter& operator++() {
+            at = at == last ? ArenaNode{} : ArenaPtrGet(a, at)->sibling;
+            return *this;
+        }
+        bool operator!=(const Iter& o) const { return at != o.at; }
+    };
+
+    Iter begin() const { return Iter{a, at, last}; }
+    Iter end() const { return Iter{a, ArenaNode{}, last}; }
+};
+
+inline NodeKidsRange NodeKids(Arena* a, const Node* n) {
+    return NodeKidsRange{a, NodeFirstKid(a, n), n->lastKid};
+}
+
+inline Str NodeStr(Arena* a, ArenaStr s) {
+    return ArenaStrGet(a, s);
+}
+
+bool NodeHasChildren(NodeKind kind);
+
+Str NodeToString(Arena* a, const Node* node);
+
+}
+
+#line 1 "src/markdown/markdown.h"
+
+namespace markdown {
+
+struct Constructs {
+    bool attention = true;
+    bool autolink = true;
+    bool blockQuote = true;
+    bool characterEscape = true;
+    bool characterReference = true;
+    bool codeIndented = true;
+    bool codeFenced = true;
+    bool codeText = true;
+    bool definition = true;
+    bool frontmatter = false;
+    bool gfmAutolinkLiteral = false;
+    bool gfmFootnoteDefinition = false;
+    bool gfmLabelStartFootnote = false;
+    bool gfmStrikethrough = false;
+    bool gfmTable = false;
+    bool gfmTaskListItem = false;
+    bool hardBreakEscape = true;
+    bool hardBreakTrailing = true;
+    bool headingAtx = true;
+    bool headingSetext = true;
+    bool htmlFlow = true;
+    bool htmlText = true;
+    bool labelStartImage = true;
+    bool labelStartLink = true;
+    bool labelEnd = true;
+    bool listItem = true;
+    bool mathFlow = false;
+    bool mathText = false;
+    bool thematicBreak = true;
+
+    static Constructs Gfm();
+};
+
+struct ParseOptions {
+    Constructs constructs = {};
+    bool gfmStrikethroughSingleTilde = true;
+    bool mathTextSingleDollar = true;
+
+    static ParseOptions Gfm();
+};
+
+Node* ToMdast(Arena* a, Str source, const ParseOptions& options);
+
+Str DecodeNamed(Arena* a, Str name);
+
+Str DecodeNumeric(Arena* a, Str value, int radix);
+
+}
+
 #line 1 "src/ui/text.h"
 
 namespace gpui {
 
 namespace component {
+
+struct TextView;
+
+struct Span {
+    int start = 0;
+    int end = 0;
+};
+
+struct LinkMark {
+    Str url = {};
+    Str identifier = {};
+    Str title = {};
+};
+
+struct TextMark {
+    bool bold = false;
+    bool italic = false;
+    bool strikethrough = false;
+    bool underline = false;
+    bool code = false;
+    Rgba highlight = {};
+    LinkMark link = {};
+    bool hasHighlight = false;
+    bool hasLink = false;
+
+    TextMark& Bold();
+    TextMark& Italic();
+    TextMark& Strikethrough();
+    TextMark& Underline();
+    TextMark& Code();
+    TextMark& Highlight(Rgba color);
+    TextMark& Link(LinkMark value);
+    void Merge(const TextMark& other);
+};
+
+struct ImageNode {
+    Str url = {};
+    LinkMark link = {};
+    Str title = {};
+    Str alt = {};
+    float width = 0;
+    float height = 0;
+    bool hasLink = false;
+
+    Str Title(Arena* a) const;
+};
+
+struct MarkdownParseContext {
+    Arena* arena = nullptr;
+    Str source = {};
+    int offset = 0;
+
+    Str Source() const { return source; }
+    int Offset() const { return offset; }
+    Str NodeSource(const markdown::Node*) const { return {}; }
+    Str Value(const markdown::Node* node, markdown::NodeStrKind kind) const;
+    Str Copy(Str value) const;
+};
+
+struct MarkdownNode {
+    Str name = {};
+    Str text = {};
+    Str markdown = {};
+    void* data = nullptr;
+    Span span = {};
+    bool hasSpan = false;
+
+    static MarkdownNode New(Str name, void* data = nullptr);
+    MarkdownNode& Text(Str value);
+    MarkdownNode& Markdown(Str value);
+    Str ToMarkdown() const;
+};
+
+using MarkdownBlockParserFn = bool (*)(const markdown::Node* node,
+                                       const MarkdownParseContext* context,
+                                       void* data, MarkdownNode* out);
+using MarkdownBlockRenderFn = El* (*)(Ctx * cx, const MarkdownNode* node,
+                                      void* data);
+
+struct MarkdownPlugin {
+    Str name = {};
+    MarkdownBlockParserFn parse = nullptr;
+    MarkdownBlockRenderFn render = nullptr;
+    void* data = nullptr;
+    bool isBlock = true;
+};
+
+struct MarkdownBlockParser {
+    MarkdownBlockParserFn fn = nullptr;
+    void* data = nullptr;
+};
+
+struct MarkdownBlockRenderer {
+    Str name = {};
+    MarkdownBlockRenderFn fn = nullptr;
+    void* data = nullptr;
+};
+
+struct MarkdownExtensions {
+    ArenaVec<MarkdownBlockParser> blockParsers {};
+    ArenaVec<MarkdownBlockRenderer> blockRenderers {};
+    uint64_t revision = 0;
+    bool enableMdx = false;
+
+    MarkdownExtensions& Mdx();
+    MarkdownExtensions& BlockParser(Arena* a, MarkdownBlockParserFn fn,
+                                    void* data = nullptr);
+    MarkdownExtensions& BlockRenderer(Arena* a, Str name,
+                                      MarkdownBlockRenderFn fn,
+                                      void* data = nullptr);
+    MarkdownExtensions& Plugin(Arena* a, const MarkdownPlugin& plugin);
+    const MarkdownBlockRenderer* Renderer(Str name) const;
+};
+
+using TextViewSetupFn = TextView* (*)(TextView * view, void* data);
+struct TextViewPlugin {
+    TextViewSetupFn setup = nullptr;
+    void* data = nullptr;
+
+    TextView* Setup(TextView* view) const;
+};
 
 enum MdMark : uint8_t {
     MdBold = 1 << 0,
@@ -19423,6 +21413,8 @@ enum class MdKind : uint8_t {
     Html,
 
     Group,
+
+    Custom,
 };
 
 enum MdAlign : uint8_t {
@@ -19457,17 +21449,10 @@ struct MdNode {
 
     bool hasCheck = false;
     bool checked = false;
+    MarkdownNode custom = {};
 };
 
-struct MdPluginNode {
-
-    Str name = {};
-
-    Str text = {};
-    Str markdown = {};
-
-    void* data = nullptr;
-};
+using MdPluginNode = MarkdownNode;
 
 using MdPluginParseFn = bool (*)(Ctx* cx, MdNode* node, Str text, void* data,
                                  MdPluginNode* out);
@@ -19502,12 +21487,96 @@ struct TableData {
 
 using TableActionsFn = El* (*)(Ctx * cx, void* data, const TableData* table);
 
+using HeadingFontSizeFn = float (*)(uint8_t level, float base, void* data);
+
+struct TextViewStyle {
+    float paragraphGap = 16;
+    float headingBaseFontSize = 14;
+    HeadingFontSizeFn headingFontSize = nullptr;
+    void* headingFontSizeData = nullptr;
+    gpui::Style codeBlock = {};
+    uint32_t codeBlockFields = 0;
+    gpui::Style table = {};
+    uint32_t tableFields = 0;
+    gpui::Style tableHead = {};
+    uint32_t tableHeadFields = 0;
+    gpui::Style tableCell = {};
+    uint32_t tableCellFields = 0;
+    gpui::Style inlineCode = {};
+    uint32_t inlineCodeFields = 0;
+    bool isDark = false;
+
+    static TextViewStyle Default();
+    float HeadingSize(uint8_t level) const;
+    TextViewStyle& ParagraphGap(float gap);
+    TextViewStyle& HeadingFontSize(HeadingFontSizeFn fn, void* data = nullptr);
+    TextViewStyle& CodeBlock(const gpui::Style& style, uint32_t fields);
+    TextViewStyle& Table(const gpui::Style& style, uint32_t fields);
+    TextViewStyle& TableHead(const gpui::Style& style, uint32_t fields);
+    TextViewStyle& TableCell(const gpui::Style& style, uint32_t fields);
+    TextViewStyle& InlineCode(const gpui::Style& style, uint32_t fields);
+    bool Equals(const TextViewStyle& other) const;
+};
+
+enum class TextViewFormat : uint8_t {
+    Markdown,
+    Html
+};
+
+struct TextViewState {
+    EntityId self = {};
+    Str text = {};
+    TextViewFormat format = TextViewFormat::Markdown;
+    TextViewStyle textViewStyle = {};
+    uint64_t revision = 0;
+    uint64_t selectionRevision = 0;
+    float scrollY = 0;
+    bool selectable = false;
+    bool scrollable = false;
+
+    int maxLines = -1;
+
+    bool clamped = false;
+    gpui::SelectionFormat selectionFormat = gpui::SelectionFormat::Plain;
+
+    ~TextViewState();
+    static Entity<TextViewState> Markdown(App* app, Str text);
+    static Entity<TextViewState> Html(App* app, Str text);
+    Str Source() const { return text; }
+    void SetText(Str value, App* app, Window* window = nullptr);
+    void PushStr(Str value, App* app, Window* window = nullptr);
+    void SetSelectable(bool value, App* app, Window* window = nullptr);
+    void SetScrollable(bool value, App* app, Window* window = nullptr);
+    bool IsClamped() const { return clamped; }
+    void SetSelectionFormat(gpui::SelectionFormat value, App* app,
+                            Window* window = nullptr);
+    int SelectedText(Window* window, char* out, int cap) const;
+    bool HasSelection(const Window* window) const;
+    void ClearSelection(Window* window, App* app);
+    void SelectAll(Window* window, App* app);
+    static void OnAction(TextViewState* self, Ctx* cx,
+                         const ActionEvent* event);
+    static void OnScroll(TextViewState* self, Ctx* cx,
+                         const ScrollEvent* event);
+    static void OnLineClamp(TextViewState* self, Ctx* cx,
+                            const LineClampEvent* event);
+
+  private:
+    void Changed(App* app, Window* window, bool selectionCompatible);
+};
+
+struct TextViewLayoutState {
+    Entity<TextViewState> state = {};
+    El* element = nullptr;
+};
+
 Str MdTableToMarkdown(Arena* a, MdNode* table);
 
 struct TextView {
     Arena* a = nullptr;
     Ctx* cx = nullptr;
     Str source = {};
+    Entity<TextViewState> state = {};
 
     float baseFont = 16;
 
@@ -19527,25 +21596,40 @@ struct TextView {
     void* tableActionsData = nullptr;
     void* codeActionsData = nullptr;
 
-    ArenaVec<MdPlugin> plugins = {};
+    ArenaVec<MdPlugin> plugins {};
 
     float tableColW = 64;
 
     bool tableScroll = false;
 
+    bool scrollable = false;
+
+    int maxLines = -1;
+
     int tableIx = 0;
 
     gpui::SelectionFormat selFormat = gpui::SelectionFormat::Plain;
+    TextViewStyle textViewStyle = {};
+    MarkdownExtensions markdownExtensions = {};
+    gpui::Style outerStyle = {};
+    uint32_t outerStyleFields = 0;
 
     static TextView* New(Ctx* cx, Str source);
     static TextView* NewHtml(Ctx* cx, Str source);
+
+    static TextView* New(Ctx* cx, Entity<TextViewState> state);
     TextView* Font(float px);
     TextView* HeadingFont(float px);
+    TextView* Style(const TextViewStyle& style);
+    TextView* Refine(const gpui::Style& style, uint32_t fields);
     TextView* Selectable(bool on = true);
 
     TextView* SelFormat(gpui::SelectionFormat fmt);
     TextView* TableColumnWidth(float px);
     TextView* TableScroll(bool on = true);
+    TextView* Scrollable(bool on = true);
+
+    TextView* MaxLines(int count);
     TextView* ParagraphGap(float px);
 
     TextView* OnLink(Listener fn);
@@ -19556,6 +21640,13 @@ struct TextView {
 
     TextView* Plugin(Str name, MdPluginParseFn parse, MdPluginRenderFn render,
                      void* data = nullptr);
+    TextView* MarkdownExtensionsSet(const MarkdownExtensions& extensions);
+    TextView* MarkdownBlockParser(MarkdownBlockParserFn parser,
+                                  void* data = nullptr);
+    TextView* MarkdownBlockRenderer(Str name, MarkdownBlockRenderFn renderer,
+                                    void* data = nullptr);
+    TextView* Plugin(const MarkdownPlugin& plugin);
+    TextView* Plugin(const TextViewPlugin& plugin);
     El* IntoEl();
 
   private:
@@ -19616,6 +21707,8 @@ struct TextView {
 };
 
 MdNode* MdParse(Arena* a, Str source);
+
+void TextViewInitKeys();
 
 Str MdDecodeEntity(Arena* a, Str e);
 
@@ -20037,10 +22130,23 @@ void CanvasClear(PaintCtx* ctx, Rgba c);
 void CanvasFillRect(PaintCtx* ctx, float x, float y, float w, float h, Rgba c);
 void CanvasFillRound(PaintCtx* ctx, float x, float y, float w, float h, float r,
                      Rgba c);
+inline float ClampRadius(float r, float w, float h) {
+    float lim = (w < h ? w : h) * 0.5f;
+    if (lim < 0) lim = 0;
+    return r > lim ? lim : r;
+}
+inline void FillRound(PaintCtx* ctx, float x, float y, float w, float h,
+                      float r, Rgba c) {
+    CanvasFillRound(ctx, x, y, w, h, ClampRadius(r, w, h), c);
+}
 
 void CanvasStrokeRound(PaintCtx* ctx, float x, float y, float w, float h,
                        float r, float stroke, Rgba c,
                        const float* dash = nullptr);
+inline void DrawRoundStroke(PaintCtx* ctx, float x, float y, float w, float h,
+                            float r, float stroke, Rgba c) {
+    CanvasStrokeRound(ctx, x, y, w, h, ClampRadius(r, w, h), stroke, c);
+}
 void CanvasLine(PaintCtx* ctx, float x1, float y1, float x2, float y2,
                 float stroke, Rgba c, const float* dash = nullptr);
 
@@ -20093,7 +22199,10 @@ void TextLayoutAddRef(TextLayout* tl);
 void TextLayoutRelease(TextLayout* tl);
 
 void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
-                    bool clip, float clipW = 0);
+                     bool clip, float clipW = 0);
+void DrawTextAt(PaintCtx* ctx, Str s, float x, float y, float w, float h,
+                float fontSize, Rgba c, bool truncate, bool wrap = false,
+                float measMaxW = -1.f, int weight = 0, float lineH = 0);
 
 int TextLayoutHitPoint(TextLayout* tl, Str s, float relX, float relY);
 
@@ -20379,9 +22488,6 @@ const SceneStats& Stats();
 
 #line 1 "src/markdown/constant.h"
 
-#ifndef GPUI_MARKDOWN_CONSTANT_H_
-#define GPUI_MARKDOWN_CONSTANT_H_
-
 namespace markdown {
 
 using base::SeqStrAdvance;
@@ -20436,336 +22542,7 @@ extern const CharacterReference kCharacterReferences[2125];
 
 }
 
-#endif
-
-#line 1 "src/markdown/mdast.h"
-
-#ifndef GPUI_MARKDOWN_MDAST_H_
-#define GPUI_MARKDOWN_MDAST_H_
-
-namespace markdown {
-
-using base::Arena;
-using base::ArenaPtr;
-using base::ArenaPtrGet;
-using base::ArenaPtrOf;
-using base::ArenaStr;
-using base::ArenaStrGet;
-using base::ArenaVec;
-using base::kArenaStrNone;
-using base::Str;
-
-struct Node;
-
-using ArenaNode = ArenaPtr<Node>;
-
-struct UnistPoint {
-    int32_t line = 1;
-    int32_t column = 1;
-    int32_t offset = 0;
-};
-
-struct UnistPosition {
-    UnistPoint start = {};
-    UnistPoint end = {};
-};
-
-UnistPosition GetUnistPosition(Str md, uint32_t start, uint32_t end);
-
-enum class ReferenceKind : uint8_t {
-    Shortcut,
-    Collapsed,
-    Full,
-};
-
-enum class AlignKind : uint8_t {
-    Left,
-    Right,
-    Center,
-    None,
-};
-
-using ArenaAlign = uint32_t;
-constexpr ArenaAlign kArenaAlignNone = 0;
-
-static_assert((int)AlignKind::None < 4, "an alignment has to fit in 2 bits");
-
-ArenaAlign ArenaAlignNew(Arena* a, int32_t count);
-int32_t ArenaAlignCount(Arena* a, ArenaAlign al);
-AlignKind ArenaAlignAt(Arena* a, ArenaAlign al, int32_t i);
-void ArenaAlignSet(Arena* a, ArenaAlign al, int32_t i, AlignKind k);
-
-enum class NodeKind : uint8_t {
-    Root,
-    Blockquote,
-    FootnoteDefinition,
-    List,
-    Toml,
-    Yaml,
-    Break,
-    InlineCode,
-    InlineMath,
-    Delete,
-    Emphasis,
-    FootnoteReference,
-    Html,
-    Image,
-    ImageReference,
-    Link,
-    LinkReference,
-    Strong,
-    Text,
-    Code,
-    Math,
-    Heading,
-    Table,
-    ThematicBreak,
-    TableRow,
-    TableCell,
-    ListItem,
-    Definition,
-    Paragraph,
-};
-
-enum class NodeStrKind : uint8_t {
-
-    Value,
-
-    Url,
-
-    Title,
-
-    Alt,
-
-    Identifier,
-
-    Label,
-
-    Lang,
-    Meta,
-
-    PerKind,
-};
-
-enum NodeFlag : uint8_t {
-
-    NodeHasStart = 1 << 0,
-
-    NodeOrdered = 1 << 1,
-
-    NodeSpread = 1 << 2,
-
-    NodeChecked = 1 << 3,
-    NodeHasChecked = 1 << 4,
-
-    NodeRefKindMask = 3 << 6,
-};
-
-struct Node {
-
-    ArenaNode lastKid = {};
-
-    ArenaNode sibling = {};
-
-    ArenaStr firstStr = kArenaStrNone;
-
-    NodeKind kind = NodeKind::Root;
-
-    uint8_t flags = 0;
-
-    bool Has(NodeFlag f) const { return (flags & f) != 0; }
-    void Set(NodeFlag f, bool on) {
-        flags = on ? (uint8_t)(flags | f) : (uint8_t)(flags & ~f);
-    }
-};
-
-static_assert(sizeof(Node) == 3 * 4 + 4,
-              "Node has picked up padding; order the fields largest first");
-
-static_assert(alignof(Node) == 4, "a Node holds nothing wider than a word");
-
-uint32_t NodePerKind(Arena* a, const Node* n);
-void NodeSetPerKind(Arena* a, Node* n, uint32_t word);
-
-Str NodeGetStr(Arena* a, const Node* n, NodeStrKind k);
-
-int32_t NodeGetStrLen(Arena* a, const Node* n, NodeStrKind k);
-
-bool NodeHasStr(Arena* a, const Node* n, NodeStrKind k);
-
-void NodeSetStr(Arena* a, Node* n, NodeStrKind k, Str s);
-
-void NodeClearStr(Arena* a, Node* n, NodeStrKind k);
-
-void NodeGrowStr(Arena* a, Node* n, NodeStrKind k, Str more);
-
-inline ReferenceKind NodeRefKind(const Node* n) {
-    return (ReferenceKind)((n->flags & NodeRefKindMask) >> 6);
-}
-
-inline void NodeSetRefKind(Node* n, ReferenceKind k) {
-    n->flags = (uint8_t)((n->flags & ~NodeRefKindMask) |
-                         (((uint8_t)k & 3) << 6));
-}
-
-Node* NodeNew(Arena* a, NodeKind kind);
-
-inline void NodeAddChild(Arena* a, Node* parent, Node* child) {
-    ArenaNode at = ArenaPtrOf(a, child);
-    if (parent->lastKid.IsSet()) {
-        Node* last = ArenaPtrGet(a, parent->lastKid);
-        child->sibling = last->sibling;
-        last->sibling = at;
-    } else {
-
-        child->sibling = at;
-    }
-    parent->lastKid = at;
-}
-
-inline Node* NodeLastChild(Arena* a, const Node* n) {
-    return n->lastKid.IsSet() ? ArenaPtrGet(a, n->lastKid) : nullptr;
-}
-
-inline ArenaNode NodeFirstKid(Arena* a, const Node* n) {
-    Node* last = NodeLastChild(a, n);
-    return last ? last->sibling : ArenaNode{};
-}
-
-inline Node* NodeFirstChild(Arena* a, const Node* n) {
-    ArenaNode first = NodeFirstKid(a, n);
-    return first.IsSet() ? ArenaPtrGet(a, first) : nullptr;
-}
-
-inline Node* NodeChild(Arena* a, const Node* n, int i) {
-    if (i < 0 || !n->lastKid.IsSet()) {
-        return nullptr;
-    }
-    Node* last = ArenaPtrGet(a, n->lastKid);
-    Node* at = ArenaPtrGet(a, last->sibling);
-    for (int k = 0; k < i; k++) {
-        if (at == last) {
-            return nullptr;
-        }
-        at = ArenaPtrGet(a, at->sibling);
-    }
-    return at;
-}
-
-inline int NodeChildCount(Arena* a, const Node* n) {
-    if (!n->lastKid.IsSet()) {
-        return 0;
-    }
-    Node* last = ArenaPtrGet(a, n->lastKid);
-    int count = 1;
-    for (Node* at = ArenaPtrGet(a, last->sibling); at != last;
-         at = ArenaPtrGet(a, at->sibling)) {
-        count++;
-    }
-    return count;
-}
-
-struct NodeKidsRange {
-    Arena* a;
-    ArenaNode at;
-    ArenaNode last;
-
-    struct Iter {
-        Arena* a;
-        ArenaNode at;
-        ArenaNode last;
-
-        Node* operator*() const { return ArenaPtrGet(a, at); }
-        Iter& operator++() {
-            at = at == last ? ArenaNode{} : ArenaPtrGet(a, at)->sibling;
-            return *this;
-        }
-        bool operator!=(const Iter& o) const { return at != o.at; }
-    };
-
-    Iter begin() const { return Iter{a, at, last}; }
-    Iter end() const { return Iter{a, ArenaNode{}, last}; }
-};
-
-inline NodeKidsRange NodeKids(Arena* a, const Node* n) {
-    return NodeKidsRange{a, NodeFirstKid(a, n), n->lastKid};
-}
-
-inline Str NodeStr(Arena* a, ArenaStr s) {
-    return ArenaStrGet(a, s);
-}
-
-bool NodeHasChildren(NodeKind kind);
-
-Str NodeToString(Arena* a, const Node* node);
-
-}
-
-#endif
-
-#line 1 "src/markdown/markdown.h"
-
-#ifndef GPUI_MARKDOWN_MARKDOWN_H_
-#define GPUI_MARKDOWN_MARKDOWN_H_
-
-namespace markdown {
-
-struct Constructs {
-    bool attention = true;
-    bool autolink = true;
-    bool blockQuote = true;
-    bool characterEscape = true;
-    bool characterReference = true;
-    bool codeIndented = true;
-    bool codeFenced = true;
-    bool codeText = true;
-    bool definition = true;
-    bool frontmatter = false;
-    bool gfmAutolinkLiteral = false;
-    bool gfmFootnoteDefinition = false;
-    bool gfmLabelStartFootnote = false;
-    bool gfmStrikethrough = false;
-    bool gfmTable = false;
-    bool gfmTaskListItem = false;
-    bool hardBreakEscape = true;
-    bool hardBreakTrailing = true;
-    bool headingAtx = true;
-    bool headingSetext = true;
-    bool htmlFlow = true;
-    bool htmlText = true;
-    bool labelStartImage = true;
-    bool labelStartLink = true;
-    bool labelEnd = true;
-    bool listItem = true;
-    bool mathFlow = false;
-    bool mathText = false;
-    bool thematicBreak = true;
-
-    static Constructs Gfm();
-};
-
-struct ParseOptions {
-    Constructs constructs = {};
-    bool gfmStrikethroughSingleTilde = true;
-    bool mathTextSingleDollar = true;
-
-    static ParseOptions Gfm();
-};
-
-Node* ToMdast(Arena* a, Str source, const ParseOptions& options);
-
-Str DecodeNamed(Arena* a, Str name);
-
-Str DecodeNumeric(Arena* a, Str value, int radix);
-
-}
-
-#endif
-
 #line 1 "src/markdown/state.h"
-
-#ifndef GPUI_MARKDOWN_STATE_H_
-#define GPUI_MARKDOWN_STATE_H_
 
 namespace markdown {
 
@@ -21131,12 +22908,7 @@ State Call(Tokenizer* tokenizer, StateName name);
 
 }
 
-#endif
-
 #line 1 "src/markdown/event.h"
-
-#ifndef GPUI_MARKDOWN_EVENT_H_
-#define GPUI_MARKDOWN_EVENT_H_
 
 namespace markdown {
 
@@ -21327,12 +23099,7 @@ struct Event {
 
 }
 
-#endif
-
 #line 1 "src/markdown/util.h"
-
-#ifndef GPUI_MARKDOWN_UTIL_H_
-#define GPUI_MARKDOWN_UTIL_H_
 
 namespace markdown {
 
@@ -21341,10 +23108,6 @@ using base::ArenaVec;
 
 Str StrOwn(Arena* a, Str s);
 Str StrOwn(Arena* a, const char* s, int32_t len);
-
-bool StrEq(Str a, Str b);
-
-bool StrEqAsciiI(Str a, Str b);
 
 enum class CharKind : uint8_t {
     Whitespace,
@@ -21409,7 +23172,7 @@ struct EditMap {
     struct Entry {
         int32_t at = 0;
         int32_t remove = 0;
-        ArenaVec<Event> add = {};
+        ArenaVec<Event> add {};
     };
 
     Arena* a = nullptr;
@@ -21452,12 +23215,7 @@ Str CharacterReferenceDecodeInto(char buf[4], Str value, uint8_t marker);
 
 }
 
-#endif
-
 #line 1 "src/markdown/tokenizer.h"
-
-#ifndef GPUI_MARKDOWN_TOKENIZER_H_
-#define GPUI_MARKDOWN_TOKENIZER_H_
 
 namespace markdown {
 
@@ -21658,12 +23416,7 @@ Node* ToMdastCompile(const Vec<Event>& events, ParseState* parseState);
 
 }
 
-#endif
-
 #line 1 "src/markdown/construct.h"
-
-#ifndef GPUI_MARKDOWN_CONSTRUCT_H_
-#define GPUI_MARKDOWN_CONSTRUCT_H_
 
 namespace markdown {
 
@@ -22027,69 +23780,1144 @@ bool TextResolve(Tokenizer* t, Subresult* out);
 
 }
 
-#endif
-
 #line 1 "src/markdown-mini/markdown.h"
 
-#ifndef GPUI_MARKDOWN_MINI_MARKDOWN_H_
-#define GPUI_MARKDOWN_MINI_MARKDOWN_H_
+#line 1 "src/shell/a11y.h"
 
-#endif
+namespace gpui::shell {
 
-#line 1 "src/sys/executor.h"
-
-namespace gpui {
-
-using TaskId = int;
-
-void ExecInit();
-
-void ExecShutdown();
-
-bool ExecOnMainThread();
-
-void ExecSetWake(Func0 wake);
-
-void ExecPost(Func1<void*> f, void* arg = nullptr);
-
-void ExecPostNow(Func1<void*> f, void* arg = nullptr);
-
-int ExecDrain();
-
-int ExecQueued();
-
-TaskId ExecSpawn(Func0 work, Func0 done = Func0{});
-
-bool ExecCancel(TaskId id);
-
-int ExecPending();
-
-bool ExecWaitIdle(int timeoutMs);
-
-int ExecWorkerCount();
-
-bool ExecHasThreads();
-
-constexpr int kExecMaxWorkers = 8;
+AccessibilityRole AccessibilityRoleFromName(Str name);
+int AccessibilityRoleNameCount();
 
 }
 
-#line 1 "src/sys/gpu.h"
+#line 1 "src/shell/filesystem.h"
 
-#ifndef GPUI_SYS_GPU_H_
-#define GPUI_SYS_GPU_H_
+namespace gpui::shell {
 
-namespace gpui {
+constexpr int kFsMaxReadBytes = 64 * 1024 * 1024;
+constexpr int kFsMaxWriteBytes = 8 * 1024 * 1024;
+constexpr int kFsMaxDirectoryEntries = 10000;
+constexpr int kFsMaxDirectoryNameBytes = 1024 * 1024;
 
-bool GpuAvailable();
+enum class FsOperation : uint8_t {
+    Read,
+    Write,
+    ReadDirectory,
+    Exists,
+    RemoveFile,
+    RemoveDirectory,
+    MakeDirectory,
+};
 
-float GpuUsagePercent();
+struct FsEntry {
+    Str name;
+    bool isDirectory = false;
+};
 
-void GpuProbeFree();
+struct FsResult {
+    Str bytes;
+    Vec<FsEntry> entries;
+    bool exists = false;
+
+    void Free();
+};
+
+bool FsRun(FsOperation operation, Str root, Str relative, Str input,
+           bool recursive, FsResult* result, Str* error);
 
 }
 
-#endif
+#line 1 "src/shell/assets.h"
+
+namespace gpui {
+
+constexpr int kShellMaxAssetBytes = 16 * 1024 * 1024;
+constexpr int kShellMaxReportedMissingAssets = 256;
+
+struct AppAssets {
+    Str root;
+    Vec<Str> missing;
+    int source = 0;
+
+    explicit AppAssets(Str root);
+    AppAssets(const AppAssets&) = delete;
+    AppAssets& operator=(const AppAssets&) = delete;
+    ~AppAssets();
+
+    bool Install();
+    void Uninstall();
+    bool Load(Str path, Vec<uint8_t>* out, Str* error = nullptr);
+    bool Exists(Str path);
+    bool List(Str path, Vec<Str>* out, Str* error = nullptr);
+    bool Resolve(Str path, Str* relative, Str* error = nullptr) const;
+};
+
+}
+
+#line 1 "src/shell/capability.h"
+
+namespace gpui {
+
+enum class ExecuteGrantKind : uint8_t {
+    Denied,
+    Allowed,
+    Unrestricted,
+};
+
+struct ExecuteGrant {
+    ExecuteGrantKind kind = ExecuteGrantKind::Denied;
+    Vec<Str> commands;
+
+    ExecuteGrant();
+    ExecuteGrant(const ExecuteGrant& other);
+    ExecuteGrant& operator=(const ExecuteGrant& other);
+    ~ExecuteGrant();
+
+    static ExecuteGrant Denied();
+    static ExecuteGrant Allowed(const Str* commands, int count);
+    static ExecuteGrant Unrestricted();
+    bool Allows(Str command) const;
+};
+
+struct HttpRequestGrant {
+    Str scheme;
+    Str host;
+    uint16_t port = 0;
+    bool hasPort = false;
+    Vec<Str> methods;
+    Vec<Str> paths;
+    Vec<Str> pathPrefixes;
+
+    HttpRequestGrant();
+    explicit HttpRequestGrant(Str host);
+    HttpRequestGrant(const HttpRequestGrant& other);
+    HttpRequestGrant& operator=(const HttpRequestGrant& other);
+    ~HttpRequestGrant();
+
+    HttpRequestGrant& Scheme(Str value);
+    HttpRequestGrant& Port(uint16_t value);
+    HttpRequestGrant& AddMethod(Str value);
+    HttpRequestGrant& AddPath(Str value);
+    HttpRequestGrant& AddPathPrefix(Str value);
+    bool Allows(Str requestScheme, Str requestHost, uint16_t requestPort,
+                bool requestHasPort, Str method, Str path) const;
+};
+
+enum class CapabilityAccess : uint8_t {
+    Read,
+    Write,
+};
+
+enum class CapabilityErrorKind : uint8_t {
+    None,
+    NotGranted,
+    OutsideRoots,
+    ExecuteDenied,
+    StorageDenied,
+};
+
+struct CapabilityError {
+    CapabilityErrorKind kind = CapabilityErrorKind::None;
+    CapabilityAccess access = CapabilityAccess::Read;
+    Str subject;
+};
+
+void CapabilityErrorFree(CapabilityError* error);
+Str CapabilityErrorMessage(Arena* arena, const CapabilityError& error);
+
+struct CapabilityPath {
+    Str root;
+    Str relative;
+
+    void Free();
+};
+
+class Capabilities {
+  public:
+    Capabilities();
+    Capabilities(const Capabilities& other);
+    Capabilities& operator=(const Capabilities& other);
+    ~Capabilities();
+
+    Capabilities& AddReadRoot(Str root);
+    Capabilities& AddWriteRoot(Str root);
+    Capabilities& SetExecute(const ExecuteGrant& grant);
+    Capabilities& AddNetworkHost(Str host);
+    Capabilities& AddHttpRequest(const HttpRequestGrant& grant);
+    Capabilities& Storage(bool allowed);
+    Capabilities& ClipboardRead(bool allowed);
+    Capabilities& ClipboardWrite(bool allowed);
+    Capabilities& Exit(bool allowed);
+
+    bool HasReadAccess() const;
+    bool HasWriteAccess() const;
+    bool HasStorage() const;
+    bool IsClipboardReadable() const;
+    bool IsClipboardWritable() const;
+    bool MayExit() const;
+    bool MayRun(Str command) const;
+    bool MayReach(Str host) const;
+    bool MayRequest(Str scheme, Str host, uint16_t port, bool hasPort,
+                    Str method, Str path) const;
+
+    bool ResolvePath(Str path, CapabilityAccess access, CapabilityPath* out,
+                     CapabilityError* error = nullptr) const;
+
+  private:
+    Vec<Str> readRoots;
+    Vec<Str> writeRoots;
+    ExecuteGrant execute;
+    Vec<Str> networkHosts;
+    Vec<HttpRequestGrant*> httpRequests;
+    bool storage = false;
+    bool clipboardRead = false;
+    bool clipboardWrite = false;
+    bool exit = false;
+
+    void Clear();
+    void CopyFrom(const Capabilities& other);
+};
+
+}
+
+#line 1 "src/shell/metrics.h"
+
+namespace gpui {
+
+struct RuntimeMetrics {
+    uint64_t scriptRenders = 0;
+    uint64_t scriptRenderNanos = 0;
+    uint64_t slowestScriptRenderNanos = 0;
+    uint64_t nativeNanos = 0;
+    uint64_t materializations = 0;
+    uint64_t materializeNanos = 0;
+
+    uint64_t MeanScriptOnlyNanos() const;
+    uint64_t MeanNativeNanos() const;
+    uint64_t MeanScriptRenderNanos() const;
+    uint64_t MeanMaterializeNanos() const;
+    RuntimeMetrics Since(const RuntimeMetrics& earlier) const;
+};
+
+namespace shell {
+
+struct Metrics {
+    RuntimeMetrics value;
+};
+
+enum class MetricsTimerKind : uint8_t {
+    ScriptRender,
+    Native,
+    VirtualItems,
+    Materialize,
+};
+
+struct MetricsTimer {
+    Metrics* metrics = nullptr;
+    MetricsTimerKind kind = MetricsTimerKind::ScriptRender;
+    double started = 0;
+};
+
+MetricsTimer MetricsBegin(Metrics* metrics, MetricsTimerKind kind);
+void MetricsEnd(MetricsTimer* timer);
+void MetricsAdd(Metrics* metrics, MetricsTimerKind kind, uint64_t nanos);
+RuntimeMetrics MetricsRead(const Metrics* metrics);
+
+}
+}
+
+#line 1 "src/shell/error.h"
+
+namespace gpui {
+
+struct ShellError {
+    Str message;
+
+    bool IsSet() const { return message.len > 0; }
+};
+
+void ShellErrorClear(ShellError* error);
+void ShellErrorSet(ShellError* error, Str message);
+
+}
+
+#line 1 "src/shell/host_modules.h"
+
+namespace gpui {
+
+enum class HostValueKind : uint8_t {
+    Null,
+    Bool,
+    Number,
+    String,
+    Array,
+    Object,
+};
+
+struct HostValue;
+
+struct HostField {
+    Str name;
+    HostValue* value = nullptr;
+};
+
+struct HostValue {
+    HostValueKind kind = HostValueKind::Null;
+    bool boolean = false;
+    double number = 0;
+    Str string;
+    Vec<HostValue*> array;
+    Vec<HostField> object;
+
+    void Free();
+    bool CopyFrom(const HostValue& other);
+    void SetNull();
+    void SetBool(bool value);
+    void SetNumber(double value);
+    bool SetString(Str value);
+    bool Append(const HostValue& value);
+    bool SetField(Str name, const HostValue& value);
+    const HostValue* Get(Str name) const;
+    const char* Describe() const;
+};
+
+struct HostError {
+    Str message;
+
+    bool IsSet() const { return message.s != nullptr; }
+    void Set(Str value);
+    void Clear();
+};
+
+struct HostArguments {
+    Vec<HostValue*> values;
+
+    void Free();
+    int Len() const { return values.len; }
+    const HostValue* Get(int index) const;
+    bool Value(int index, const HostValue** value, HostError* error) const;
+    bool String(int index, Str* value, HostError* error) const;
+    bool Number(int index, double* value, HostError* error) const;
+    bool Integer(int index, int64_t* value, HostError* error) const;
+    bool Boolean(int index, bool* value, HostError* error) const;
+};
+
+struct HostCall {
+    const HostArguments* arguments = nullptr;
+    HostValue result;
+    HostError error;
+
+    void Fail(Str message) { error.Set(message); }
+};
+
+struct HostModules;
+
+struct HostAsyncRequest {
+    const HostArguments* arguments = nullptr;
+    Func1<HostCall*> work;
+    Func0 release;
+    HostModules* registry = nullptr;
+    HostError error;
+};
+
+class HostModule {
+  public:
+    static HostModule* New(Str name);
+    HostModule* Retain();
+    void Release();
+
+    HostModule* Function(Str name, Func1<HostCall*> body,
+                         Func0 release = {});
+    HostModule* AsyncFunction(Str name, Func1<HostCall*> work,
+                              Func0 release = {});
+    HostModule* AsyncFunction(Str name, Func1<HostAsyncRequest*> begin,
+                              Func0 release = {});
+    HostModule* Declarations(Str typescript);
+
+    Str Name() const { return name; }
+    Str Declared() const { return declarations; }
+    int FunctionCount() const { return functions.len; }
+    Str FunctionName(int index) const;
+    bool Has(Str function) const;
+    bool IsAsync(Str function) const;
+    bool Validate(HostError* error = nullptr) const;
+    bool Call(Str function, HostCall* call) const;
+    bool Begin(Str function, HostAsyncRequest* request) const;
+
+  private:
+    struct FunctionEntry;
+    uint32_t refs = 1;
+    Str name;
+    Str declarations;
+    Vec<FunctionEntry*> functions;
+
+    explicit HostModule(Str name);
+    ~HostModule();
+    FunctionEntry* Find(Str function) const;
+    HostModule* SetFunction(Str name, bool async, Func1<HostCall*> body,
+                            Func1<HostAsyncRequest*> begin, Func0 release);
+};
+
+HostModules* HostModulesNew();
+HostModules* HostModulesRetain(HostModules* modules);
+void HostModulesRelease(HostModules* modules);
+HostModules* HostModulesClone(HostModules* modules);
+uint64_t HostModulesGeneration(const HostModules* modules);
+int HostModulesCount(const HostModules* modules);
+HostModule* HostModulesAt(const HostModules* modules, int index);
+HostModule* HostModulesGet(const HostModules* modules, Str name);
+bool HostModulesInsert(HostModules* modules, HostModule* module);
+
+bool ShellExportModule(HostModule* module, HostError* error = nullptr);
+void ShellClearExportedModules();
+
+bool HostDispatch(Str module, Str function, HostCall* call);
+bool HostDispatchBegin(Str module, Str function, HostAsyncRequest* request);
+bool HostIsIdentifier(Str name);
+bool HostIsReservedSpecifier(Str name);
+
+}
+
+#line 1 "src/shell/storage.h"
+
+namespace gpui::shell {
+
+constexpr int kMaxStorageBytes = 8 * 1024 * 1024;
+constexpr int kMaxStorageKeys = 4096;
+constexpr int kMaxStorageValueBytes = 1024 * 1024;
+constexpr int kMaxStorageWaiters = 1024;
+
+bool StorageReplaceFile(Str temporary, Str path, Str* error);
+
+struct StorageEntry {
+    Str key;
+    Str value;
+};
+
+struct StorageWrite {
+    uint64_t revision = 0;
+    Str path;
+    Str body;
+
+    void Free();
+};
+
+struct StorageOutcome {
+    bool ok = false;
+    Str error;
+};
+
+struct StorageWaiter {
+    uint64_t revision = 0;
+    Func1<StorageOutcome> settle;
+};
+
+class Storage {
+  public:
+    explicit Storage(bool persisted = false);
+    Storage(const Storage&) = delete;
+    Storage& operator=(const Storage&) = delete;
+    ~Storage();
+
+    bool SetPath(Str path, Str* error = nullptr);
+    Str Get(Str key) const;
+    bool Set(Str key, Str value, Str* error = nullptr);
+    bool Remove(Str key, Str* error = nullptr);
+    bool Clear(Str* error = nullptr);
+    int Len() const { return entries.len; }
+    Str Key(int index) const;
+    bool HasPath() const { return path.s != nullptr; }
+
+    uint64_t Revision() const { return revision; }
+    uint64_t WrittenRevision() const { return written; }
+    bool IsDirty() const;
+    bool HasWriteInFlight() const { return inFlight != 0; }
+    bool BeginWrite(StorageWrite* write, Str* error = nullptr);
+    void FinishWrite(uint64_t writeRevision, bool ok,
+                     Vec<StorageWaiter*>* ready);
+    void AbortWrite(uint64_t writeRevision);
+    bool Wait(Func1<StorageOutcome> settle, StorageWaiter** waiter,
+              bool* immediate, Str* error = nullptr);
+    void CancelWaiter(StorageWaiter* waiter);
+
+  private:
+    Vec<StorageEntry*> entries;
+    Vec<StorageWaiter*> waiters;
+    Str path;
+    bool persisted = false;
+    uint64_t revision = 0;
+    uint64_t written = 0;
+    uint64_t inFlight = 0;
+    uint64_t failed = 0;
+
+    bool Load(Str* error);
+    bool Encode(Str* body, Str* error) const;
+    bool ValidateEncoded(Str* error) const;
+    void Touch();
+    void ResetEntries();
+    void ReadyThrough(uint64_t through, Vec<StorageWaiter*>* ready);
+};
+
+bool StoragePersist(const StorageWrite& write, Str* error = nullptr);
+
+}
+
+#line 1 "src/shell/policy.h"
+
+namespace gpui {
+
+struct Policy;
+
+Policy* PolicyNew();
+Policy* PolicyNew(const Capabilities& capabilities);
+Policy* PolicyRetain(Policy* policy);
+void PolicyRelease(Policy* policy);
+const Capabilities& PolicyCapabilities(const Policy* policy);
+
+Policy* PolicyDefault();
+void PolicySetDefault(Policy* policy);
+void PolicyUpdateDefaultCapabilities(const Capabilities& capabilities);
+shell::Storage* PolicyStorage(Policy* policy, bool session);
+bool PolicySetStoragePath(Policy* policy, Str path, Str* error = nullptr);
+bool ShellSetStoragePath(Str path, Str* error = nullptr);
+HostModules* PolicyHostModules(Policy* policy);
+bool PolicyAddHostModule(Policy* policy, HostModule* module,
+                         HostError* error = nullptr);
+void PolicyClearHostModules(Policy* policy);
+
+}
+
+#line 1 "src/shell/value.h"
+
+namespace gpui::shell {
+
+enum class BridgedKind : uint8_t {
+    Nil,
+    Bool,
+    Number,
+    String,
+};
+
+struct Bridged {
+    BridgedKind kind = BridgedKind::Nil;
+    bool boolean = false;
+    double number = 0;
+    Str string;
+
+    static Bridged Nil();
+    static Bridged Bool(bool value);
+    static Bridged Number(double value);
+    static Bridged String(Str value);
+};
+
+bool BridgedAsF32(const Bridged& value, float* out,
+                  ShellError* error = nullptr);
+bool BridgedAsString(const Bridged& value, Str* out,
+                     ShellError* error = nullptr);
+bool BridgedAsPixels(const Bridged& value, float* out,
+                     ShellError* error = nullptr);
+bool BridgedAsColor(const Bridged& value, Hsla* out,
+                    ShellError* error = nullptr);
+bool BridgedIsTruthy(const Bridged& value);
+Str BridgedDescribe(Arena* arena, const Bridged& value);
+bool BridgedArg(const Bridged* args, int count, int index, Str method,
+                Bridged* out, ShellError* error = nullptr);
+
+}
+
+#line 1 "src/shell/spec.h"
+
+namespace gpui::shell {
+
+using SpecId = uint32_t;
+using CallbackId = uint64_t;
+
+enum class BackgroundKind : uint8_t {
+    Solid,
+    LinearGradient,
+    PatternSlash,
+    Checkerboard,
+};
+
+struct BackgroundSpec {
+    BackgroundKind kind = BackgroundKind::Solid;
+    Str color;
+    float opacity = 1;
+    float angle = 0;
+    Str fromColor;
+    float fromPosition = 0;
+    Str toColor;
+    float toPosition = 1;
+    Str colorSpace;
+    float width = 0;
+    float interval = 0;
+    float size = 0;
+};
+
+enum class ComponentKind : uint8_t {
+    Div,
+    HFlex,
+    VFlex,
+    ChildView,
+    Text,
+    Button,
+    Link,
+    Checkbox,
+    Switch,
+    Scrollbar,
+    Input,
+    Textarea,
+    NumberInput,
+    OtpInput,
+    Svg,
+    Image,
+    PathFill,
+    PathStroke,
+    Tabs,
+    Tab,
+    Progress,
+    ProgressTrack,
+    ProgressIndicator,
+    FpsMonitor,
+    Slider,
+    SliderTrack,
+    SliderIndicator,
+    SliderThumb,
+    Radio,
+    Toggle,
+    RadioGroup,
+    ToggleGroup,
+    Table,
+    TableHeader,
+    TableBody,
+    TableRow,
+    TableHead,
+    TableCell,
+    TableCaption,
+    HResizable,
+    VResizable,
+    ResizablePanel,
+    Collapsible,
+    Popover,
+    HoverCard,
+    Popup,
+    Select,
+    Combobox,
+    DatePicker,
+    VVirtualList,
+    HVirtualList,
+};
+
+struct VirtualListSpec {
+    Str id;
+    Axis axis = Axis::Vertical;
+    Size* sizes = nullptr;
+    int sizeCount = 0;
+    CallbackId getKey = 0;
+    CallbackId renderItems = 0;
+};
+
+struct Component {
+    ComponentKind kind = ComponentKind::Div;
+    Str text;
+    uint64_t handle = 0;
+    uint32_t index = 0;
+    BackgroundSpec background;
+    float strokeWidth = 0;
+    VirtualListSpec* virtualList = nullptr;
+};
+
+const char* ComponentName(const Component& component);
+
+enum class SpecOpKind : uint8_t {
+    NullaryStyle,
+    ParamStyle,
+    Method,
+    Callback,
+    StateStyle,
+    Slot,
+};
+
+struct SpecOp {
+    SpecOpKind kind = SpecOpKind::Method;
+    Str name;
+    uint16_t styleIndex = 0;
+    CallbackId callback = 0;
+    SpecId node = 0;
+    Bridged* args = nullptr;
+    int argCount = 0;
+};
+
+struct SpecNode {
+    Component component;
+    ArenaVec<SpecOp> ops;
+    ArenaVec<SpecId> children;
+};
+
+enum class SpecErrorKind : uint8_t {
+    None,
+    Claimed,
+    Expired,
+    AlreadyParented,
+    SelfParent,
+    DuplicateChildView,
+};
+
+struct SpecError {
+    SpecErrorKind kind = SpecErrorKind::None;
+    Str component;
+};
+
+Str SpecErrorMessage(Arena* arena, const SpecError& error);
+
+class SpecArena {
+  public:
+    SpecArena();
+    SpecArena(const SpecArena&) = delete;
+    SpecArena& operator=(const SpecArena&) = delete;
+    ~SpecArena();
+
+    void Reset();
+    int Len() const { return nodes.len; }
+    bool IsEmpty() const { return nodes.len == 0; }
+    SpecId Push(const Component& component);
+    bool PushChildView(const Component& component, SpecId* out,
+                       SpecError* error = nullptr);
+    const SpecNode* Node(SpecId id) const;
+    bool PushOp(SpecId id, const SpecOp& op, SpecError* error = nullptr);
+    bool Claim(SpecId id, SpecError* error = nullptr);
+    bool Attach(SpecId parent, SpecId child, SpecError* error = nullptr);
+    bool ClaimVirtualItems(uint64_t count, uint64_t limit);
+    Str DebugTree(Arena* into, SpecId root) const;
+
+  private:
+    Arena* arena = nullptr;
+    Vec<SpecNode*> nodes;
+    Vec<uint8_t> parented;
+    Vec<uint8_t> claimed;
+    Vec<uint64_t> mountedViews;
+    uint64_t virtualItems = 0;
+
+    bool CheckLive(SpecId id, SpecError* error) const;
+    Component CopyComponent(const Component& component);
+    SpecOp CopyOp(const SpecOp& op);
+    void WriteTree(StrBuilder* out, SpecId id, int depth) const;
+};
+
+}
+
+#line 1 "src/shell/retained.h"
+
+namespace gpui::shell {
+
+using EntityHandle = uint64_t;
+
+const int kMaxLiveEntities = 10000;
+
+enum class RetainedKind : uint8_t {
+    Input,
+    Textarea,
+    Slider,
+    Otp,
+    Focus,
+    VirtualScroll,
+};
+
+enum class RetainedEvent : uint8_t {
+    InputChange,
+    InputSubmit,
+    InputFocus,
+    InputBlur,
+    SliderChange,
+    SliderRelease,
+    OtpChange,
+    OtpComplete,
+    OtpFocus,
+    OtpBlur,
+};
+
+struct RetainedCallback {
+    RetainedEvent event = RetainedEvent::InputChange;
+    CallbackId callback = 0;
+};
+
+struct NumberInputConfig {
+    bool hasStep = false;
+    double step = 1;
+    bool hasMin = false;
+    double min = 0;
+    bool hasMax = false;
+    double max = 0;
+};
+
+struct RetainedEntry {
+    uint32_t id = 0;
+    RetainedKind kind = RetainedKind::Input;
+    EntityId owner = {};
+    void* application = nullptr;
+    App* app = nullptr;
+    InputState* input = nullptr;
+    SliderState* slider = nullptr;
+    Entity<OtpState> otp = {};
+    FocusHandle focus = {};
+    VirtualListScrollHandle scroll = {};
+    NumberInputConfig number = {};
+    Vec<RetainedCallback> callbacks;
+};
+
+class RetainedStore {
+  public:
+    RetainedStore();
+    RetainedStore(const RetainedStore&) = delete;
+    RetainedStore& operator=(const RetainedStore&) = delete;
+    ~RetainedStore();
+
+    int Len() const { return entries.len; }
+    uint32_t Checkpoint() const { return nextId; }
+
+    EntityHandle CreateInput(bool textarea, Str placeholder, Str value,
+                             int rows, App* app, EntityId owner,
+                             void* application);
+    EntityHandle CreateSlider(float min, float max, float step,
+                              SliderScale scale, SliderValue value, App* app,
+                              EntityId owner, void* application);
+    EntityHandle CreateOtp(int length, Str value, bool masked, App* app,
+                           EntityId owner, void* application);
+    EntityHandle CreateFocus(App* app, EntityId owner, void* application);
+    EntityHandle CreateVirtualScroll(App* app, EntityId owner,
+                                     void* application);
+
+    RetainedEntry* Find(EntityHandle handle) const;
+    RetainedEntry* FindLocal(uint32_t id) const;
+    bool AddCallback(EntityHandle handle, RetainedEvent event,
+                     CallbackId callback, bool replace,
+                     CallbackId* replaced = nullptr);
+    bool Release(EntityHandle handle, Vec<CallbackId>* callbacks = nullptr);
+    void ReleaseOwner(EntityId owner, Vec<CallbackId>* callbacks = nullptr);
+    void ReleaseApplication(void* application,
+                            Vec<CallbackId>* callbacks = nullptr);
+    void Rollback(uint32_t checkpoint, Vec<CallbackId>* callbacks = nullptr);
+    void Clear(Vec<CallbackId>* callbacks = nullptr);
+
+  private:
+    uint32_t storeId = 0;
+    uint32_t nextId = 1;
+    Vec<RetainedEntry*> entries;
+
+    EntityHandle Push(RetainedEntry* entry);
+    bool Belongs(EntityHandle handle, uint32_t* id) const;
+    static void Destroy(RetainedEntry* entry, Vec<CallbackId>* callbacks);
+};
+
+}
+
+#line 1 "src/shell/snapshot.h"
+
+namespace gpui {
+
+struct SnapshotRuntimeLease {
+    void* state = nullptr;
+    void (*retain)(void* state) = nullptr;
+    void (*release)(void* state) = nullptr;
+    void (*retireCallbacks)(void* state, uint64_t generation) = nullptr;
+};
+
+class RenderSnapshot {
+  public:
+    RenderSnapshot(uint64_t generation, shell::SpecId root,
+                   shell::SpecArena* arena, SnapshotRuntimeLease runtime = {});
+    RenderSnapshot(const RenderSnapshot&) = delete;
+    RenderSnapshot& operator=(const RenderSnapshot&) = delete;
+    ~RenderSnapshot();
+
+    uint64_t Generation() const { return generation; }
+    shell::SpecId Root() const { return root; }
+    const shell::SpecArena* Specs() const { return arena; }
+    int Len() const;
+    bool IsEmpty() const;
+    Str DebugTree(Arena* into) const;
+
+  private:
+    uint64_t generation = 0;
+    shell::SpecId root = 0;
+    shell::SpecArena* arena = nullptr;
+    SnapshotRuntimeLease runtime;
+};
+
+}
+
+#line 1 "src/shell/runtime.h"
+
+namespace gpui {
+
+struct ViewType;
+struct ViewObject;
+struct ShellRuntimeImpl;
+struct ShellRuntimeControl;
+struct ShellRuntimeAccess;
+struct ShellTaskDriver;
+
+class ShellRuntime {
+  public:
+    static ShellRuntime* New(App* app = nullptr, ShellError* error = nullptr);
+    ShellRuntime* Retain();
+    void Release();
+
+    ViewType* LoadSource(Str name, Str source, ShellError* error = nullptr);
+    ViewType* LoadSource(Str name, Str source, Policy* policy,
+                         ShellError* error = nullptr);
+    ViewType* LoadApp(Str directory, Str entry = StrL("main.js"),
+                      ShellError* error = nullptr);
+    ViewType* LoadApp(Str directory, Str entry, Policy* policy,
+                      ShellError* error = nullptr);
+    ViewObject* Instantiate(ViewType* type, Window* window, App* app,
+                            Policy* policy = nullptr,
+                            ShellError* error = nullptr,
+                            EntityId view = {});
+    RenderSnapshot* BuildSnapshot(ViewObject* object, Window* window, App* app,
+                                  EntityId view = {}, Policy* policy = nullptr,
+                                  ShellError* error = nullptr);
+    Str RenderToSpec(Arena* into, ViewObject* object, Window* window, App* app,
+                     EntityId view = {}, Policy* policy = nullptr,
+                     ShellError* error = nullptr);
+
+    bool Eval(Str source, Str name = StrL("<eval>"),
+              ShellError* error = nullptr);
+    bool DrainJobs(int limit = 1024, ShellError* error = nullptr);
+    RuntimeMetrics ReadMetrics() const;
+    void RecordMaterialize(uint64_t nanos);
+    int LiveCallbacks() const;
+    int LiveEntities() const;
+    int LiveNestedViews() const;
+    int LiveTasks() const;
+    shell::RetainedEntry* Retained(shell::EntityHandle handle) const;
+    EntityId NestedView(shell::EntityHandle handle, App* app) const;
+
+    void RegisterScriptView(EntityId view, bool* dirty);
+    void UnregisterScriptView(EntityId view, bool* dirty);
+    void InvalidateScriptView(EntityId view);
+    void ReleaseOwnedEntities(EntityId view);
+    void ReleaseApplicationState(ViewObject* object);
+
+    void DispatchClick(shell::CallbackId callback, const ClickEvent& event,
+                       Window* window, App* app);
+    void DispatchMouseMove(shell::CallbackId callback,
+                           const MouseMoveEvent& event, Window* window,
+                           App* app);
+    void DispatchChange(shell::CallbackId callback, bool value, Window* window,
+                        App* app);
+    void DispatchIndex(shell::CallbackId callback, uint32_t value, Window* window,
+                       App* app);
+    void DispatchNumbers(shell::CallbackId callback, const float* values,
+                         int count, Window* window, App* app);
+    void DispatchString(shell::CallbackId callback, Str value, Window* window,
+                        App* app);
+    void DispatchSignal(shell::CallbackId callback, Window* window, App* app);
+    void DispatchInputEvent(shell::EntityHandle handle,
+                            const InputEvent& event, Window* window, App* app);
+    void DispatchSliderEvent(shell::EntityHandle handle,
+                             const SliderEvent& event, Window* window,
+                             App* app);
+    void DispatchOtpEvent(shell::EntityHandle handle, const OtpEvent& event,
+                          Window* window, App* app);
+    void RenderVirtualItems(shell::CallbackId render,
+                            shell::CallbackId getKey,
+                            shell::CallbackId onItemClick, int first,
+                            int end, Ctx* cx, El** out);
+
+  private:
+    friend struct ShellRuntimeAccess;
+    friend struct ShellTaskDriver;
+    friend void ShellRuntimeRetireSnapshot(void*, uint64_t);
+    void ResumeTask(uint32_t id, Ctx* cx);
+    ShellRuntime();
+    ~ShellRuntime();
+
+    uint32_t refs = 1;
+    ShellRuntimeImpl* impl = nullptr;
+    ShellRuntimeControl* control = nullptr;
+};
+
+ViewType* ViewTypeRetain(ViewType* type);
+void ViewTypeRelease(ViewType* type);
+ViewObject* ViewObjectRetain(ViewObject* object);
+void ViewObjectRelease(ViewObject* object);
+void ShellSetDevelopmentMode(bool enabled);
+bool ShellDevelopmentMode();
+
+struct ShellExitRequest {
+    int code = 0;
+    EntityId view = {};
+};
+using ShellExitHandler = void (*)(const ShellExitRequest&, Ctx*);
+void ShellOnExitRequest(ShellExitHandler handler);
+
+}
+
+#line 1 "src/shell/materialize.h"
+
+namespace gpui {
+
+El* ShellMaterialize(Ctx* cx, ShellRuntime* runtime,
+                     const RenderSnapshot* snapshot,
+                     ShellError* error = nullptr);
+El* ShellMaterializeSpec(Ctx* cx, ShellRuntime* runtime,
+                         const shell::SpecArena* specs, shell::SpecId root,
+                         ShellError* error = nullptr);
+
+}
+
+#line 1 "src/shell/view.h"
+
+namespace gpui {
+
+struct ResizablePanelEvent;
+
+struct ShellBoolBinding {
+    shell::CallbackId callback = 0;
+    bool value = false;
+};
+
+struct ShellStringBinding {
+    shell::CallbackId callback = 0;
+    Str value;
+};
+
+struct ShellSelectBinding {
+    shell::CallbackId onOpenChange = 0;
+    shell::CallbackId onConfirm = 0;
+    shell::CallbackId onDismiss = 0;
+    bool open = false;
+    bool disabled = false;
+    FocusHandle triggerFocus = {};
+    FocusHandle contentFocus = {};
+};
+
+struct ShellNumberBinding {
+    InputState* state = nullptr;
+    NumberStep step = {};
+    bool hasStep = false;
+    bool hasMin = false;
+    double min = 0;
+    bool hasMax = false;
+    double max = 0;
+    bool disabled = false;
+    shell::CallbackId onStep = 0;
+};
+
+struct ScriptView {
+    ShellRuntime* runtime = nullptr;
+    ViewType* type = nullptr;
+    ViewObject* object = nullptr;
+    RenderSnapshot* snapshot = nullptr;
+    Policy* policy = nullptr;
+    ShellError error = {};
+    EntityId self = {};
+    bool dirty = true;
+
+    ~ScriptView();
+
+    static Entity<ScriptView> New(App* app, ShellRuntime* runtime,
+                                  ViewType* type, Policy* policy = nullptr);
+    static El* Render(ScriptView* self, Ctx* cx);
+    static void Refresh(ScriptView* self, Ctx* cx);
+    static bool Reload(ScriptView* self, Ctx* cx, Str directory, Str entry,
+                       ShellError* error = nullptr);
+
+    static void OnClick(ScriptView* self, Ctx* cx, const ClickEvent* event,
+                        intptr_t callback);
+    static void OnChange(ScriptView* self, Ctx* cx, const ClickEvent* event,
+                         intptr_t value);
+    static void OnHover(ScriptView* self, Ctx* cx, const HoverEvent* event,
+                        intptr_t callback);
+    static void OnMouseMove(ScriptView* self, Ctx* cx,
+                            const MouseMoveEvent* event,
+                            intptr_t callback);
+    static void OnOpenChange(ScriptView* self, Ctx* cx,
+                             const PopoverOpenChangeEvent* event,
+                             intptr_t callback);
+    static void OnResize(ScriptView* self, Ctx* cx,
+                         const ResizablePanelEvent* event,
+                         intptr_t callback);
+    static void OnBoundBool(ScriptView* self, Ctx* cx,
+                            const void* event, intptr_t binding);
+    static void OnBoundString(ScriptView* self, Ctx* cx,
+                              const ClickEvent* event, intptr_t binding);
+    static void OnSelectAction(ScriptView* self, Ctx* cx,
+                               const ActionEvent* event,
+                               intptr_t binding);
+    static void OnSelectOpen(ScriptView* self, Ctx* cx,
+                             const ClickEvent* event,
+                             intptr_t binding);
+    static void OnNumberStep(ScriptView* self, Ctx* cx,
+                             const NumberInputEvent* event,
+                             intptr_t callback);
+    static void OnNumberKey(ScriptView* self, Ctx* cx,
+                            const KeyEvent* event, intptr_t binding);
+    static void OnInputEvent(ScriptView* self, Ctx* cx,
+                             const InputEvent* event, intptr_t handle);
+    static void OnSliderEvent(ScriptView* self, Ctx* cx,
+                              const SliderEvent* event, intptr_t handle);
+    static void OnOtpEvent(ScriptView* self, Ctx* cx, const OtpEvent* event,
+                           intptr_t handle);
+};
+
+}
+
+#line 1 "src/shell/dock.h"
+
+namespace gpui::shell {
+
+using ShellPanelBuildFn = Entity<ScriptView> (*)(Window* window, App* app,
+                                                  void* data);
+using ShellPanelSerializeFn = bool (*)(Entity<ScriptView> view, App* app,
+                                       void* data, StrBuilder* out);
+using ShellPanelDeserializeFn = void (*)(Entity<ScriptView> view, Str json,
+                                         Window* window, App* app,
+                                         void* data);
+
+struct ShellPanelScript {
+    void* data = nullptr;
+    ShellPanelBuildFn build = nullptr;
+    ShellPanelSerializeFn serialize = nullptr;
+    ShellPanelDeserializeFn deserialize = nullptr;
+    void (*release)(void* data) = nullptr;
+    bool closable = true;
+    bool zoomable = true;
+    bool visible = true;
+};
+
+Str ShellPanelName(Str application, Str panel);
+
+DockPanelDef ScriptPanelNew(App* app, Str name, Entity<ScriptView> view,
+                            const ShellPanelScript* script = nullptr);
+Str ShellRegisterPanel(App* app, Str application, Str panel,
+                       const ShellPanelScript& script);
+
+struct ShellDockChrome {
+    void* data = nullptr;
+    El* (*tabBar)(Ctx* cx, void* data, const DockTabGroup* group) = nullptr;
+    El* (*dropIndicator)(Ctx* cx, void* data, Bounds bounds) = nullptr;
+    El* (*dock)(Ctx* cx, void* data, const DockCtx* dock,
+                El* content) = nullptr;
+};
+
+struct ScriptDockSkin {
+    ShellDockChrome chrome = {};
+    DockRenderer renderer = {};
+
+    ScriptDockSkin();
+    explicit ScriptDockSkin(ShellDockChrome value);
+    const DockRenderer* Renderer();
+};
+
+void ShellTabGroupData(const DockTabGroup* group, StrBuilder* out);
+void ShellDockData(const DockCtx* dock, StrBuilder* out);
+void ShellTileData(const TileContext* tile, const DockState* dock,
+                   StrBuilder* out);
+
+}
 
 #line 1 "src/sys/http.h"
 
@@ -22101,11 +24929,15 @@ struct HttpRsp {
     Vec<uint8_t> body;
 
     Str contentType;
+
+    Str redirectUrl;
 };
 
 void HttpRspFree(HttpRsp* r);
 
 bool HttpGet(Str url, HttpRsp* out);
+
+bool HttpGetNoRedirect(Str url, HttpRsp* out);
 
 constexpr int kHttpMaxBody = 16 * 1024 * 1024;
 constexpr int kHttpTimeoutMs = 15000;
@@ -22136,11 +24968,506 @@ bool HttpEnabled();
 
 }
 
+#line 1 "src/shell/fetch.h"
+
+namespace gpui::shell {
+
+constexpr int kFetchMaxBody = 8 * 1024 * 1024;
+constexpr int kFetchMaxRedirects = 10;
+
+struct FetchResult {
+    int status = 0;
+    Str url;
+    Str body;
+    Str error;
+
+    void Free();
+};
+
+bool FetchAuthorizeGet(Str url, const Capabilities& capabilities,
+                       Str* error = nullptr);
+bool FetchGet(Str url, const Capabilities& capabilities, FetchResult* out);
+
+using FetchHttpGet = bool (*)(Str url, HttpRsp* out);
+void FetchSetHttpGetForTests(FetchHttpGet get);
+
+}
+
+#line 1 "src/shell/root.h"
+
+namespace gpui {
+
+struct DialogOptions {
+    bool escapeDismissable = true;
+    bool backdropDismissable = true;
+
+    DialogOptions& EscapeDismissable(bool value) {
+        escapeDismissable = value;
+        return *this;
+    }
+    DialogOptions& BackdropDismissable(bool value) {
+        backdropDismissable = value;
+        return *this;
+    }
+};
+
+enum class ToastLevel : uint8_t {
+    Info,
+    Success,
+    Warning,
+    Error,
+};
+
+const char* ToastLevelName(ToastLevel level);
+bool ToastLevelFromName(Str name, ToastLevel* out);
+
+struct ToastRequest {
+    Str title;
+    Str description;
+    ToastLevel level = ToastLevel::Info;
+    int timeoutMs = 5000;
+    bool hasId = false;
+    Str id;
+};
+
+struct ShellRoot {
+    App* app = nullptr;
+    EntityId content = {};
+    uint64_t nextToastOrdinal = 0;
+
+    ~ShellRoot();
+
+    static Entity<ShellRoot> New(App* app, EntityId content);
+    static El* Render(ShellRoot* self, Ctx* cx);
+};
+
+ShellRoot* ShellRootOf(Window* window, App* app);
+
+int ShellRootOpenDialog(Ctx* cx, Entity<ScriptView> content,
+                        DialogOptions options = {});
+bool ShellRootCloseDialog(Ctx* cx);
+int ShellRootCloseAllDialogs(Ctx* cx);
+bool ShellRootHasDialog(Ctx* cx);
+
+bool ShellRootOpenSheet(Ctx* cx, Entity<ScriptView> content,
+                        component::SheetPlacement placement =
+                            component::SheetPlacement::Right);
+bool ShellRootCloseSheet(Ctx* cx);
+bool ShellRootHasSheet(Ctx* cx);
+
+bool ShellRootPushToast(Ctx* cx, const ToastRequest& toast);
+bool ShellRootRemoveToast(Ctx* cx, Str id);
+void ShellRootClearToasts(Ctx* cx);
+int ShellRootToastCount(Ctx* cx);
+
+}
+
+#line 1 "src/shell/plugin.h"
+
+namespace gpui::shell {
+
+constexpr const char* kShellVersion = "0.1.0";
+constexpr const char* kShellManifestFile = "gpui-shell.json";
+constexpr int kShellMaxManifestBytes = 1024 * 1024;
+
+struct PluginHttpGrant {
+    Str scheme;
+    Str host;
+    uint16_t port = 0;
+    bool hasPort = false;
+    Vec<Str> methods;
+    Vec<Str> paths;
+    Vec<Str> pathPrefixes;
+};
+
+struct PluginManifest {
+    Arena* arena = nullptr;
+    Str id;
+    Str name;
+    Str version;
+    Str shellVersion;
+    Str entry;
+    Vec<Str> readRoots;
+    Vec<Str> writeRoots;
+    Vec<Str> execute;
+    Vec<Str> networkHosts;
+    Vec<PluginHttpGrant*> http;
+    bool executeUnrestricted = false;
+    bool storage = true;
+    bool clipboardRead = false;
+    bool clipboardWrite = false;
+    bool exit = false;
+
+    PluginManifest();
+    PluginManifest(const PluginManifest&) = delete;
+    PluginManifest& operator=(const PluginManifest&) = delete;
+    ~PluginManifest();
+
+    Capabilities Grant(Str pluginDirectory, Str dataDirectory) const;
+};
+
+bool PluginManifestParse(Str source, PluginManifest* out,
+                         ShellError* error = nullptr);
+bool PluginManifestRead(Str directory, PluginManifest* out,
+                        ShellError* error = nullptr);
+void PluginManifestSchema(StrBuilder* out);
+
+Str ShellDataHome();
+Str ShellBundleIdForPath(Str root);
+Str ShellAppDataDirectory(Str id, Arena* arena,
+                          ShellError* error = nullptr);
+
+struct PluginDiscovery {
+    PluginManifest* manifest = nullptr;
+    Str root;
+    Str error;
+};
+
+struct Plugin {
+    PluginManifest* manifest = nullptr;
+    Str root;
+    Str dataDirectory;
+    Str storePath;
+    Policy* policy = nullptr;
+    ShellRuntime* runtime = nullptr;
+    Entity<ScriptView> view = {};
+    AppAssets* assets = nullptr;
+    App* app = nullptr;
+};
+
+using PluginAuthorizeFn = bool (*)(const PluginManifest* manifest, void* data);
+
+class PluginManager {
+  public:
+    PluginManager();
+    explicit PluginManager(Str directory);
+    PluginManager(const PluginManager&) = delete;
+    PluginManager& operator=(const PluginManager&) = delete;
+    ~PluginManager();
+
+    PluginManager& AddDirectory(Str directory);
+    PluginManager& DataHome(Str directory);
+    const Vec<PluginDiscovery>& Discover();
+    bool Load(ShellRuntime* runtime, Str id, PluginAuthorizeFn authorize,
+              void* authorizeData, Window* window, App* app,
+              ShellError* error = nullptr);
+    bool Unload(Str id, App* app);
+    const Plugin* Loaded(Str id) const;
+    Str DataDirectory(Str id, Arena* arena) const;
+
+  private:
+    Vec<Str> directories;
+    Str dataHome;
+    Vec<PluginDiscovery> catalog;
+    Vec<Plugin*> loaded;
+    bool discovered = false;
+
+    void ClearCatalog();
+};
+
+Entity<ShellRoot> ShellLoadApplication(ShellRuntime* runtime, Str directory,
+                                       Window* window, App* app,
+                                       Policy* policy = nullptr,
+                                       ShellError* error = nullptr,
+                                       Str* resolvedEntry = nullptr);
+Str ShellCheckApplication(Arena* arena, ShellRuntime* runtime, Str directory,
+                          Window* window, App* app, Policy* policy = nullptr,
+                          ShellError* error = nullptr);
+
+}
+
+#line 1 "src/shell/process.h"
+
+namespace gpui::shell {
+
+struct ProcessCancellation {
+    Mutex mutex;
+    bool cancelled = false;
+
+    void Cancel();
+    bool IsCancelled();
+};
+
+struct ProcessOutput {
+    int code = -1;
+    Str out;
+    Str err;
+
+    void Free();
+};
+
+bool ProcessRunBounded(Str command, const Str* args, int count,
+                       ProcessCancellation* cancellation, ProcessOutput* out,
+                       Str* error);
+
+}
+
+#line 1 "src/shell/scope.h"
+
+namespace gpui {
+
+class ShellRuntime;
+
+enum class ScopePhase : uint8_t {
+    Render,
+    Event,
+    Task,
+    Layout,
+};
+
+const char* ScopePhaseName(ScopePhase phase);
+bool ScopePhaseAllowsNotify(ScopePhase phase);
+
+namespace shell {
+
+class CallScopeGuard {
+  public:
+    CallScopeGuard(CallScopeGuard&& other) noexcept;
+    CallScopeGuard& operator=(CallScopeGuard&& other) noexcept;
+    CallScopeGuard(const CallScopeGuard&) = delete;
+    CallScopeGuard& operator=(const CallScopeGuard&) = delete;
+    ~CallScopeGuard();
+
+    uint64_t Generation() const { return generation; }
+    bool IsActive() const { return active; }
+
+  private:
+    friend CallScopeGuard ScopeEnter(Window*, App*, ScopePhase, EntityId,
+                                     Policy*, ShellRuntime*, void*);
+    explicit CallScopeGuard(uint64_t generation);
+    void Leave();
+
+    uint64_t generation = 0;
+    bool active = false;
+};
+
+CallScopeGuard ScopeEnter(Window* window, App* app, ScopePhase phase,
+                          EntityId view = {}, Policy* policy = nullptr,
+                          ShellRuntime* runtime = nullptr,
+                          void* application = nullptr);
+void ScopeAdopt(uint64_t generation);
+uint64_t ScopeCurrentGeneration();
+ScopePhase ScopeCurrentPhase();
+bool ScopeHasCurrent();
+Policy* ScopeCurrentPolicy();
+ShellRuntime* ScopeCurrentRuntime();
+EntityId ScopeCurrentView();
+void* ScopeCurrentApplication();
+
+class ScopeHostContext {
+  public:
+    ScopeHostContext(ScopeHostContext&& other) noexcept;
+    ScopeHostContext& operator=(ScopeHostContext&& other) noexcept;
+    ScopeHostContext(const ScopeHostContext&) = delete;
+    ScopeHostContext& operator=(const ScopeHostContext&) = delete;
+    ~ScopeHostContext();
+
+    bool IsSet() const { return held; }
+    Window* GetWindow() const { return window; }
+    App* GetApp() const { return app; }
+
+  private:
+    friend ScopeHostContext ScopeCurrentHost();
+    friend ScopeHostContext ScopeHostForGeneration(uint64_t, ShellError*);
+    ScopeHostContext(Window* window, App* app, bool held);
+    static ScopeHostContext Acquire(Window* window, App* app);
+    void Release();
+
+    Window* window = nullptr;
+    App* app = nullptr;
+    bool held = false;
+};
+
+ScopeHostContext ScopeCurrentHost();
+ScopeHostContext ScopeHostForGeneration(uint64_t generation,
+                                        ShellError* error = nullptr);
+Str ScopeStaleContextMessage();
+
+}
+}
+
+#line 1 "src/shell/watch.h"
+
+namespace gpui::shell {
+
+constexpr int kSourceWatchMaxDepth = 8;
+constexpr int kSourceWatchMaxFiles = 4096;
+constexpr int kSourceWatchDebounceMs = 200;
+constexpr int kSourceWatchPollMs = 250;
+
+struct SourceTreeStamp {
+    uint64_t newest = 0;
+    uint64_t bytes = 0;
+    uint32_t files = 0;
+
+    bool operator==(const SourceTreeStamp& other) const {
+        return newest == other.newest && bytes == other.bytes &&
+               files == other.files;
+    }
+    bool operator!=(const SourceTreeStamp& other) const {
+        return !(*this == other);
+    }
+};
+
+bool ScanSourceTree(Str directory, SourceTreeStamp* stamp,
+                    ShellError* error = nullptr,
+                    int maxFiles = kSourceWatchMaxFiles);
+
+class SourceWatcher {
+  public:
+    SourceWatcher() = default;
+    SourceWatcher(const SourceWatcher&) = delete;
+    SourceWatcher& operator=(const SourceWatcher&) = delete;
+    ~SourceWatcher();
+
+    bool Init(Str directory, ShellError* error = nullptr,
+              int debounceMs = kSourceWatchDebounceMs);
+    bool Poll(bool* changed, ShellError* error = nullptr);
+    bool PollAt(double now, bool* changed, ShellError* error = nullptr);
+    bool Observe(const SourceTreeStamp& next, double now, bool* changed);
+
+  private:
+    Str directory;
+    SourceTreeStamp stamp;
+    double changedAt = 0;
+    int debounceMs = kSourceWatchDebounceMs;
+    bool pending = false;
+};
+
+}
+
+namespace gpui {
+
+struct ShellWatcher {
+    ShellRuntime* runtime = nullptr;
+    EntityId view = {};
+    Window* window = nullptr;
+    Str directory;
+    Str entry;
+    shell::SourceWatcher source;
+    ShellError error = {};
+    int timer = 0;
+    int scanTask = 0;
+    void* scanJob = nullptr;
+
+    ~ShellWatcher();
+
+    static Entity<ShellWatcher> Start(ShellRuntime* runtime,
+                                      Entity<ScriptView> view, Str directory,
+                                      Str entry, Window* window, App* app,
+                                      ShellError* error = nullptr);
+    static void OnPoll(ShellWatcher* self, Ctx* cx, const TickEvent*);
+};
+
+}
+
+#line 1 "src/shell/standard.h"
+
+namespace gpui::shell {
+
+constexpr int kStandardDataLimit = 64 * 1024 * 1024;
+
+void Sha256(Str data, uint8_t digest[32]);
+bool SecureRandom(uint8_t* bytes, int count);
+
+bool ZlibDeflate(Str input, bool gzip, Str* output, Str* error = nullptr);
+bool ZlibInflate(Str input, bool gzip, Str* output, Str* error = nullptr);
+
+}
+
+#line 1 "src/shell/theme_tokens.h"
+
+namespace gpui {
+struct App;
+
+namespace shell {
+
+void ThemeTokensSync(const App* app);
+bool ThemeTokenColor(Str name, Hsla* out);
+bool ThemeTokenSpacing(Str name, float* out);
+bool ThemeTokenRadius(Str name, float* out);
+SeqStrings ThemeColorTokenNames();
+SeqStrings ThemeSpacingTokenNames();
+SeqStrings ThemeRadiusTokenNames();
+
+}
+}
+
+#line 1 "src/shell/typings.h"
+
+namespace gpui::shell {
+
+constexpr const char* kShellTypesFile = "gpui.d.ts";
+constexpr int kShellTypesMaxDepth = 8;
+constexpr int kShellTypesMaxFiles = 4096;
+
+void AppendBuiltinTypeDeclarations(StrBuilder* out);
+
+void ShellTypeDeclarations(StrBuilder* out,
+                           const HostModules* modules = nullptr);
+
+bool ShellWriteTypeDeclarations(Str directory,
+                                const HostModules* modules = nullptr,
+                                int* written = nullptr,
+                                ShellError* error = nullptr);
+
+}
+
+#line 1 "src/sys/executor.h"
+
+namespace gpui {
+
+using TaskId = int;
+
+void ExecInit();
+
+void ExecShutdown();
+
+bool ExecOnMainThread();
+
+void ExecSetWake(Func0 wake);
+
+void ExecPost(Func0 f);
+
+void ExecPostNow(Func0 f);
+
+int ExecDrain();
+
+int ExecQueued();
+
+TaskId ExecSpawn(Func0 work, Func0 done = Func0{});
+
+bool ExecCancel(TaskId id);
+
+int ExecPending();
+
+bool ExecWaitIdle(int timeoutMs);
+
+int ExecWorkerCount();
+
+bool ExecHasThreads();
+
+constexpr int kExecMaxWorkers = 8;
+
+}
+
+#line 1 "src/sys/gpu.h"
+
+namespace gpui {
+
+bool GpuAvailable();
+
+float GpuUsagePercent();
+
+void GpuProbeFree();
+
+}
+
 #line 1 "src/sys/notify.h"
 
 namespace gpui {
 
-typedef void (*SysNotifyResponseFn)(Str tag, void* user);
+using SysNotifyResponseFn = Func1<Str>;
 
 bool SysNotifyAvailable();
 
@@ -22150,16 +25477,13 @@ bool SysNotifyShow(Str tag, Str title, Str body);
 
 void SysNotifyDismiss(Str tag);
 
-void SysNotifyOnResponse(SysNotifyResponseFn fn, void* user);
+void SysNotifyOnResponse(SysNotifyResponseFn fn);
 
 void SysNotifyShutdown();
 
 }
 
 #line 1 "src/taffy/taffy_math.h"
-
-#ifndef GPUI_TAFFY_MATH_H_
-#define GPUI_TAFFY_MATH_H_
 
 #if defined(_MSC_VER)
 #define TAFFY_INLINE __forceinline
@@ -22293,12 +25617,7 @@ constexpr SizeFOpt AsOptional(SizeF s) {
 
 }
 
-#endif
-
 #line 1 "src/taffy/compute.h"
-
-#ifndef GPUI_TAFFY_COMPUTE_H_
-#define GPUI_TAFFY_COMPUTE_H_
 
 namespace taffy {
 
@@ -22384,8 +25703,6 @@ SizeF ComputeContentSizeContribution(PointF location, SizeF size,
 
 }
 
-#endif
-
 #line 1 "src/ui/element_ext.h"
 
 #line 1 "src/ui/html.h"
@@ -22393,6 +25710,21 @@ SizeF ComputeContentSizeContribution(PointF location, SizeF size,
 namespace gpui {
 
 namespace component {
+
+struct Minifier {
+    bool omitDoctype = false;
+    bool collapseWhitespace = true;
+    bool preserveComments = false;
+    bool precedingWhitespace = false;
+
+    Minifier& OmitDoctype(bool value = true);
+    Minifier& CollapseWhitespace(bool value = true);
+    Minifier& PreserveComments(bool value = true);
+    Str Minify(Arena* a, Str source);
+    Str WriteCollapseWhitespace(Arena* a, Str source);
+};
+
+Str HtmlMinify(Arena* a, Str source);
 
 MdNode* HtmlParse(Arena* a, Str source);
 
@@ -22422,9 +25754,6 @@ Str HtmlAttrValue(Arena* a, Str attrs, const char* name);
 }
 
 #line 1 "src/wry/wry.h"
-
-#ifndef GPUI_WRY_WRY_H_
-#define GPUI_WRY_WRY_H_
 
 namespace wry {
 
@@ -22489,6 +25818,12 @@ enum class MemoryUsageLevel {
     Low,
 };
 
+enum class BackgroundThrottlingPolicy {
+    Disabled,
+    Suspend,
+    Throttle,
+};
+
 enum class ProxyKind {
     None,
     Http,
@@ -22539,8 +25874,11 @@ struct CustomProtocol {
                     RequestResponder* responder) = nullptr;
 };
 
+struct WebView;
+
 enum class NewWindowResponse {
     Allow,
+    Create,
     Deny,
 };
 
@@ -22551,9 +25889,60 @@ struct NewWindowFeatures {
     bool hasSize = false;
     double width = 0;
     double height = 0;
+    WebView* opener = nullptr;
+
+    void* targetConfiguration = nullptr;
 };
 
+using DownloadStartedHandler = bool (*)(void* ctx, Str url, Str* path);
+
+using DownloadCompletedHandler = void (*)(void* ctx, Str url, const Str* path, bool success);
+
+enum class DragDropKind {
+    Enter,
+    Over,
+    Drop,
+    Leave,
+};
+
+struct DragDropEvent {
+    DragDropKind kind = DragDropKind::Leave;
+    const Str* paths = nullptr;
+    int pathCount = 0;
+    int32_t x = 0;
+    int32_t y = 0;
+};
+
+using DragDropHandler = bool (*)(void* ctx, const DragDropEvent* event);
+
+enum class CookieSameSite {
+    None,
+    Lax,
+    Strict,
+};
+
+struct Cookie {
+    Str name;
+    Str value;
+    Str domain;
+    Str path;
+    bool hasHttpOnly = false;
+    bool httpOnly = false;
+    bool hasSecure = false;
+    bool secure = false;
+    bool hasSameSite = false;
+    CookieSameSite sameSite = CookieSameSite::Lax;
+    bool session = true;
+    bool hasExpires = false;
+    int64_t expiresUnixSeconds = 0;
+    bool hasMaxAge = false;
+    int64_t maxAgeSeconds = 0;
+};
+
+void CookieListFree(Vec<Cookie>* cookies);
+
 struct WebViewAttributes {
+    static bool AllowDownload(void*, Str, Str*) { return true; }
 
     Str id;
 
@@ -22584,8 +25973,13 @@ struct WebViewAttributes {
     void (*documentTitleChangedHandler)(void* ctx, Str title) = nullptr;
     void (*onPageLoadHandler)(void* ctx, PageLoadEvent event, Str url) = nullptr;
 
+    DownloadStartedHandler downloadStartedHandler = AllowDownload;
+    DownloadCompletedHandler downloadCompletedHandler = nullptr;
+    DragDropHandler dragDropHandler = nullptr;
+
     NewWindowResponse (*newWindowReqHandler)(void* ctx, Str url,
-                                             const NewWindowFeatures* features) = nullptr;
+                                             const NewWindowFeatures* features,
+                                             WebView** createdWebView) = nullptr;
 
     bool clipboard = false;
 #if defined(DEBUG) || defined(_DEBUG)
@@ -22601,8 +25995,24 @@ struct WebViewAttributes {
     ProxyConfig proxyConfig;
     bool focused = true;
 
+    bool hasBounds = true;
+
     Rect bounds = {{0, 0, true}, {200, 200, true}};
+
+    bool hasBackgroundThrottling = false;
+    BackgroundThrottlingPolicy backgroundThrottling =
+        BackgroundThrottlingPolicy::Disabled;
     bool javascriptDisabled = false;
+
+    bool hasDataStoreIdentifier = false;
+    uint8_t dataStoreIdentifier[16] = {};
+
+    bool hasTrafficLightInset = false;
+    Position trafficLightInset;
+
+    bool allowLinkPreview = true;
+
+    void* webviewConfiguration = nullptr;
 
     Str additionalBrowserArgs;
     bool browserAcceleratorKeys = true;
@@ -22613,10 +26023,11 @@ struct WebViewAttributes {
     bool useHttpsScheme = false;
     ScrollBarStyle scrollBarStyle = ScrollBarStyle::Default;
     bool browserExtensionsEnabled = false;
-    Str extensionPath;
-};
 
-struct WebView;
+    Str extensionPath;
+
+    void* webviewEnvironment = nullptr;
+};
 
 WebView* WebViewNew(void* parentWindow, const WebViewAttributes* attrs, bool asChild);
 
@@ -22660,13 +26071,27 @@ bool WebViewSetMemoryUsageLevel(WebView* webview, MemoryUsageLevel level);
 
 bool WebViewReparent(WebView* webview, void* parentWindow);
 
+bool WebViewSetTrafficLightInset(WebView* webview, Position position);
+
 bool WebViewPrint(WebView* webview);
 
 bool WebViewClearAllBrowsingData(WebView* webview);
 
+bool WebViewCookies(WebView* webview, Vec<Cookie>* out);
+bool WebViewCookiesForUrl(WebView* webview, Str url, Vec<Cookie>* out);
+bool WebViewSetCookie(WebView* webview, const Cookie* cookie);
+bool WebViewDeleteCookie(WebView* webview, const Cookie* cookie);
+
 void WebViewOpenDevtools(WebView* webview);
 void WebViewCloseDevtools(WebView* webview);
 bool WebViewIsDevtoolsOpen(WebView* webview);
+
+#if GPUI_OS_WINDOWS
+
+void* WebViewControllerRaw(WebView* webview);
+void* WebViewEnvironmentRaw(WebView* webview);
+void* WebViewNativeRaw(WebView* webview);
+#endif
 
 Str WorkAroundUriPrefix(Str httpOrHttps, Str protocol);
 
@@ -22681,17 +26106,32 @@ bool WebViewAvailable();
 
 }
 
-#endif
-
 #line 1 "src/webview/webview.h"
-
-#ifndef GPUI_WEBVIEW_WEBVIEW_H_
-#define GPUI_WEBVIEW_WEBVIEW_H_
 
 namespace gpui {
 
+struct WebView;
+struct WebViewHandleState;
+
+struct WebViewHandle {
+    WebViewHandle() = default;
+    WebViewHandle(const WebViewHandle& other);
+    WebViewHandle& operator=(const WebViewHandle& other);
+    ~WebViewHandle();
+
+    wry::WebView* Raw() const;
+    bool IsValid() const { return Raw() != nullptr; }
+
+  private:
+    WebViewHandleState* state = nullptr;
+
+    explicit WebViewHandle(WebViewHandleState* state);
+    friend Entity<WebView> WebViewNew(Ctx* cx,
+                                      const wry::WebViewAttributes* attrs);
+};
+
 struct WebView {
-    wry::WebView* webview = nullptr;
+    WebViewHandle owned;
     bool visible = true;
 
     Bounds bounds = {};
@@ -22719,12 +26159,12 @@ void WebViewLoadUrl(WebView* self, Str url);
 
 void WebViewBack(WebView* self);
 
-wry::WebView* WebViewRaw(WebView* self);
+wry::WebView* WebViewRaw(const WebView* self);
+
+WebViewHandle WebViewGetHandle(const WebView* self);
 
 El* WebViewEl(Entity<WebView> view, Ctx* cx);
 
 }
-
-#endif
 
 #endif

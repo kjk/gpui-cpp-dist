@@ -61,7 +61,7 @@ const self = scriptPath("run.ts");
 
 const usage = `Usage: bun ${self} [-rel|-dbg] [-asan] [-clang] [-wasm] [-clean]
                      [-debugger|-windbg|-cdb|-gdb|-lldb] [-compare]
-                     [-no-build] [-no-open] [-port N] <example>
+                     [-no-build] [-no-open] [-port N] <example> [-- <args...>]
        bun ${self} -versions
 
   -rel        release (default)
@@ -88,8 +88,9 @@ const usage = `Usage: bun ${self} [-rel|-dbg] [-asan] [-clang] [-wasm] [-clean]
   -wasm       build for the browser, serve out/wasm/<cfg>/ and open a tab
   -no-open    -wasm: do not launch a browser
   -port N     -wasm: listen on N (default 8000; the next free port if taken)
+  --          pass every remaining argument unchanged to the selected binary
 
-The example name is the last argument. -all is not accepted — pick one binary.`;
+The target name is the last argument before --. -all is not accepted — pick one binary.`;
 
 function die(msg?: string): never {
   if (msg) {
@@ -124,6 +125,8 @@ type RunArgs = {
   noBuild: boolean;
   open: boolean;
   port: number;
+  /** Arguments after --, passed unchanged to the selected binary. */
+  appArgs: string[];
 };
 
 function parseArgs(argv: string[]): RunArgs {
@@ -133,9 +136,14 @@ function parseArgs(argv: string[]): RunArgs {
   let noBuild = false;
   let open = true;
   let port = 8000;
+  let appArgs: string[] = [];
   const names: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const raw = argv[i]!;
+    if (raw === "--") {
+      appArgs = argv.slice(i + 1);
+      break;
+    }
     if (takeBuildFlag(raw, flags)) {
       continue;
     }
@@ -214,6 +222,12 @@ function parseArgs(argv: string[]): RunArgs {
         "Drop -compare to launch just this one.",
     );
   }
+  if (compare && appArgs.length > 0) {
+    die("Arguments after -- cannot be combined with -compare.");
+  }
+  if (plat === "wasm" && appArgs.length > 0) {
+    die("Arguments after -- are only available to native binaries.");
+  }
   // Before the build, not after it: naming the wrong platform's debugger is a
   // typo, and a typo should not cost a compile first.
   if (dbgr && dbgr !== "any") {
@@ -225,7 +239,7 @@ function parseArgs(argv: string[]): RunArgs {
       die(`-${dbgr} is not a Windows debugger. Use -windbg or -cdb.`);
     }
   }
-  return { target, flags, plat, debugger: dbgr, compare, noBuild, open, port };
+  return { target, flags, plat, debugger: dbgr, compare, noBuild, open, port, appArgs };
 }
 
 // ─── small helpers ────────────────────────────────────────────────────────
@@ -506,16 +520,18 @@ function findDebugger(want: "any" | DebuggerKind, plat: Platform, exe: string): 
 // gpui-cpp-dist carries: a snapshot has to be able to fetch and cargo-build
 // the Rust twin without the rest of cmd/ coming along for the ride.
 
-/** Spec we port: crates/base, crates/ui, crates/story, examples. */
+/** Spec we port: crates/base, crates/ui, crates/story, crates/webview, crates/shell, examples. */
 export const gpuiComponent = {
   repo: "https://github.com/longbridge/gpui-component",
-  sha: "7885c41663c7a6cc68ad0c99b1ba33550f807ff0",
-  date: "2026-08-24",
-  subject: "fps: Enable gpui/profiler on the crate that uses it (#2823)",
+  sha: "6d07863fe7077f85abfa0ec2fcb05f3e17c573b2",
+  date: "2026-08-27",
+  subject: "webview: Add an owned handle for raw Wry access (#2827)",
   crates: {
     "gpui-base": "0.5.2",
     "gpui-component": "0.5.2",
     "gpui-component-story": "0.5.1",
+    "gpui-wry": "0.5.0",
+    "gpui-shell": "0.1.0",
   },
   dir: ".work/gpui-component",
 } as const;
@@ -526,15 +542,15 @@ export const gpuiComponent = {
  */
 export const zedGpui = {
   repo: "https://github.com/zed-industries/zed",
-  sha: "8b1497dbd22fb06f5838a7c0b84a1e54fafa71bc",
-  date: "2026-08-17",
-  subject: "gpui: Add spring animations; examples (#62778)",
+  sha: "f66ed399cdde86092af8af3dc7b418abf45f37f8",
+  date: "2026-08-26",
+  subject: "gpui: Fix stale pending input when a window is blurred (#63271)",
   crates: {
     gpui: "0.2.2",
     gpui_platform: "0.2.2",
     gpui_macros: "0.2.2",
   },
-  lock: "git+https://github.com/zed-industries/zed#8b1497dbd22fb06f5838a7c0b84a1e54fafa71bc",
+  lock: "git+https://github.com/zed-industries/zed#f66ed399cdde86092af8af3dc7b418abf45f37f8",
 } as const;
 
 /**
@@ -576,6 +592,17 @@ export const wry = {
   version: "0.53.3",
   crateSha256: "d9cfe72bff8acf9af0d6d276569be5b9cb3f313f9882761ada5a50d3044214d4",
   dir: "src/wry",
+} as const;
+
+/** JavaScript engine used by the C++ port of crates/shell. */
+export const quickjsNg = {
+  repo: "https://github.com/quickjs-ng/quickjs",
+  sha: "5cbbc675f13067ae2113b2ccacbdd05db2595496",
+  date: "2026-08-26",
+  subject: "docs: add Vayu to projects",
+  version: "v0.16.2-9-g5cbbc67",
+  checkout: ".work/quickjs-ng",
+  dir: "src/quickjs",
 } as const;
 
 export function rustTreeDir(repoRoot: string): string {
@@ -673,6 +700,7 @@ function printVersions(): never {
   console.log("crates ported", `taffy ${taffy.version} -> ${taffy.dir}`);
   console.log("             ", `markdown ${markdown.version} -> ${markdown.dir}`);
   console.log("             ", `${wry.crate} ${wry.version} -> ${wry.dir}`);
+  console.log("engine       ", `quickjs-ng ${quickjsNg.version} ${quickjsNg.sha} -> ${quickjsNg.dir}`);
   try {
     const dir = ensureRustTree(root);
     console.log("tree", dir, headSha(dir));
@@ -728,6 +756,7 @@ const rustExamplePkgs = new Set([
   "system_monitor",
   "table_in_scrollable",
   "text_selection",
+  "text_max_lines",
   "tooltip_top_edge",
   "webview",
   "window_title",
@@ -877,7 +906,7 @@ async function runNative(a: RunArgs): Promise<never> {
   // programs and not their working directories.
   const cwd = root;
 
-  if (a.plat === "linux" && !process.env["DISPLAY"] && !process.env["WAYLAND_DISPLAY"]) {
+  if (a.plat === "linux" && !consoleTargets.has(a.target) && !process.env["DISPLAY"] && !process.env["WAYLAND_DISPLAY"]) {
     console.error("DISPLAY is not set: there is no X server to open a window on.");
     console.error("Under WSL, make sure WSLg is available (wsl --update).");
     process.exit(1);
@@ -896,7 +925,7 @@ async function runNative(a: RunArgs): Promise<never> {
   }
 
   const dbg = a.debugger ? findDebugger(a.debugger, a.plat, exe) : null;
-  const cppCmd = dbg ? dbg.cmd : [exe];
+  const cppCmd = [...(dbg ? dbg.cmd : [exe]), ...a.appArgs];
 
   if (dbg?.foreground) {
     // The debugger owns this terminal, so nothing can be placed beside it.
@@ -905,6 +934,11 @@ async function runNative(a: RunArgs): Promise<never> {
       launchDetached([rustExe], cwd);
     }
     console.log(`Launching ${dbg.kind} ${formatCmd([exe])}`);
+    process.exit(run(cppCmd, cwd));
+  }
+
+  if (consoleTargets.has(a.target)) {
+    console.log(`Running ${formatCmd(cppCmd)}`);
     process.exit(run(cppCmd, cwd));
   }
 

@@ -64,7 +64,7 @@ export function amalgamDir(): string {
   return process.env.GPUI_AMALGAM_DIR ?? (isDist ? "." : ".work");
 }
 
-/** Whether the amalgam is this repo's own regenerated one, rather than a published pair. */
+/** Whether the amalgam is this repo's own regenerated one, rather than a published source set. */
 export function amalgamIsWork(): boolean {
   return amalgamDir() === ".work";
 }
@@ -174,6 +174,7 @@ export const simpleExamples = [
   "tooltip_top_edge",
   "table_in_scrollable",
   "text_selection",
+  "text_max_lines",
   "markdown_table",
   "rich_text",
   "stream_markdown",
@@ -190,13 +191,13 @@ export const simpleExamples = [
 /** A directory of .cpp built as one binary. */
 export const dirExamples = ["showcase", "story"];
 
-/** Not examples: they print a report and exit, so -all leaves them out. */
-export const consoleTargets = new Set(["tests", "bench"]);
+/** Not examples: console programs, so -all leaves them out. */
+export const consoleTargets = new Set(["tests", "bench", "gpui_shell"]);
 
 // There is no webview on the web: wry has no browser back end, and a page
 // inside a page is not what crates/webview is.
 function skippedOn(plat: Platform): Set<string> {
-  return plat === "wasm" ? new Set(["webview"]) : new Set<string>();
+  return plat === "wasm" ? new Set(["webview", "gpui_shell"]) : new Set<string>();
 }
 
 /** Every example this platform builds, in the order -all builds them. */
@@ -205,12 +206,12 @@ export function examplesFor(plat: Platform): string[] {
   return ["system_monitor", "app_assets", ...dirExamples, ...simpleExamples].filter((n) => !skip.has(n));
 }
 
-/** Every name the build accepts: the examples plus the two console runners. */
+/** Every name the build accepts: examples, repository runners and the shell tool. */
 export function targetsFor(plat: Platform): string[] {
   const skip = skippedOn(plat);
   // tests/ and bench/ are this repo's own suites, run against src/**. The
   // snapshot carries the examples and not them, so there they are not targets.
-  const runners = isDist ? [] : [...consoleTargets];
+  const runners = isDist ? ["gpui_shell"] : [...consoleTargets];
   return ["system_monitor", "app_assets", ...dirExamples, ...runners, ...simpleExamples].filter((n) => !skip.has(n));
 }
 
@@ -231,10 +232,12 @@ export type BuildFlags = {
   /** Build for the browser instead of for this host. */
   wasm: boolean;
   clean: boolean;
+  /** Compile the library's individual source files instead of gpui.cpp. */
+  nonAmalgam: boolean;
 };
 
 export function defaultBuildFlags(): BuildFlags {
-  return { sawRel: false, sawDbg: false, debug: false, asan: false, clang: false, wasm: false, clean: false };
+  return { sawRel: false, sawDbg: false, debug: false, asan: false, clang: false, wasm: false, clean: false, nonAmalgam: false };
 }
 
 /**
@@ -310,9 +313,12 @@ export function outDirName(plat: Platform, f: BuildFlags): string {
   if (plat === "win" && f.clang) {
     name += "_clang";
   }
-  // Only in this repo, where a plain build is the .work/ pair and a
+  if (f.nonAmalgam) {
+    name += "_nonamalgam";
+  }
+  // Only in this repo, where a plain build is the .work/ source set and a
   // GPUI_AMALGAM_DIR build is a published one: two amalgams, two out/ trees.
-  // In gpui-cpp-dist every build is the published pair, so out/rel is out/rel.
+  // In gpui-cpp-dist every build is the published source set, so out/rel is out/rel.
   if (!isDist && !amalgamIsWork()) {
     name += "_dist";
   }
@@ -345,9 +351,9 @@ export function outFilePath(plat: Platform, f: BuildFlags, name: string): string
 
 // ─── sources ──────────────────────────────────────────────────────────────
 
-/** The whole library, platform halves included; one file, see cmd/update-dist.ts. */
+/** The C++ amalgam plus the separately compiled QuickJS-NG C amalgam. */
 function amalgamSrc(): string[] {
-  return [amalgamPath("gpui.cpp")];
+  return [amalgamPath("gpui.cpp"), amalgamPath("quickjs/quickjs.c")];
 }
 
 function cppDir(rel: string): string[] {
@@ -361,7 +367,38 @@ function cppDir(rel: string): string[] {
     .sort();
 }
 
-function sourcesFor(name: string): string[] | null {
+function sourcePlatform(rel: string, plat: Platform): boolean {
+  if (/_win\.cpp$/.test(rel)) return plat === "win";
+  if (/_linux\.cpp$/.test(rel)) return plat === "linux";
+  if (/_mac\.cpp$/.test(rel)) return plat === "mac";
+  if (/_wasm\.cpp$/.test(rel)) return plat === "wasm";
+  if (/_mem_posix\.cpp$/.test(rel)) return plat === "linux" || plat === "mac";
+  if (/_posix\.cpp$/.test(rel)) return plat === "linux" || plat === "mac" || plat === "wasm";
+  return true;
+}
+
+function allCppDir(rel: string): string[] {
+  const dir = join(root, rel);
+  if (!existsSync(dir)) return [];
+  const result: string[] = [];
+  for (const ent of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const child = `${rel}/${ent.name}`;
+    if (ent.isDirectory()) result.push(...allCppDir(child));
+    else if (ent.name.endsWith(".cpp")) result.push(child);
+  }
+  return result;
+}
+
+function sourcesFor(name: string, plat: Platform, nonAmalgam: boolean): string[] | null {
+  if (nonAmalgam) {
+    if (name !== "hello_world") return null;
+    const markdown = process.env.GPUI_MARKDOWN ?? "full";
+    return ["examples/hello_world.cpp", ...allCppDir("src").filter((f) => {
+      if (!sourcePlatform(f, plat)) return false;
+      if (markdown === "full") return !f.startsWith("src/markdown-mini/");
+      return !f.startsWith("src/markdown/") || f === "src/markdown/mdast.cpp";
+    }), "src/quickjs/quickjs.c"];
+  }
   if (dirExamples.includes(name)) {
     return [...amalgamSrc(), ...cppDir(`examples/${name}`)];
   }
@@ -377,11 +414,17 @@ function sourcesFor(name: string): string[] | null {
 // src/ui/button.cpp and examples/showcase/button.cpp would both write
 // button.obj, so each group gets its own object directory.
 function objGroup(f: string): string {
+  if (/quickjs[\\/]quickjs\.c$/.test(f)) {
+    return "quickjs";
+  }
   if (f.startsWith("ext/")) {
     return "ext";
   }
   if (f.startsWith(amalgamPath("gpui")) || f.startsWith("src/gpui/")) {
     return "gpui";
+  }
+  if (f.startsWith("src/")) {
+    return `src-${dirname(f).replaceAll("/", "-")}`;
   }
   if (f.startsWith("examples/showcase/")) {
     return "showcase";
@@ -394,6 +437,9 @@ function objGroup(f: string): string {
   }
   if (f.startsWith("bench/")) {
     return "bench";
+  }
+  if (f.startsWith("gpui_shell/")) {
+    return "gpui_shell";
   }
   return "ex";
 }
@@ -918,8 +964,9 @@ function cflagsFor(tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): 
       "/std:c++20",
       "/EHsc",
       "/utf-8",
-      "/I",
-      amalgamDir(),
+      ...(f.nonAmalgam
+        ? ["/I", "src", "/I", "src/gpui", "/FI", "markdown/markdown.h", "/FI", "base/lib.h", "/FI", "ui/lib.h", "/FI", "gpui/paint.h", "/FI", "gpui/assets.h", "/FI", "gpui/svg.h", "/FI", "gpui/accessibility_win.h"]
+        : ["/I", amalgamDir()]),
       "/DUNICODE",
       "/D_UNICODE",
       "/W4",
@@ -963,8 +1010,9 @@ function cflagsFor(tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): 
 
   const flags = [
     "-std=c++20",
-    "-I",
-    amalgamDir(),
+    ...(f.nonAmalgam
+      ? ["-I", "src", "-I", "src/gpui", "-include", "markdown/markdown.h", "-include", "base/lib.h", "-include", "ui/lib.h", "-include", "gpui/paint.h", "-include", "gpui/assets.h", "-include", "gpui/svg.h", "-include", "gpui/accessibility_win.h"]
+      : ["-I", amalgamDir()]),
     "-Wall",
     "-Wextra",
     "-Werror",
@@ -982,6 +1030,82 @@ function cflagsFor(tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): 
   if (f.asan) {
     flags.push("-fsanitize=address", "-fno-omit-frame-pointer");
   }
+  return flags;
+}
+
+// QuickJS-NG is upstream C11, intentionally not folded into gpui.cpp. These
+// mirror the warnings its own CMake build enables and suppresses while keeping
+// this tree's static CRT, debug and sanitizer choices.
+function quickjsCflagsFor(tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): string[] {
+  if (tc.plat === "win") {
+    const flags = [
+      "/nologo",
+      "/TC",
+      "/std:c11",
+      ...(f.clang ? [] : ["/experimental:c11atomics"]),
+      "/utf-8",
+      "/D_CRT_SECURE_NO_WARNINGS",
+      "/D_CRT_NONSTDC_NO_DEPRECATE",
+      "/DWIN32_LEAN_AND_MEAN",
+      "/D_WIN32_WINNT=0x0601",
+      "/W4",
+      "/WX",
+      "/wd4018",
+      "/wd4061",
+      "/wd4098",
+      "/wd4100",
+      "/wd4127",
+      "/wd4132",
+      "/wd4146",
+      "/wd4200",
+      "/wd4242",
+      "/wd4244",
+      "/wd4245",
+      "/wd4267",
+      "/wd4334",
+      "/wd4388",
+      "/wd4389",
+      "/wd4456",
+      "/wd4457",
+      "/wd4701",
+      "/wd4702",
+      "/wd4703",
+      "/wd4710",
+      "/wd4711",
+      "/wd4820",
+      "/wd4996",
+      "/wd5045",
+      ...(f.debug ? ["/Od", "/MTd", "/DDEBUG"] : ["/O2", "/Gy", "/Gw", "/MT", "/DNDEBUG"]),
+      ...(f.clang
+        ? ["/Z7", "-Wno-unused-but-set-variable", "-Wno-unused-function", "-Wno-unused-command-line-argument"]
+        : ["/FS", "/Zi"]),
+    ];
+    if (f.asan) flags.push("/fsanitize=address");
+    return flags;
+  }
+  const flags = [
+    "-x", "c",
+    "-std=gnu11",
+    "-D_GNU_SOURCE",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-implicit-fallthrough",
+    "-Wno-sign-compare",
+    "-Wno-missing-field-initializers",
+    "-Wno-unused-parameter",
+    "-Wno-unused-but-set-variable",
+    "-Wno-unused-function",
+    "-Wno-unused-result",
+    "-Wno-array-bounds",
+    "-funsigned-char",
+    ...(f.debug ? ["-O0", "-DDEBUG", "-g"] : ["-O2", "-DNDEBUG"]),
+  ];
+  if (tc.plat === "linux" && !tc.exe.toLowerCase().includes("clang")) {
+    flags.push("-Wno-stringop-truncation");
+  }
+  if (tc.plat === "linux") flags.push(...linuxDeps(fail).cflags);
+  if (f.asan) flags.push("-fsanitize=address", "-fno-omit-frame-pointer");
   return flags;
 }
 
@@ -1045,18 +1169,19 @@ function spawnOrExit(tc: Toolchain, cmd: string[]): void {
 // ─── the amalgam ──────────────────────────────────────────────────────────
 
 /**
- * A plain build in this repo regenerates .work/gpui.h + .work/gpui.cpp from
- * src/** and compiles that. Two things take the other path and compile a pair
- * exactly as it was written, without rewriting it: GPUI_AMALGAM_DIR naming
+ * A plain build in this repo regenerates .work/gpui.h + .work/gpui.cpp and the
+ * separate .work/quickjs source pair from src/** and compiles them. Two things
+ * take the other path and compile that source set exactly as written:
+ * GPUI_AMALGAM_DIR naming
  * another copy (cmd/update-dist.ts pointing at the dist repo), and being in
- * gpui-cpp-dist at all, where the pair beside this script *is* the source.
+ * gpui-cpp-dist at all, where the files beside this script *are* the source.
  *
  * cmd/update-dist.ts is imported dynamically, and only on the branch that
  * amalgamates: it does not exist in gpui-cpp-dist, and a static import of it
  * would fail there at module load — before this function ever decides it has
  * nothing to amalgamate.
  */
-/** How big the pair a build is about to compile came out: the two files together. */
+/** How big a generated source group is. */
 function amalgamSize(bytes: number, lines: number): string {
   return `${formatHumanBytes(bytes)}, ${lines.toLocaleString("en-US")} lines`;
 }
@@ -1068,26 +1193,41 @@ export async function ensureAmalgam(fail: (msg: string) => never): Promise<void>
     console.log(
       `amalgam ${a.headerPath} + ${a.sourcePath} ` +
         `(${a.headerCount} headers, ${a.sourceCount} + ${a.platformSourceCount} sources, markdown ${a.markdown}, ` +
-        `${amalgamSize(a.headerBytes + a.sourceBytes, a.headerLines + a.sourceLines)})`,
+        `${amalgamSize(a.headerBytes + a.sourceBytes, a.headerLines + a.sourceLines)}); ` +
+        `${a.quickjsHeaderPath} + ${a.quickjsSourcePath} ` +
+        `(${amalgamSize(
+          a.quickjsHeaderBytes + a.quickjsSourceBytes,
+          a.quickjsHeaderLines + a.quickjsSourceLines,
+        )})`,
     );
     return;
   }
-  // A published pair reports the same two numbers, read off the files: they
-  // are the whole of what is being compiled, so how big it is belongs here
+  // A published source set reports the same two numbers, read off the files,
   // even when nothing generated it this run.
   let bytes = 0;
   let lines = 0;
-  for (const f of ["gpui.h", "gpui.cpp"]) {
+  let quickjsBytes = 0;
+  let quickjsLines = 0;
+  for (const f of ["gpui.h", "gpui.cpp", "quickjs/quickjs.h", "quickjs/quickjs.c"]) {
     const abs = join(root, amalgamDir(), f);
     if (!existsSync(abs)) {
       fail(`missing ${amalgamPath(f)}`);
     }
     const text = readFileSync(abs, "utf8");
-    bytes += Buffer.byteLength(text, "utf8");
-    lines += text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+    const fileBytes = Buffer.byteLength(text, "utf8");
+    const fileLines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+    if (f.startsWith("quickjs/")) {
+      quickjsBytes += fileBytes;
+      quickjsLines += fileLines;
+    } else {
+      bytes += fileBytes;
+      lines += fileLines;
+    }
   }
   console.log(
-    `amalgam ${amalgamPath("gpui.h")} + ${amalgamPath("gpui.cpp")} (as published, ${amalgamSize(bytes, lines)})`,
+    `amalgam ${amalgamPath("gpui.h")} + ${amalgamPath("gpui.cpp")} ` +
+      `(as published, ${amalgamSize(bytes, lines)}); ${amalgamPath("quickjs/quickjs.h")} + ` +
+      `${amalgamPath("quickjs/quickjs.c")} (${amalgamSize(quickjsBytes, quickjsLines)})`,
   );
 }
 
@@ -1119,7 +1259,7 @@ function copyAsanDll(tc: Toolchain, dir: string): void {
 
 function buildOne(name: string, tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): void {
   const started = performance.now();
-  const src = sourcesFor(name);
+  const src = sourcesFor(name, tc.plat, f.nonAmalgam);
   if (!src) {
     fail(`Unknown target: ${name}`);
   }
@@ -1127,12 +1267,13 @@ function buildOne(name: string, tc: Toolchain, f: BuildFlags, fail: (msg: string
   mkdirSync(join(root, dir), { recursive: true });
 
   const cflags = cflagsFor(tc, f, fail);
+  const quickjsCflags = quickjsCflagsFor(tc, f, fail);
   const outFile = join(dir, outFileName(tc.plat, name));
   const cfg = `${f.debug ? "dbg" : "rel"}${f.asan ? "+asan" : ""}`;
   console.log(`Building ${name} (${cfg}, ${tc.label}) -> ${outFile}`);
 
   const stampPath = join(dir, "obj", "cflags.txt");
-  const flagsKey = [tc.exe, ...cflags].join(" ");
+  const flagsKey = [tc.exe, ...cflags, "--quickjs-c--", ...quickjsCflags].join(" ");
   let flagsChanged = true;
   if (existsSync(join(root, stampPath))) {
     flagsChanged = readFileSync(join(root, stampPath), "utf8") !== flagsKey;
@@ -1166,13 +1307,16 @@ function buildOne(name: string, tc: Toolchain, f: BuildFlags, fail: (msg: string
     for (const [g, files] of byGroup) {
       const objDir = join(dir, "obj", g);
       const pdb = f.clang ? [] : [`/Fd${objDir}\\`];
-      spawnOrExit(tc, [tc.exe, ...cflags, "/c", `/Fo${objDir}\\`, ...pdb, ...files]);
+      const flags = g === "quickjs" ? quickjsCflags : cflags;
+      spawnOrExit(tc, [tc.exe, ...flags, "/c", `/Fo${objDir}\\`, ...pdb, ...files]);
     }
   } else {
     for (const srcFile of dirty) {
       const obj = join(dir, "obj", objGroup(srcFile), basename(srcFile).replace(/\.(cpp|c)$/i, `.${tc.objExt}`));
-      const extra = tc.plat === "mac" && isMacAmalgam(srcFile) ? objcFlags : [];
-      spawnOrExit(tc, [tc.exe, ...cflags, ...extra, "-c", srcFile, "-o", obj]);
+      const isQuickJs = objGroup(srcFile) === "quickjs";
+      const flags = isQuickJs ? quickjsCflags : cflags;
+      const extra = !isQuickJs && tc.plat === "mac" && isMacAmalgam(srcFile) ? objcFlags : [];
+      spawnOrExit(tc, [tc.exe, ...flags, ...extra, "-c", srcFile, "-o", obj]);
     }
   }
   mkdirSync(join(root, dir, "obj"), { recursive: true });
@@ -1326,7 +1470,9 @@ export async function build(req: BuildRequest): Promise<void> {
   const from = `run from ${root}`;
   console.log(Object.keys(tc.env).length > 0 ? `${from}, in a shell with the MSVC environment set` : from);
   console.log(`Using ${tc.exe}`);
-  await ensureAmalgam(fail);
+  if (!flags.nonAmalgam) {
+    await ensureAmalgam(fail);
+  }
   const dir = outDir(plat, flags);
   if (flags.clean) {
     const abs = join(root, dir);
@@ -1374,9 +1520,9 @@ export function formatElapsed(ms: number): string {
 // ─── command line ─────────────────────────────────────────────────────────
 
 const amalgamLine = isDist
-  ? `Compiles the examples against the gpui.h and gpui.cpp beside this script.`
-  : `Always writes .work/gpui.h and .work/gpui.cpp, then compiles examples
-against that pair.`;
+  ? `Compiles the examples against gpui.h, gpui.cpp and quickjs/ beside this script.`
+  : `Always writes .work/gpui.h, .work/gpui.cpp and .work/quickjs/, then compiles examples
+against that source set.`;
 
 const usage = `Usage: bun ${scriptPath("build.ts")} [-rel|-dbg] [-asan] [-clang] [-wasm] [-clean] [-all] [<example>]
 

@@ -204,8 +204,8 @@ int StoryFromSlug(const char* slug) {
         return StoryWelcome;
     }
     for (int i = 0; i < StoryCount; i++) {
-        if (StrEqI(Str(slug), Str(kMeta[i].slug)) ||
-            StrEqI(Str(slug), Str(kMeta[i].title))) {
+        if (base::StrEqI(Str(slug), kMeta[i].slug) ||
+            base::StrEqI(Str(slug), kMeta[i].title)) {
             return i;
         }
     }
@@ -252,7 +252,7 @@ El* StorySection(Ctx* cx, const char* title, const char* desc) {
     // adds opposite it.
     El* headRow =
         Div(a)->FlexRow()->W(kFill)->Gap(16)->ItemsStart()->JustifyBetween();
-    El* head = Div(a)->FlexCol()->Gap(4);
+    El* head = Div(a)->FlexCol()->MinW(0)->Flex1()->Gap(4);
     head->Child(StoryTxt(cx, StoryDup(cx, title), 16, th.mutedFg)
                     ->Medium()
                     ->LineHeight(1.f));
@@ -1386,7 +1386,7 @@ static int StoryBuildMenus(Ctx* cx, MenuDef* out, int cap) {
         themes[i].label = cfg->name;
         themes[i].action = ActSelectTheme();
         themes[i].arg = i;
-        themes[i].checked = StrSame(cfg->name, active);
+        themes[i].checked = base::StrEq(cfg->name, active);
     }
 
     Str locale = component::LocaleNow();
@@ -1395,7 +1395,7 @@ static int StoryBuildMenus(Ctx* cx, MenuDef* out, int cap) {
         languages[i].label = Str(kStoryLocales[i].label);
         languages[i].action = ActSelectLocale();
         languages[i].arg = i;
-        languages[i].checked = StrSame(Str(kStoryLocales[i].code), locale);
+        languages[i].checked = base::StrEq(Str(kStoryLocales[i].code), locale);
     }
 
     MenuRow* appRows = StoryRows(cx, 9);
