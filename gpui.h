@@ -1912,6 +1912,8 @@ enum class AlignItemsKeyword : uint8_t {
     End,
     FlexStart,
     FlexEnd,
+    SelfStart,
+    SelfEnd,
     Center,
     Baseline,
     Stretch
@@ -2033,6 +2035,7 @@ constexpr bool operator!=(OptAlignContent a, OptAlignContent b) {
 
 enum class Display : uint8_t {
     Block,
+    FlowRoot,
     Flex,
     Grid,
     None
@@ -2075,6 +2078,21 @@ enum class Direction : uint8_t {
 
 constexpr bool IsRtl(Direction d) {
     return d == Direction::Rtl;
+}
+
+constexpr AlignItems ResolveSelfRelative(AlignItems value,
+                                         Direction itemDirection,
+                                         Direction containerDirection,
+                                         bool axisIsInline) {
+    bool flip = axisIsInline && itemDirection != containerDirection;
+    if (value.keyword == AlignItemsKeyword::SelfStart) {
+        value.keyword = flip ? AlignItemsKeyword::End
+                             : AlignItemsKeyword::Start;
+    } else if (value.keyword == AlignItemsKeyword::SelfEnd) {
+        value.keyword = flip ? AlignItemsKeyword::Start
+                             : AlignItemsKeyword::End;
+    }
+    return value;
 }
 
 enum class TextAlign : uint8_t {
@@ -2394,6 +2412,10 @@ struct OptOriginZeroLine {
 
     constexpr bool IsSome() const { return has; }
 };
+
+constexpr uint16_t kMaxGridTracks = 10000;
+constexpr int16_t kMinOzLine = -(int16_t)kMaxGridTracks;
+constexpr int16_t kMaxOzLine = (int16_t)kMaxGridTracks;
 
 OriginZeroLine IntoOriginZeroLine(GridLine line, uint16_t explicitTrackCount);
 
@@ -2747,6 +2769,12 @@ struct GridTemplateArea {
     uint16_t columnEnd = 0;
 };
 
+struct GridTemplateAreas {
+    Slice<GridTemplateArea> areas;
+    uint16_t rowCount = 0;
+    uint16_t columnCount = 0;
+};
+
 enum class GridAreaAxis : uint8_t {
     Row,
     Column
@@ -2807,7 +2835,7 @@ struct Style {
     Slice<TrackSizingFunction> gridAutoColumns;
     GridAutoFlow gridAutoFlow = GridAutoFlow::Row;
 
-    Slice<GridTemplateArea> gridTemplateAreas;
+    GridTemplateAreas gridTemplateAreas;
     Slice<LineNameSet> gridTemplateColumnNames;
     Slice<LineNameSet> gridTemplateRowNames;
 
@@ -3087,12 +3115,12 @@ struct Layout {
     float ScrollWidth() const {
         return F32Max(0.0f, contentSize.w +
                                 F32Min(scrollbarSize.w, size.w) -
-                                size.w + border.right);
+                                size.w + border.left + border.right);
     }
     float ScrollHeight() const {
         return F32Max(0.0f, contentSize.h +
                                 F32Min(scrollbarSize.h, size.h) -
-                                size.h + border.bottom);
+                                size.h + border.top + border.bottom);
     }
 };
 
@@ -22446,6 +22474,8 @@ float TextLayoutBaseline(TextLayout* tl);
 namespace gpui {
 
 bool PaintGpuOn();
+
+bool PaintD3d12On();
 
 int PaintGpuSamples();
 

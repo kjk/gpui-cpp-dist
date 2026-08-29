@@ -15714,9 +15714,10 @@ static void FrameBenchTick(Window* win, float secs) {
     if (PaintGpuOn()) {
         const gpuw::FrameStats& st = gpuw::LastFrameStats();
         logf(
-            "frame-bench gpu instances=%d draws=%d pathTris=%d "
+            "frame-bench %s instances=%d draws=%d pathTris=%d "
             "glyphsRasterized=%d",
-            st.instances, st.draws, st.pathTriangles, st.glyphsRasterized);
+            PaintD3d12On() ? StrL("d3d12") : StrL("d3d11"), st.instances,
+            st.draws, st.pathTriangles, st.glyphsRasterized);
     }
 #endif
     if (SceneOn()) {
@@ -124866,6 +124867,14 @@ struct ContentSlot {
     float height = 0.0f;
 };
 
+struct BfcSlot {
+    int segmentId = -1;
+    float x = 0.0f;
+    float y = 0.0f;
+    float borderWidth = 0.0f;
+    float stretchWidth = 0.0f;
+};
+
 struct PlacedFloatedBox {
     float width = 0.0f;
     float height = 0.0f;
@@ -124875,42 +124884,58 @@ struct PlacedFloatedBox {
     float y = 0.0f;
 };
 
+static bool FloatFitsHorizontally(float width, FloatDirection direction,
+                                  float bfcWidth, const float floatInsets[2],
+                                  const float cbInsets[2]) {
+    int lead = (int)direction;
+    int trail = 1 - lead;
+    float xInset = F32Max(floatInsets[lead], cbInsets[lead]);
+    bool fitsOpposite = floatInsets[trail] == 0.0f ||
+                        xInset + width <= bfcWidth - floatInsets[trail];
+    bool fitsContaining = floatInsets[lead] == 0.0f ||
+                          xInset + width <= bfcWidth - cbInsets[trail];
+    return fitsOpposite && fitsContaining;
+}
+
 struct Segment {
     float yStart = 0.0f;
     float yEnd = 0.0f;
 
     float insets[2] = {0.0f, 0.0f};
 
+    bool hasFloat[2] = {false, false};
+
     bool FitsFloatWidth(SizeF floatedBox, FloatDirection direction,
-                        float bfcWidth) const {
-        int slot = (int)direction;
-        return insets[slot] == 0.0f ||
-               (bfcWidth - floatedBox.w - InsetSum()) >= 0.0f;
+                        float bfcWidth, const float cbInsets[2]) const {
+        return FloatFitsHorizontally(floatedBox.w, direction, bfcWidth,
+                                     insets, cbInsets);
     }
-    float InsetSum() const { return insets[0] + insets[1]; }
     bool Contains(float y) const { return y >= yStart && y < yEnd; }
 };
 
 struct FloatFitter {
     float bfcWidth = 0.0f;
     double slotHeight = 0.0;
-    float insets[2] = {0.0f, 0.0f};
+    float floatInsets[2] = {0.0f, 0.0f};
+    float cbInsets[2] = {0.0f, 0.0f};
 
     FloatFitter(float bfcWidth_, float slotHeight_, const float in[2])
         : bfcWidth(bfcWidth_), slotHeight((double)slotHeight_) {
-        insets[0] = in[0];
-        insets[1] = in[1];
+        cbInsets[0] = in[0];
+        cbInsets[1] = in[1];
     }
 
     void UnionInsets(const float other[2]) {
-        insets[0] = F32Max(insets[0], other[0]);
-        insets[1] = F32Max(insets[1], other[1]);
+        floatInsets[0] = F32Max(floatInsets[0], other[0]);
+        floatInsets[1] = F32Max(floatInsets[1], other[1]);
     }
-    bool FitsHorizontally(float width) const {
-        if (insets[0] == 0.0f && insets[1] == 0.0f) {
-            return true;
-        }
-        return bfcWidth - insets[0] - insets[1] - width >= 0.0f;
+    float PlacedInset(FloatDirection direction) const {
+        int lead = (int)direction;
+        return F32Max(floatInsets[lead], cbInsets[lead]);
+    }
+    bool FitsHorizontally(float width, FloatDirection direction) const {
+        return FloatFitsHorizontally(width, direction, bfcWidth, floatInsets,
+                                     cbInsets);
     }
     void AddHeight(float height) { slotHeight += (double)height; }
     bool FitsVertically(float height) const {
@@ -124934,6 +124959,9 @@ struct FloatContext {
 
     IndexRange lastPlacedFloats[2];
 
+    Optf clearBottoms[2] = {None(), None()};
+    Optf floatCeiling = None();
+
     float LastSegmentEnd() const {
         return segments.len > 0 ? segments[segments.len - 1].yEnd : 0.0f;
     }
@@ -124948,6 +124976,8 @@ struct FloatContext {
         Segment newSegment;
         newSegment.insets[0] = segments[idx].insets[0];
         newSegment.insets[1] = segments[idx].insets[1];
+        newSegment.hasFloat[0] = segments[idx].hasFloat[0];
+        newSegment.hasFloat[1] = segments[idx].hasFloat[1];
         newSegment.yStart = divideAtY;
         newSegment.yEnd = segments[idx].yEnd;
         segments[idx].yEnd = divideAtY;
@@ -124972,6 +125002,15 @@ struct FloatContext {
         hasFloats = true;
         PlacedFloatedBox placed = PlaceFloatedBoxInner(
             floatedBox, minY, containingBlockInsets, direction, clear);
+        int slot = (int)direction;
+        float bottom = placed.y + placed.height;
+        clearBottoms[slot] =
+            Some(IsSome(clearBottoms[slot])
+                     ? F32Max(clearBottoms[slot], bottom)
+                     : bottom);
+        floatCeiling = Some(IsSome(floatCeiling)
+                                ? F32Max(floatCeiling, placed.y)
+                                : placed.y);
         float xInset = placed.xInset;
         float y = placed.y;
         if (direction == FloatDirection::Left) {
@@ -124983,15 +125022,17 @@ struct FloatContext {
     }
 
     int ClearedSegment(Clear clear) const {
+        int left = lastPlacedFloats[0].end;
+        int right = lastPlacedFloats[1].end;
         switch (clear) {
             case Clear::Left:
-                return lastPlacedFloats[0].end;
+                return left > 0 ? left : -1;
             case Clear::Right:
-                return lastPlacedFloats[1].end;
+                return right > 0 ? right : -1;
             case Clear::Both: {
-                int l = lastPlacedFloats[0].end;
-                int r = lastPlacedFloats[1].end;
-                return l > r ? l : r;
+                return left > 0 || right > 0
+                           ? (left > right ? left : right)
+                           : -1;
             }
             default:
                 return -1;
@@ -124999,20 +125040,28 @@ struct FloatContext {
     }
 
     Optf ClearedThreshold(Clear clear) const {
-        int idx = ClearedSegment(clear);
-        if (idx < 0) {
-            return None();
+        switch (clear) {
+            case Clear::Left:
+                return clearBottoms[0];
+            case Clear::Right:
+                return clearBottoms[1];
+            case Clear::Both:
+                if (IsSome(clearBottoms[0]) && IsSome(clearBottoms[1])) {
+                    return Some(F32Max(clearBottoms[0], clearBottoms[1]));
+                }
+                return IsSome(clearBottoms[0]) ? clearBottoms[0]
+                                               : clearBottoms[1];
+            default:
+                return None();
         }
-        int at = idx > 1 ? idx - 1 : 0;
-        if (at >= segments.len) {
-            return None();
-        }
-        return Some(segments[at].yEnd);
     }
 
     ContentSlot FindContentSlot(float minY,
                                 const float containingBlockInsets[2],
                                 Clear clear, int after) const;
+    BfcSlot FindBfcSlot(float minY, const float containingBlockInsets[2],
+                        const float margins[2], Direction direction,
+                        Clear clear, int after) const;
 };
 
 PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
@@ -125020,18 +125069,22 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
     FloatDirection direction, Clear clear) {
     int slot = (int)direction;
 
+    minY = F32Max(minY, UnwrapOr(floatCeiling, -INFINITY));
+    minY = F32Max(minY, UnwrapOr(ClearedThreshold(clear), -INFINITY));
+
+    int floatStart = lastPlacedFloats[0].start > lastPlacedFloats[1].start
+                         ? lastPlacedFloats[0].start
+                         : lastPlacedFloats[1].start;
     int hwm = 0;
     switch (clear) {
         case Clear::Left: {
-            int a = lastPlacedFloats[slot].start;
             int b = lastPlacedFloats[0].end + 1;
-            hwm = a > b ? a : b;
+            hwm = floatStart > b ? floatStart : b;
             break;
         }
         case Clear::Right: {
-            int a = lastPlacedFloats[slot].start;
             int b = lastPlacedFloats[1].end + 1;
-            hwm = a > b ? a : b;
+            hwm = floatStart > b ? floatStart : b;
             break;
         }
         case Clear::Both: {
@@ -125041,7 +125094,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
             break;
         }
         default:
-            hwm = lastPlacedFloats[slot].start;
+            hwm = floatStart;
             break;
     }
 
@@ -125072,7 +125125,8 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
 
         const Segment& startSegment = segments[startIdx];
         if (!startSegment
-                 .FitsFloatWidth(floatedBox, direction, availableWidth)) {
+                 .FitsFloatWidth(floatedBox, direction, availableWidth,
+                                 containingBlockInsets)) {
             startIdx++;
             if (endIdx < startIdx) {
                 endIdx = startIdx;
@@ -125092,12 +125146,12 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
                 haveStart = true;
                 foundStart = startIdx;
                 haveEnd = false;
-                placedInset = fitter.insets[slot];
+                placedInset = fitter.PlacedInset(direction);
                 break;
             }
             const Segment& endSegment = segments[endIdx];
             fitter.UnionInsets(endSegment.insets);
-            if (!fitter.FitsHorizontally(floatedBox.w)) {
+            if (!fitter.FitsHorizontally(floatedBox.w, direction)) {
                 startIdx++;
                 if (endIdx < startIdx) {
                     endIdx = startIdx;
@@ -125116,7 +125170,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
             foundStart = startIdx;
             haveEnd = true;
             foundEnd = endIdx;
-            placedInset = fitter.insets[slot];
+            placedInset = fitter.PlacedInset(direction);
             break;
         }
         if (restartOuter) {
@@ -125131,7 +125185,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
     out.y = startY;
     out.xInset = placedInset;
 
-    if (floatedBox.w == 0.0f || floatedBox.h == 0.0f) {
+    if (floatedBox.h == 0.0f) {
         return out;
     }
 
@@ -125150,6 +125204,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
         seg.insets[0] = containingBlockInsets[0];
         seg.insets[1] = containingBlockInsets[1];
         seg.insets[slot] += floatedBox.w;
+        seg.hasFloat[slot] = true;
         VecAppend(segments, seg);
 
         int si = segments.len - 1;
@@ -125183,7 +125238,10 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
     } else {
         ei = foundEnd;
         float endY = startY + floatedBox.h;
-        if (endY != segments[ei].yEnd) {
+        while (ei > si && endY <= segments[ei].yStart) {
+            ei--;
+        }
+        if (segments[ei].yStart < endY && endY < segments[ei].yEnd) {
             SubdivideSegment(ei, endY);
         }
     }
@@ -125191,6 +125249,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
     float placedInsetPlusWidth = placedInset + floatedBox.w;
     for (int i = si; i <= ei && i < segments.len; i++) {
         segments[i].insets[slot] = placedInsetPlusWidth;
+        segments[i].hasFloat[slot] = true;
     }
 
     UpdateLastPlacedFloat(direction, {si, ei + 1});
@@ -125211,6 +125270,8 @@ ContentSlot FloatContext::FindContentSlot(float minY,
     if (!HasActiveFloats(minY)) {
         return fallback;
     }
+
+    minY = F32Max(minY, UnwrapOr(ClearedThreshold(clear), -INFINITY));
 
     int atLeast = after >= 0 ? after + 1 : 0;
     int cleared = ClearedSegment(clear);
@@ -125242,24 +125303,93 @@ ContentSlot FloatContext::FindContentSlot(float minY,
     return slot;
 }
 
+BfcSlot FloatContext::FindBfcSlot(float minY,
+                                  const float containingBlockInsets[2],
+                                  const float margins[2], Direction direction,
+                                  Clear clear, int after) const {
+    float marginInsets[2] = {containingBlockInsets[0] + margins[0],
+                             containingBlockInsets[1] + margins[1]};
+    float noFloatWidth = availableWidth - marginInsets[0] - marginInsets[1];
+    BfcSlot fallback;
+    fallback.x = marginInsets[0];
+    fallback.y = minY;
+    fallback.borderWidth = noFloatWidth;
+    fallback.stretchWidth = noFloatWidth;
+    if (!HasActiveFloats(minY)) {
+        return fallback;
+    }
+
+    minY = F32Max(minY, UnwrapOr(ClearedThreshold(clear), -INFINITY));
+    int atLeast = after >= 0 ? after + 1 : 0;
+    int cleared = ClearedSegment(clear);
+    int hwm = cleared >= 0 ? cleared + 1 : 0;
+    if (atLeast > hwm) {
+        hwm = atLeast;
+    }
+    int startIdx = segments.len;
+    for (int i = hwm; i < segments.len; i++) {
+        if (segments[i].yEnd > minY) {
+            startIdx = i;
+            break;
+        }
+    }
+    if (startIdx >= segments.len) {
+        fallback.y = F32Max(LastSegmentEnd(), minY);
+        return fallback;
+    }
+
+    const Segment& segment = segments[startIdx];
+    int lead = direction == Direction::Ltr ? 0 : 1;
+    int trail = 1 - lead;
+    bool hasLeadFloat = segment.hasFloat[lead];
+    bool hasTrailFloat = segment.hasFloat[trail];
+    float fitInsets[2] = {};
+    float stretchInsets[2] = {};
+    fitInsets[lead] = hasLeadFloat
+                          ? F32Max(segment.insets[lead], marginInsets[lead])
+                          : marginInsets[lead];
+    stretchInsets[lead] = fitInsets[lead];
+    fitInsets[trail] =
+        hasTrailFloat
+            ? F32Max(segment.insets[trail], containingBlockInsets[trail])
+            : F32Min(marginInsets[trail], containingBlockInsets[trail]);
+    stretchInsets[trail] =
+        hasTrailFloat ? F32Max(segment.insets[trail], marginInsets[trail])
+                      : marginInsets[trail];
+
+    BfcSlot slot;
+    slot.segmentId = startIdx;
+    slot.x = fitInsets[0];
+    slot.y = F32Max(segment.yStart, minY);
+    slot.borderWidth = availableWidth - fitInsets[0] - fitInsets[1];
+    slot.stretchWidth =
+        availableWidth - stretchInsets[0] - stretchInsets[1];
+    return slot;
+}
+
 struct FloatIntrinsicWidthCalculator {
     AvailableSpace availableWidth;
     float contribution = 0.0f;
+    float widest = 0.0f;
 
     void AddFloat(float width) {
         switch (availableWidth.kind) {
             case AvailableSpace::Kind::Definite:
-
+            case AvailableSpace::Kind::MaxContent:
+                contribution += width;
                 break;
             case AvailableSpace::Kind::MinContent:
                 contribution = F32Max(contribution, width);
                 break;
-            default:
-                contribution += width;
-                break;
         }
+        widest = F32Max(widest, width);
     }
-    float Result() const { return contribution; }
+    float Result() const {
+        if (availableWidth.kind == AvailableSpace::Kind::Definite) {
+            return F32Max(F32Min(contribution, availableWidth.value), widest);
+        }
+        return contribution;
+    }
 };
 
 struct BlockFormattingContext {
@@ -125277,6 +125407,9 @@ struct BlockContext {
 
     float floatContentContribution = 0.0f;
     bool isRoot = false;
+    bool adjoiningFloats[2] = {false, false};
+    bool topAdjoiningFloats[2] = {false, false};
+    bool hasTopAdjoiningFloats = false;
 
     BlockContext SubContext(float additionalYOffset,
                             const float childInsets[2]) {
@@ -125288,6 +125421,8 @@ struct BlockContext {
         out.contentBoxInsets[0] = out.insets[0];
         out.contentBoxInsets[1] = out.insets[1];
         out.isRoot = false;
+        out.adjoiningFloats[0] = adjoiningFloats[0];
+        out.adjoiningFloats[1] = adjoiningFloats[1];
         return out;
     }
 
@@ -125306,7 +125441,11 @@ struct BlockContext {
         return bfc->floatContext.HasActiveFloats(minY + yOffset);
     }
     PointF PlaceFloatedBox(SizeF floatedBox, float minY,
-                           FloatDirection direction, Clear clear) {
+                           FloatDirection direction, Clear clear,
+                           bool adjoinsUnresolvedStrut) {
+        if (adjoinsUnresolvedStrut) {
+            adjoiningFloats[(int)direction] = true;
+        }
         PointF pos = bfc->floatContext.PlaceFloatedBox(
             floatedBox, minY + yOffset, contentBoxInsets, direction, clear);
         pos.y -= yOffset;
@@ -125322,12 +125461,51 @@ struct BlockContext {
         slot.x -= insets[0];
         return slot;
     }
+    BfcSlot FindBfcSlot(float minY, const float margins[2],
+                        Direction direction, Clear clear, int after) const {
+        BfcSlot slot = bfc->floatContext.FindBfcSlot(
+            minY + yOffset, contentBoxInsets, margins, direction, clear, after);
+        slot.y -= yOffset;
+        slot.x -= insets[0];
+        return slot;
+    }
     Optf ClearedThreshold(Clear clear) const {
         Optf t = bfc->floatContext.ClearedThreshold(clear);
         if (IsSome(t)) {
             return Some(t - yOffset);
         }
         return None();
+    }
+    bool HasAdjoiningFloat(Clear clear) const {
+        switch (clear) {
+            case Clear::Left:
+                return adjoiningFloats[0];
+            case Clear::Right:
+                return adjoiningFloats[1];
+            case Clear::Both:
+                return adjoiningFloats[0] || adjoiningFloats[1];
+            default:
+                return false;
+        }
+    }
+    void MergeAdjoiningFloats(const bool flags[2]) {
+        adjoiningFloats[0] = adjoiningFloats[0] || flags[0];
+        adjoiningFloats[1] = adjoiningFloats[1] || flags[1];
+    }
+    void CommitStrut() {
+        if (!hasTopAdjoiningFloats) {
+            topAdjoiningFloats[0] = adjoiningFloats[0];
+            topAdjoiningFloats[1] = adjoiningFloats[1];
+            hasTopAdjoiningFloats = true;
+        }
+        adjoiningFloats[0] = false;
+        adjoiningFloats[1] = false;
+    }
+    void GetTopAdjoiningFloats(bool out[2]) const {
+        out[0] = hasTopAdjoiningFloats ? topAdjoiningFloats[0]
+                                      : adjoiningFloats[0];
+        out[1] = hasTopAdjoiningFloats ? topAdjoiningFloats[1]
+                                      : adjoiningFloats[1];
     }
     void AddChildFloatedContentHeightContribution(float childContribution) {
         floatContentContribution =
@@ -125346,6 +125524,8 @@ struct BlockItem {
     uint32_t order = 0;
 
     bool isTable = false;
+
+    bool isReplaced = false;
 
     bool isInSameBfc = false;
 
@@ -125398,6 +125578,7 @@ void GenerateItemList(TaffyTree* tree, NodeId node, SizeFOpt nodeInnerSize,
         item.nodeId = childNodeId;
         item.order = order++;
         item.isTable = cs.itemIsTable;
+        item.isReplaced = cs.IsCompressibleReplaced();
         item.floatMode = cs.floatMode;
         item.clear = cs.clear;
         item.position = cs.position;
@@ -125480,14 +125661,15 @@ struct InFlowResult {
     float intrinsicOuterHeight = 0.0f;
     CollapsibleMarginSet firstChildTopMarginSet;
     CollapsibleMarginSet lastChildBottomMarginSet;
+    Optf firstBaseline = None();
 };
 
 InFlowResult PerformFinalLayoutOnInFlowChildren(
     TaffyTree* tree, RunMode runMode, Vec<BlockItem>* items,
     float containerOuterWidth, Optf containerPercentageResolutionHeight,
-    RectF contentBoxInset, RectF resolvedContentBoxInset, TextAlign textAlign,
-    Direction direction, LineBool ownMarginsCollapseWithChildren,
-    BlockContext* blockCtx) {
+    RectF contentBoxInset, RectF resolvedContentBoxInset,
+    RectF resolvedBorder, TextAlign textAlign, Direction direction,
+    LineBool ownMarginsCollapseWithChildren, BlockContext* blockCtx) {
     CalcResolver calc = tree->calc;
     float containerInnerWidth = containerOuterWidth - resolvedContentBoxInset
                                                           .HorizontalAxisSum();
@@ -125507,13 +125689,17 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         blockCtx->ApplyContentBoxInset(xInsets);
     }
 
+    if (!ownMarginsCollapseWithChildren.start) {
+        blockCtx->CommitStrut();
+    }
+
     InFlowResult res;
     float committedYOffset = resolvedContentBoxInset.top;
     float yOffsetForAbsolute = resolvedContentBoxInset.top;
     CollapsibleMarginSet activeCollapsibleMarginSet;
     bool isCollapsingWithFirstMarginSet = true;
+    bool activeMarginSetHasClearance = false;
     bool hasActiveFloats = blockCtx->HasActiveFloats(committedYOffset);
-    float yOffsetForFloat = resolvedContentBoxInset.top;
 
     for (int itemIdx = 0; itemIdx < items->len; itemIdx++) {
         BlockItem& item = (*items)[itemIdx];
@@ -125526,7 +125712,7 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         }
 
         RectFOpt itemMargin =
-            item.margin.MaybeResolve(Some(containerOuterWidth), calc);
+            item.margin.MaybeResolve(Some(containerInnerWidth), calc);
         RectF itemNonAutoMargin = {
             UnwrapOr(itemMargin.left, 0.0f), UnwrapOr(itemMargin.right, 0.0f),
             UnwrapOr(itemMargin.top, 0.0f), UnwrapOr(itemMargin.bottom, 0.0f)};
@@ -125540,14 +125726,25 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         if (floatDirection.IsSome()) {
             hasActiveFloats = true;
 
+            float availableWidth =
+                containerInnerWidth - itemNonAutoXMarginSum;
             LayoutOutput itemLayout = tree->PerformChildLayout(
                 item.nodeId, SizeFOptNone(), parentSize,
-                SizeAvail::MaxContent(), SizingMode::InherentSize,
-                LineBool::True());
+                {AvailableSpace::Definite(availableWidth),
+                 AvailableSpace::MaxContent()},
+                SizingMode::InherentSize, LineBool::False());
             SizeF marginBox = itemLayout.size + itemNonAutoMargin.SumAxes();
 
+            bool adjoinsUnresolvedStrut =
+                isCollapsingWithFirstMarginSet &&
+                ownMarginsCollapseWithChildren.start;
+            float yOffsetForFloat =
+                adjoinsUnresolvedStrut
+                    ? committedYOffset
+                    : committedYOffset + activeCollapsibleMarginSet.Resolve();
             PointF location = blockCtx->PlaceFloatedBox(
-                marginBox, yOffsetForFloat, floatDirection.val, item.clear);
+                marginBox, yOffsetForFloat, floatDirection.val, item.clear,
+                adjoinsUnresolvedStrut);
 
             location.y += itemNonAutoMargin.top;
             location.x += itemNonAutoMargin.left;
@@ -125565,7 +125762,13 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
 
             res.inflowContentSize =
                 Max(res.inflowContentSize, ComputeContentSizeContribution(
-                    location, itemLayout.size, itemLayout.contentSize,
+                    {IsRtl(direction)
+                         ? containerOuterWidth -
+                               (location.x + itemLayout.size.w) -
+                               resolvedBorder.right
+                         : location.x - resolvedBorder.left,
+                     location.y - resolvedBorder.top},
+                    itemLayout.size, itemLayout.contentSize,
                     item.overflow));
             continue;
         }
@@ -125574,6 +125777,8 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         float stretchWidth;
         PointF floatAvoidingPosition;
         float floatAvoidingWidth;
+        bool itemAvoidsFloats = false;
+        bool itemPushedBelowFloat = false;
 
         if (item.isInSameBfc) {
             stretchWidth = containerInnerWidth - itemNonAutoXMarginSum;
@@ -125587,13 +125792,33 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
                                     .Resolve();
             }
             float minY = committedYOffset + yMarginOffset;
-            if (hasActiveFloats) {
-                ContentSlot slot = blockCtx
-                                       ->FindContentSlot(minY, item.clear, -1);
+            if (hasActiveFloats || blockCtx->HasActiveFloats(minY)) {
+                float xMargins[2] = {itemNonAutoMargin.left,
+                                     itemNonAutoMargin.right};
+                float minAutoWidth = -itemNonAutoXMarginSum;
+                int after = -1;
+                BfcSlot slot;
+                while (true) {
+                    slot = blockCtx->FindBfcSlot(minY, xMargins, direction,
+                                                 item.clear, after);
+                    if (slot.segmentId < 0) {
+                        break;
+                    }
+                    float width = MaybeClamp(
+                        UnwrapOr(item.size.w,
+                                 F32Max(slot.stretchWidth, minAutoWidth)),
+                        item.minSize.w, item.maxSize.w);
+                    if (width <= slot.borderWidth + 0.001f) {
+                        break;
+                    }
+                    after = slot.segmentId;
+                }
+                itemPushedBelowFloat = slot.y > minY;
                 hasActiveFloats = slot.segmentId >= 0;
-                stretchWidth = slot.width - itemNonAutoXMarginSum;
+                itemAvoidsFloats = true;
+                stretchWidth = F32Max(slot.stretchWidth, minAutoWidth);
                 floatAvoidingPosition = {slot.x, slot.y};
-                floatAvoidingWidth = slot.width;
+                floatAvoidingWidth = slot.borderWidth;
             } else {
                 stretchWidth = containerInnerWidth - itemNonAutoXMarginSum;
                 floatAvoidingPosition = {resolvedContentBoxInset.left, minY};
@@ -125602,8 +125827,7 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         }
 
         SizeFOpt knownDimensions = SizeFOptNone();
-        if (!item.isTable) {
-
+        if (!item.isTable && !item.isReplaced) {
             SizeFOpt sized = item.size;
             sized.w = Some(MaybeClamp(UnwrapOr(sized.w, stretchWidth),
                                       item.minSize.w, item.maxSize.w));
@@ -125621,7 +125845,8 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         inputs.verticalMarginsAreCollapsible =
             item.isInSameBfc ? LineBool::True() : LineBool::False();
 
-        float clearPos = UnwrapOr(blockCtx->ClearedThreshold(item.clear), 0.0f);
+        Optf clearThreshold = blockCtx->ClearedThreshold(item.clear);
+        float clearPos = UnwrapOr(clearThreshold, -INFINITY);
 
         LayoutOutput itemLayout;
         if (item.isInSameBfc) {
@@ -125640,6 +125865,9 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
             blockCtx->AddChildFloatedContentHeightContribution(
                 yOffsetForAbsolute + childBlockCtx
                                          .FloatedContentHeightContribution());
+            bool childFlags[2];
+            childBlockCtx.GetTopAdjoiningFloats(childFlags);
+            blockCtx->MergeAdjoiningFloats(childFlags);
         } else {
             itemLayout = tree->ComputeChildLayout(item.nodeId, inputs);
         }
@@ -125680,16 +125908,32 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
         if (item.isInSameBfc && (!isCollapsingWithFirstMarginSet ||
                                  !ownMarginsCollapseWithChildren.start)) {
             yMarginOffset = activeCollapsibleMarginSet
-                                .CollapseWithMargin(resolvedMargin.top)
+                                .CollapseWithSet(topMarginSet)
                                 .Resolve();
         }
 
-        bool floatOrNotClear =
-            IsFloated(item.floatMode) || item.clear == Clear::None;
+        bool hasClearance = false;
+        if (item.isInSameBfc && IsSome(clearThreshold)) {
+            float hypotheticalY =
+                committedYOffset +
+                activeCollapsibleMarginSet.CollapseWithSet(topMarginSet)
+                    .Resolve();
+            bool forcedClearance = blockCtx->HasAdjoiningFloat(item.clear);
+            if (forcedClearance || hypotheticalY < clearThreshold) {
+                hasClearance = true;
+                float escapedMargin =
+                    isCollapsingWithFirstMarginSet &&
+                            ownMarginsCollapseWithChildren.start
+                        ? activeCollapsibleMarginSet.Resolve()
+                        : 0.0f;
+                yMarginOffset =
+                    clearThreshold - committedYOffset - escapedMargin;
+            }
+        }
 
         item.computedSize = itemLayout.size;
         item.canBeCollapsedThrough =
-            itemLayout.marginsCanCollapseThrough && floatOrNotClear;
+            itemLayout.marginsCanCollapseThrough && !hasClearance;
         if (item.isInSameBfc) {
             float unclearedY = committedYOffset + activeCollapsibleMarginSet
                                                       .Resolve();
@@ -125718,15 +125962,21 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
                                   resolvedContentBoxInset.right -
                                   finalSize.w - resolvedMargin.right +
                                   insetOffset.x,
-                        F32Max(committedYOffset, clearPos) + yMarginOffset +
-                            insetOffset.y};
+                        committedYOffset + yMarginOffset + insetOffset.y};
         } else {
-
+            float extraLeft = itemAvoidsFloats
+                                  ? resolvedMargin.left -
+                                        itemNonAutoMargin.left
+                                  : resolvedMargin.left;
+            float extraRight = itemAvoidsFloats
+                                   ? resolvedMargin.right -
+                                         itemNonAutoMargin.right
+                                   : resolvedMargin.right;
             location = {direction == Direction::Ltr
-                            ? floatAvoidingPosition.x + resolvedMargin.left +
+                            ? floatAvoidingPosition.x + extraLeft +
                                   insetOffset.x
                             : floatAvoidingPosition.x + floatAvoidingWidth -
-                                  finalSize.w - resolvedMargin.right +
+                                  finalSize.w - extraRight +
                                   insetOffset.x,
                         floatAvoidingPosition.y + insetOffset.y};
         }
@@ -125754,6 +126004,11 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
             }
         }
 
+        if (!IsSome(res.firstBaseline) &&
+            IsSome(itemLayout.firstBaselines.y)) {
+            res.firstBaseline = Some(location.y + itemLayout.firstBaselines.y);
+        }
+
         item.hasFinalLayout = true;
         item.finalLayout.order = item.order;
         item.finalLayout.size = itemLayout.size;
@@ -125766,11 +126021,19 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
 
         res.inflowContentSize =
             Max(res.inflowContentSize, ComputeContentSizeContribution(
-                {location.x - resolvedContentBoxInset.left,
-                 location.y - resolvedContentBoxInset.top},
+                {IsRtl(direction)
+                     ? containerOuterWidth - (location.x + finalSize.w) -
+                           resolvedBorder.right
+                     : location.x - resolvedBorder.left,
+                 location.y - resolvedBorder.top},
                 finalSize, itemLayout.contentSize, item.overflow));
 
-        if (isCollapsingWithFirstMarginSet) {
+        if (isCollapsingWithFirstMarginSet && itemPushedBelowFloat) {
+            isCollapsingWithFirstMarginSet = false;
+        }
+        if (isCollapsingWithFirstMarginSet && hasClearance) {
+            isCollapsingWithFirstMarginSet = false;
+        } else if (isCollapsingWithFirstMarginSet) {
             if (item.canBeCollapsedThrough) {
                 res.firstChildTopMarginSet =
                     res.firstChildTopMarginSet.CollapseWithSet(topMarginSet)
@@ -125788,21 +126051,33 @@ InFlowResult PerformFinalLayoutOnInFlowChildren(
                                              .CollapseWithSet(bottomMarginSet);
             yOffsetForAbsolute =
                 committedYOffset + itemLayout.size.h + yMarginOffset;
-            yOffsetForFloat = yOffsetForAbsolute;
         } else {
             committedYOffset =
                 location.y - insetOffset.y + itemLayout.size.h;
-            activeCollapsibleMarginSet = bottomMarginSet;
+            if (hasClearance && itemLayout.marginsCanCollapseThrough) {
+                committedYOffset -= topMarginSet.Resolve();
+                activeCollapsibleMarginSet =
+                    topMarginSet.CollapseWithSet(bottomMarginSet);
+                activeMarginSetHasClearance = true;
+            } else {
+                activeCollapsibleMarginSet = bottomMarginSet;
+                activeMarginSetHasClearance = false;
+            }
             yOffsetForAbsolute = committedYOffset + activeCollapsibleMarginSet
                                                         .Resolve();
-            yOffsetForFloat = committedYOffset;
+            blockCtx->CommitStrut();
         }
     }
 
-    res.lastChildBottomMarginSet = activeCollapsibleMarginSet;
-    float bottomYMarginOffset = ownMarginsCollapseWithChildren.end
-                                    ? 0.0f
-                                    : res.lastChildBottomMarginSet.Resolve();
+    res.lastChildBottomMarginSet = activeMarginSetHasClearance
+                                       ? CollapsibleMarginSet{}
+                                       : activeCollapsibleMarginSet;
+    float bottomYMarginOffset =
+        activeMarginSetHasClearance
+            ? activeCollapsibleMarginSet.Resolve()
+        : ownMarginsCollapseWithChildren.end
+            ? 0.0f
+            : res.lastChildBottomMarginSet.Resolve();
     committedYOffset += resolvedContentBoxInset.bottom + bottomYMarginOffset;
     res.intrinsicOuterHeight = F32Max(0.0f, committedYOffset);
     return res;
@@ -126107,7 +126382,7 @@ LayoutOutput ComputeInner(TaffyTree* tree, NodeId nodeId,
     InFlowResult inFlow = PerformFinalLayoutOnInFlowChildren(
         tree, runMode, &items, containerOuterWidth,
         containerPercentageResolutionHeight, contentBoxInset,
-        resolvedContentBoxInset, textAlign, direction,
+        resolvedContentBoxInset, resolvedBorder, textAlign, direction,
         ownMarginsCollapseWithChildren, blockCtx);
     SizeF inflowContentSize = inFlow.inflowContentSize;
     float intrinsicOuterHeight = inFlow.intrinsicOuterHeight;
@@ -126141,6 +126416,9 @@ LayoutOutput ComputeInner(TaffyTree* tree, NodeId nodeId,
                 ApplyAlignmentFallback(freeSpace, 1, alignContent.val);
             float groupOffset = ComputeAlignmentOffset(freeSpace, 1, 0.0f,
                                                        keyword, false, true);
+            if (IsSome(inFlow.firstBaseline)) {
+                inFlow.firstBaseline += groupOffset;
+            }
             for (int i = 0; i < items.len; i++) {
                 if (items[i].hasFinalLayout) {
                     items[i].finalLayout.location.y += groupOffset;
@@ -126154,8 +126432,12 @@ LayoutOutput ComputeInner(TaffyTree* tree, NodeId nodeId,
                 const Layout& l = items[i].finalLayout;
                 inflowContentSize =
                     Max(inflowContentSize, ComputeContentSizeContribution(
-                        {l.location.x - resolvedContentBoxInset.left,
-                         l.location.y - resolvedContentBoxInset.top},
+                        {IsRtl(direction)
+                             ? containerOuterWidth -
+                                   (l.location.x + l.size.w) -
+                                   resolvedBorder.right
+                             : l.location.x - resolvedBorder.left,
+                         l.location.y - resolvedBorder.top},
                         l.size, l.contentSize, items[i].overflow));
             }
         }
@@ -126163,6 +126445,9 @@ LayoutOutput ComputeInner(TaffyTree* tree, NodeId nodeId,
 
     bool allInFlowChildrenCanBeCollapsedThrough = true;
     for (int i = 0; i < items.len; i++) {
+        if (IsFloated(items[i].floatMode)) {
+            continue;
+        }
         if (items[i].position != Position::Absolute &&
             !items[i].canBeCollapsedThrough) {
             allInFlowChildrenCanBeCollapsedThrough = false;
@@ -126174,6 +126459,7 @@ LayoutOutput ComputeInner(TaffyTree* tree, NodeId nodeId,
 
     LayoutOutput output;
     output.size = finalOuterSize;
+    output.firstBaselines.y = inFlow.firstBaseline;
     output.topMargin =
         ownMarginsCollapseWithChildren.start
             ? inFlow.firstChildTopMarginSet
@@ -126204,6 +126490,9 @@ LayoutOutput ComputeInner(TaffyTree* tree, NodeId nodeId,
     SizeF absoluteContentSize = PerformAbsoluteLayoutOnAbsoluteChildren(
         tree, items, absolutePositionArea, absolutePositionOffset, direction);
 
+    inflowContentSize.w +=
+        IsRtl(direction) ? resolvedPadding.left : resolvedPadding.right;
+    inflowContentSize.h += resolvedPadding.bottom;
     output.contentSize = Max(inflowContentSize, absoluteContentSize);
 
     int len = tree->ChildCount(nodeId);
@@ -126327,6 +126616,7 @@ struct FlexItem {
     SizeFOpt size = SizeFOptNone();
     SizeFOpt minSize = SizeFOptNone();
     SizeFOpt maxSize = SizeFOptNone();
+    Optf aspectRatio = None();
     AlignSelf alignSelf;
 
     PointOverflow overflow;
@@ -126496,13 +126786,12 @@ void GenerateAnonymousFlexItems(TaffyTree* tree, NodeId node,
                                   aspectRatio),
             boxSizingAdjustment);
         item.minSize = MaybeAdd(
-            MaybeApplyAspectRatio(
-                cs.minSize.MaybeResolve(c.nodeInnerSize, calc), aspectRatio),
+            cs.minSize.MaybeResolve(c.nodeInnerSize, calc),
             boxSizingAdjustment);
         item.maxSize = MaybeAdd(
-            MaybeApplyAspectRatio(
-                cs.maxSize.MaybeResolve(c.nodeInnerSize, calc), aspectRatio),
+            cs.maxSize.MaybeResolve(c.nodeInnerSize, calc),
             boxSizingAdjustment);
+        item.aspectRatio = aspectRatio;
 
         item.inset = cs.inset.MaybeResolveZip(c.nodeInnerSize, calc);
         item.margin = cs.margin.ResolveOrZero(c.nodeInnerSize.w, calc);
@@ -126510,7 +126799,9 @@ void GenerateAnonymousFlexItems(TaffyTree* tree, NodeId node,
                              cs.margin.top.IsAuto(), cs.margin.bottom.IsAuto()};
         item.padding = padding;
         item.border = border;
-        item.alignSelf = cs.alignSelf.UnwrapOr(c.alignItems);
+        item.alignSelf = ResolveSelfRelative(
+            cs.alignSelf.UnwrapOr(c.alignItems), cs.direction,
+            c.layoutDirection, c.isColumn);
         item.overflow = cs.overflow;
         item.scrollbarWidth = cs.scrollbarWidth;
         item.flexGrow = cs.flexGrow;
@@ -126557,10 +126848,14 @@ void DetermineFlexBaseSize(TaffyTree* tree, const AlgoConstants& c,
         SizeFOpt childParentSize = SizeFOptFromCross(dir, crossAxisParentSize);
 
         float crossAxisMarginSum = CrossAxisSum(c.margin, dir);
+        SizeFOpt transferredMinSize =
+            MaybeApplyAspectRatio(child.minSize, child.aspectRatio);
+        SizeFOpt transferredMaxSize =
+            MaybeApplyAspectRatio(child.maxSize, child.aspectRatio);
         Optf childMinCross =
-            MaybeAdd(Cross(child.minSize, dir), crossAxisMarginSum);
+            MaybeAdd(Cross(transferredMinSize, dir), crossAxisMarginSum);
         Optf childMaxCross =
-            MaybeAdd(Cross(child.maxSize, dir), crossAxisMarginSum);
+            MaybeAdd(Cross(transferredMaxSize, dir), crossAxisMarginSum);
 
         AvailableSpace crossAxisAvailableSpace;
         AvailableSpace crossIn = availableSpace.Cross(dir);
@@ -126586,6 +126881,10 @@ void DetermineFlexBaseSize(TaffyTree* tree, const AlgoConstants& c,
 
         SizeFOpt childKnownDimensions = child.size;
         SetMain(&childKnownDimensions, dir, None());
+        SetCross(&childKnownDimensions, dir,
+                 MaybeClamp(Cross(childKnownDimensions, dir),
+                            Cross(transferredMinSize, dir),
+                            Cross(transferredMaxSize, dir)));
         if (child.alignSelf.keyword == AlignItemsKeyword::Stretch &&
             !child.marginIsAuto.CrossStart(dir) &&
             !child.marginIsAuto.CrossEnd(dir) &&
@@ -126652,16 +126951,18 @@ void DetermineFlexBaseSize(TaffyTree* tree, const AlgoConstants& c,
 
             float clamped =
                 MaybeMin(MaybeMin(minContentMainSize, Main(child.size, dir)),
-                         Main(child.maxSize, dir));
+                         Main(transferredMaxSize, dir));
             child.resolvedMinimumMainSize =
                 MaybeMax(clamped, Main(paddingBorderAxesSums, dir));
         }
 
         float hypotheticalInnerMinMain = MaybeMax(
-            child.resolvedMinimumMainSize, Main(paddingBorderAxesSums, dir));
+            MaybeMax(child.resolvedMinimumMainSize,
+                     Main(transferredMinSize, dir)),
+            Main(paddingBorderAxesSums, dir));
         float hypotheticalInnerSize =
             MaybeClamp(child.flexBasis, Some(hypotheticalInnerMinMain),
-                       Main(child.maxSize, dir));
+                       Main(transferredMaxSize, dir));
         float hypotheticalOuterSize =
             hypotheticalInnerSize + MainAxisSum(child.margin, dir);
 
@@ -126856,15 +127157,12 @@ void DetermineContainerMainSize(TaffyTree* tree, SizeAvail availableSpace,
                             MainAxisSum(item.margin, dir);
 
                         if (c->isRow) {
-                            contentContribution = F32Max(
-                                MaybeClamp(contentMainSize, styleMin, styleMax),
-                                mainContentBoxInset);
+                            contentContribution =
+                                MaybeClamp(contentMainSize, styleMin, styleMax);
                         } else {
-                            contentContribution = F32Max(
-                                MaybeClamp(
-                                    F32Max(contentMainSize, item.flexBasis),
-                                    styleMin, styleMax),
-                                mainContentBoxInset);
+                            contentContribution = MaybeClamp(
+                                F32Max(contentMainSize, item.flexBasis),
+                                styleMin, styleMax);
                         }
                     }
 
@@ -127083,14 +127381,19 @@ void DetermineHypotheticalCrossSize(TaffyTree* tree, FlexLine* line,
         AvailableSpace childKnownMain =
             AvailableSpace::Definite(Main(c.containerSize, dir));
 
+        Optf transferredMinCross =
+            Cross(MaybeApplyAspectRatio(child.minSize, child.aspectRatio), dir);
+        Optf transferredMaxCross =
+            Cross(MaybeApplyAspectRatio(child.maxSize, child.aspectRatio), dir);
+
         Optf childCross = MaybeMax(
-            MaybeClamp(Cross(child.size, dir), Cross(child.minSize, dir),
-                       Cross(child.maxSize, dir)),
+            MaybeClamp(Cross(child.size, dir), transferredMinCross,
+                       transferredMaxCross),
             paddingBorderSum);
 
         AvailableSpace childAvailableCross = MaybeMax(
-            MaybeClamp(availableSpace.Cross(dir), Cross(child.minSize, dir),
-                       Cross(child.maxSize, dir)),
+            MaybeClamp(availableSpace.Cross(dir), transferredMinCross,
+                       transferredMaxCross),
             paddingBorderSum);
 
         float childInnerCross;
@@ -127105,8 +127408,8 @@ void DetermineHypotheticalCrossSize(TaffyTree* tree, FlexLine* line,
                 child.node, known, c.nodeInnerSize, avail,
                 SizingMode::ContentSize, CrossAxis(dir), LineBool::False());
             childInnerCross =
-                F32Max(MaybeClamp(measured, Cross(child.minSize, dir),
-                                  Cross(child.maxSize, dir)),
+                F32Max(MaybeClamp(measured, transferredMinCross,
+                                  transferredMaxCross),
                        paddingBorderSum);
         }
         float childOuterCross =
@@ -127156,8 +127459,11 @@ void CalculateChildrenBaseLines(TaffyTree* tree, SizeFOpt nodeSize,
             LayoutOutput out = tree->PerformChildLayout(
                 child.node, known, c.nodeInnerSize, avail,
                 SizingMode::ContentSize, LineBool::False());
-            child.baseline =
-                UnwrapOr(out.firstBaselines.y, out.size.h) + child.margin.top;
+            float baseline = UnwrapOr(out.firstBaselines.y, out.size.h);
+            if (IsScrollContainer(child.overflow.y)) {
+                baseline = F32Max(0.0f, F32Min(baseline, out.size.h));
+            }
+            child.baseline = baseline + child.margin.top;
         }
     }
 }
@@ -127347,7 +127653,9 @@ void DistributeRemainingFreeSpace(Vec<FlexLine>* lines,
 }
 
 float AlignFlexItemsAlongCrossAxis(const FlexItem& child, float freeSpace,
-                                   float maxBaseline, const AlgoConstants& c) {
+                                   float maxBaseline,
+                                   float maxBaselineToBottomDistance,
+                                   const AlgoConstants& c) {
     bool crossAxisShouldReverse =
         c.isColumn && c.layoutDirection == Direction::Rtl;
 
@@ -127370,6 +127678,12 @@ float AlignFlexItemsAlongCrossAxis(const FlexItem& child, float freeSpace,
             return freeSpace / 2.0f;
         case AlignItemsKeyword::Baseline: {
             if (c.isRow) {
+                if (c.isWrapReverse) {
+                    float lineCrossSize =
+                        freeSpace + Cross(child.outerTargetSize, c.dir);
+                    return lineCrossSize - maxBaselineToBottomDistance -
+                           child.baseline;
+                }
                 return maxBaseline - child.baseline;
             }
 
@@ -127390,8 +127704,16 @@ void ResolveCrossAxisAutoMargins(Vec<FlexLine>* lines, const AlgoConstants& c) {
         FlexLine& line = (*lines)[li];
         float lineCrossSize = line.crossSize;
         float maxBaseline = 0.0f;
+        float maxBaselineToBottomDistance = 0.0f;
         for (int i = 0; i < line.count; i++) {
             maxBaseline = F32Max(maxBaseline, line.items[i].baseline);
+            if (line.items[i].alignSelf.keyword ==
+                AlignItemsKeyword::Baseline) {
+                maxBaselineToBottomDistance = F32Max(
+                    maxBaselineToBottomDistance,
+                    Cross(line.items[i].outerTargetSize, c.dir) -
+                        line.items[i].baseline);
+            }
         }
 
         for (int i = 0; i < line.count; i++) {
@@ -127422,7 +127744,8 @@ void ResolveCrossAxisAutoMargins(Vec<FlexLine>* lines, const AlgoConstants& c) {
             } else {
 
                 child.offsetCross = AlignFlexItemsAlongCrossAxis(
-                    child, freeSpace, maxBaseline, c);
+                    child, freeSpace, maxBaseline,
+                    maxBaselineToBottomDistance, c);
             }
         }
     }
@@ -127526,6 +127849,9 @@ void CalculateFlexItem(TaffyTree* tree, FlexItem* item, float* totalOffsetMain,
                         CrossStart(item->margin, direction) + crossRelativeInset;
 
     float innerBaseline = UnwrapOr(layoutOutput.firstBaselines.y, size.h);
+    if (IsRow(direction) && IsScrollContainer(item->overflow.y)) {
+        innerBaseline = F32Max(0.0f, F32Min(innerBaseline, size.h));
+    }
     if (IsRow(direction)) {
         float baselineOffsetCross = totalOffsetCross + item->offsetCross +
                                     effectiveLineOffsetCross +
@@ -127653,7 +127979,9 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
         PointOverflow overflow = cs.overflow;
         float scrollbarWidth = cs.scrollbarWidth;
         Optf aspectRatio = cs.aspectRatio;
-        AlignSelf alignSelf = cs.alignSelf.UnwrapOr(c.alignItems);
+        AlignSelf alignSelf = ResolveSelfRelative(
+            cs.alignSelf.UnwrapOr(c.alignItems), cs.direction,
+            c.layoutDirection, c.isColumn);
         RectFOpt margin = cs.margin
                               .MaybeResolve(Some(insetRelativeSize.w), calc);
         RectF padding = cs.padding
@@ -127743,8 +128071,12 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
         int autoH =
             (IsSome(margin.top) ? 0 : 1) + (IsSome(margin.bottom) ? 0 : 1);
         SizeF autoMarginSize = {
-            autoW > 0 ? freeSpace.w / (float)autoW : 0.0f,
-            autoH > 0 ? freeSpace.h / (float)autoH : 0.0f};
+            autoW > 0 && IsSome(left) && IsSome(right)
+                ? freeSpace.w / (float)autoW
+                : 0.0f,
+            autoH > 0 && IsSome(top) && IsSome(bottom)
+                ? freeSpace.h / (float)autoH
+                : 0.0f};
         RectF resolvedMargin = {UnwrapOr(margin.left, autoMarginSize.w),
                                 UnwrapOr(margin.right, autoMarginSize.w),
                                 UnwrapOr(margin.top, autoMarginSize.h),
@@ -127791,12 +128123,17 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
                 Main(finalSize, c.dir) - MainEnd(resolvedMargin, c.dir);
             AlignContentKeyword jc =
                 c.justifyContent
-                    .UnwrapOr(AlignContent{AlignContentKeyword::Start})
+                    .UnwrapOr(AlignContent{AlignContentKeyword::FlexStart})
                     .Keyword();
             bool rev = mainAxisFlexStartReversed;
+            bool startPosition =
+                jc == AlignContentKeyword::Start
+                    ? !mainIsRtl
+                : jc == AlignContentKeyword::End ? mainIsRtl
+                                                 : true;
             switch (jc) {
                 case AlignContentKeyword::SpaceBetween:
-                    offsetMain = startPos;
+                    offsetMain = rev ? endPos : startPos;
                     break;
                 case AlignContentKeyword::Stretch:
                 case AlignContentKeyword::FlexStart:
@@ -127806,10 +128143,8 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
                     offsetMain = rev ? startPos : endPos;
                     break;
                 case AlignContentKeyword::Start:
-                    offsetMain = rev ? endPos : startPos;
-                    break;
                 case AlignContentKeyword::End:
-                    offsetMain = rev ? startPos : endPos;
+                    offsetMain = startPosition ? startPos : endPos;
                     break;
                 default:
                     offsetMain = (Main(c.containerSize, c.dir) +
@@ -127852,12 +128187,17 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
                            Cross(finalSize, c.dir) -
                            CrossEnd(resolvedMargin, c.dir);
             bool rev = crossAxisFlexStartReversed;
+            bool startPosition =
+                ck == AlignItemsKeyword::Start ||
+                        ck == AlignItemsKeyword::Baseline
+                    ? !crossIsRtl
+                : ck == AlignItemsKeyword::End ? crossIsRtl
+                                               : true;
             switch (ck) {
                 case AlignItemsKeyword::Start:
-                    offsetCross = rev ? endPos : startPos;
-                    break;
                 case AlignItemsKeyword::End:
-                    offsetCross = rev ? startPos : endPos;
+                case AlignItemsKeyword::Baseline:
+                    offsetCross = startPosition ? startPos : endPos;
                     break;
                 case AlignItemsKeyword::Center:
                     offsetCross = (Cross(c.containerSize, c.dir) +
@@ -128026,10 +128366,12 @@ LayoutOutput ComputePreliminary(TaffyTree* tree, NodeId node,
     }
 
     Optf firstVerticalBaseline = None();
-    if (flexLines.len > 0 && flexLines[0].count > 0) {
+    int firstLineIdx = constants.isWrapReverse ? flexLines.len - 1 : 0;
+    if (firstLineIdx >= 0 && flexLines[firstLineIdx].count > 0) {
+        FlexLine& firstLine = flexLines[firstLineIdx];
         const FlexItem* chosen = nullptr;
-        for (int i = 0; i < flexLines[0].count; i++) {
-            const FlexItem& item = flexLines[0].items[i];
+        for (int i = 0; i < firstLine.count; i++) {
+            const FlexItem& item = firstLine.items[i];
             if (constants.isColumn ||
                 item.alignSelf.keyword == AlignItemsKeyword::Baseline) {
                 chosen = &item;
@@ -128037,11 +128379,9 @@ LayoutOutput ComputePreliminary(TaffyTree* tree, NodeId node,
             }
         }
         if (!chosen) {
-            chosen = &flexLines[0].items[0];
+            chosen = &firstLine.items[0];
         }
-        float offsetVertical =
-            constants.isRow ? chosen->offsetCross : chosen->offsetMain;
-        firstVerticalBaseline = Some(offsetVertical + chosen->baseline);
+        firstVerticalBaseline = Some(chosen->baseline);
     }
 
     VecReset(flexItems);
@@ -128410,6 +128750,83 @@ struct CellOccupancyMatrix {
                                      sc.OzLineToNextTrack(secondarySpan.end));
     }
 
+    OptOriginZeroLine LineAreaCollisionJump(AbsoluteAxis primaryAxis,
+                                             LineOzl primarySpan,
+                                             LineOzl secondarySpan,
+                                             bool reversed) const {
+        const TrackCounts& pc = Counts(primaryAxis);
+        const TrackCounts& sc = Counts(OtherAxis(primaryAxis));
+        int primaryStart = pc.OzLineToNextTrack(primarySpan.start);
+        int primaryEnd = pc.OzLineToNextTrack(primarySpan.end);
+        int secondaryStart = sc.OzLineToNextTrack(secondarySpan.start);
+        int secondaryEnd = sc.OzLineToNextTrack(secondarySpan.end);
+        int primaryLen = pc.Len();
+        int secondaryLen = sc.Len();
+        primaryStart = primaryStart < 0 ? 0 : primaryStart;
+        primaryEnd = primaryEnd > primaryLen ? primaryLen : primaryEnd;
+        secondaryStart = secondaryStart < 0 ? 0 : secondaryStart;
+        secondaryEnd = secondaryEnd > secondaryLen ? secondaryLen
+                                                     : secondaryEnd;
+
+        bool found = false;
+        int best = 0;
+        for (int secondary = secondaryStart; secondary < secondaryEnd;
+             secondary++) {
+            for (int primary = primaryStart; primary < primaryEnd; primary++) {
+                int row = primaryAxis == AbsoluteAxis::Horizontal
+                              ? secondary
+                              : primary;
+                int col = primaryAxis == AbsoluteAxis::Horizontal
+                              ? primary
+                              : secondary;
+                if (Get(row, col) == CellOccupancyState::Unoccupied) {
+                    continue;
+                }
+
+                int extent = primary;
+                if (reversed) {
+                    while (extent > 0) {
+                        int r = primaryAxis == AbsoluteAxis::Horizontal
+                                    ? secondary
+                                    : extent - 1;
+                        int c = primaryAxis == AbsoluteAxis::Horizontal
+                                    ? extent - 1
+                                    : secondary;
+                        if (Get(r, c) == CellOccupancyState::Unoccupied) {
+                            break;
+                        }
+                        extent--;
+                    }
+                    best = !found || extent < best ? extent : best;
+                } else {
+                    while (extent + 1 < primaryLen) {
+                        int r = primaryAxis == AbsoluteAxis::Horizontal
+                                    ? secondary
+                                    : extent + 1;
+                        int c = primaryAxis == AbsoluteAxis::Horizontal
+                                    ? extent + 1
+                                    : secondary;
+                        if (Get(r, c) == CellOccupancyState::Unoccupied) {
+                            break;
+                        }
+                        extent++;
+                    }
+                    best = !found || extent > best ? extent : best;
+                }
+                found = true;
+            }
+        }
+        if (!found) {
+            return OptOriginZeroLine();
+        }
+        OriginZeroLine line = pc.TrackToPrevOzLine((uint16_t)best);
+        int32_t next = (int32_t)line.v + (reversed ? -1 : 1);
+        next = next < INT16_MIN ? INT16_MIN
+               : next > INT16_MAX ? INT16_MAX
+                                  : next;
+        return OptOriginZeroLine(OriginZeroLine{(int16_t)next});
+    }
+
     bool RowIsOccupied(int rowIndex) const {
         if (rowIndex < 0 || rowIndex >= nRows) {
             return false;
@@ -128635,7 +129052,7 @@ enum class NameSuffix : uint8_t {
 struct LineNameEntry {
     Str name;
     NameSuffix suffix = NameSuffix::None;
-    Vec<uint16_t> lines;
+    Vec<uint32_t> lines;
 };
 
 struct NamedLineResolver {
@@ -128659,7 +129076,7 @@ struct NamedLineResolver {
     }
 
     static void Upsert(Vec<LineNameEntry>* map, Str name, NameSuffix suffix,
-                       uint16_t value) {
+                       uint32_t value) {
         for (int i = 0; i < map->len; i++) {
             LineNameEntry& e = (*map)[i];
             if (e.suffix == suffix && base::StrEq(e.name, name)) {
@@ -128679,7 +129096,7 @@ struct NamedLineResolver {
         VecAppend(*map, e);
     }
 
-    static const Vec<uint16_t>* Find(const Vec<LineNameEntry>& map, Str name,
+    static const Vec<uint32_t>* Find(const Vec<LineNameEntry>& map, Str name,
                                      NameSuffix suffix) {
         for (int i = 0; i < map.len; i++) {
             const LineNameEntry& e = map[i];
@@ -128700,23 +129117,17 @@ struct NamedLineResolver {
         return ResolveLineNames(line, GridAreaAxis::Column);
     }
 
-    GridLine FindLineIndex(Str name, int16_t idx, GridAreaAxis axis,
+    GridLine FindLineIndex(Str name, int32_t idx, GridAreaAxis axis,
                            GridAreaEnd end, int filterFrom, int filterTo) const;
 };
 
 void NamedLineResolver::Init(const Style& style, uint16_t columnAutoRepetitions,
                              uint16_t rowAutoRepetitions) {
-    areas = style.gridTemplateAreas;
+    areas = style.gridTemplateAreas.areas;
+    areaColumnCount = style.gridTemplateAreas.columnCount;
+    areaRowCount = style.gridTemplateAreas.rowCount;
     for (int i = 0; i < areas.len; i++) {
         const GridTemplateArea& area = areas[i];
-        uint16_t colEnd = area.columnEnd > 1 ? area.columnEnd : 1;
-        uint16_t rowEnd = area.rowEnd > 1 ? area.rowEnd : 1;
-        if ((uint16_t)(colEnd - 1) > areaColumnCount) {
-            areaColumnCount = (uint16_t)(colEnd - 1);
-        }
-        if ((uint16_t)(rowEnd - 1) > areaRowCount) {
-            areaRowCount = (uint16_t)(rowEnd - 1);
-        }
         Upsert(&columnLines, area.name, NameSuffix::Start, area.columnStart);
         Upsert(&columnLines, area.name, NameSuffix::End, area.columnEnd);
         Upsert(&rowLines, area.name, NameSuffix::Start, area.rowStart);
@@ -128735,14 +129146,14 @@ void NamedLineResolver::Init(const Style& style, uint16_t columnAutoRepetitions,
                      rowAutoRepetitions, &rowLines}};
 
     for (const Axis& ax : axes) {
-        int currentLine = 0;
+        uint32_t currentLine = 0;
         int trackIdx = 0;
         for (int i = 0; i < ax.names.len; i++) {
             currentLine += 1;
             const LineNameSet& set = ax.names[i];
             for (int k = 0; k < set.names.len; k++) {
                 Upsert(ax.map, set.names[k], NameSuffix::None,
-                       (uint16_t)currentLine);
+                       currentLine);
             }
             if (trackIdx >= ax.tracks.len) {
                 continue;
@@ -128760,25 +129171,33 @@ void NamedLineResolver::Init(const Style& style, uint16_t columnAutoRepetitions,
                     const LineNameSet& ls = comp.repeat.lineNames[s];
                     for (int k = 0; k < ls.names.len; k++) {
                         Upsert(ax.map, ls.names[k], NameSuffix::None,
-                               (uint16_t)currentLine);
+                               currentLine);
                     }
                     currentLine += 1;
                 }
 
                 currentLine -= 1;
             }
-            currentLine -= 1;
+            if (repeatCount > 0) {
+                currentLine -= 1;
+            }
         }
     }
 
 }
 
-GridLine NamedLineResolver::FindLineIndex(Str name, int16_t idx,
+GridLine NamedLineResolver::FindLineIndex(Str name, int32_t idx,
                                           GridAreaAxis axis, GridAreaEnd end,
                                           int filterFrom, int filterTo) const {
-    int16_t explicitTrackCount = axis == GridAreaAxis::Row
-                                     ? (int16_t)explicitRowCount
-                                     : (int16_t)explicitColumnCount;
+    int32_t explicitTrackCount = axis == GridAreaAxis::Row
+                                     ? explicitRowCount
+                                     : explicitColumnCount;
+    auto gridLine = [](int64_t value) {
+        value = value < INT16_MIN ? INT16_MIN
+                : value > INT16_MAX ? INT16_MAX
+                                    : value;
+        return GridLine{(int16_t)value};
+    };
 
     if (idx == 0) {
         idx = 1;
@@ -128786,7 +129205,7 @@ GridLine NamedLineResolver::FindLineIndex(Str name, int16_t idx,
 
     const Vec<LineNameEntry>& lookup =
         axis == GridAreaAxis::Row ? rowLines : columnLines;
-    const Vec<uint16_t>* lines = Find(lookup, name, NameSuffix::None);
+    const Vec<uint32_t>* lines = Find(lookup, name, NameSuffix::None);
     if (!lines) {
         lines = Find(
             lookup, name,
@@ -128800,28 +129219,29 @@ GridLine NamedLineResolver::FindLineIndex(Str name, int16_t idx,
         if (count < 0) {
             count = 0;
         }
-        int16_t absIdx = idx < 0 ? (int16_t)-idx : idx;
-        if (absIdx <= (int16_t)count) {
+        uint32_t absIdx = idx < 0 ? (uint32_t)(-(int64_t)idx)
+                                  : (uint32_t)idx;
+        if (absIdx <= (uint32_t)count) {
             if (idx > 0) {
-                return GridLine{(int16_t)(*lines)[from + absIdx - 1]};
+                return gridLine((*lines)[from + (int)absIdx - 1]);
             }
-            return GridLine{(int16_t)(*lines)[from + count - absIdx]};
+            return gridLine((*lines)[from + count - (int)absIdx]);
         }
-        int16_t remaining =
-            (int16_t)((absIdx - (int16_t)count) * (idx > 0 ? 1 : -1));
+        int64_t remaining =
+            (int64_t)(absIdx - (uint32_t)count) * (idx > 0 ? 1 : -1);
         if (idx > 0) {
-            return GridLine{(int16_t)((explicitTrackCount + 1) + remaining)};
+            return gridLine((int64_t)explicitTrackCount + 1 + remaining);
         }
-        return GridLine{(int16_t)(-((explicitTrackCount + 1) + remaining))};
+        return gridLine(-((int64_t)explicitTrackCount + 1 + remaining));
     }
 
     if (idx > 0) {
-        return GridLine{(int16_t)((explicitTrackCount + 1) + idx)};
+        return gridLine((int64_t)explicitTrackCount + 1 + idx);
     }
-    return GridLine{(int16_t)(-((explicitTrackCount + 1) + idx))};
+    return gridLine(-((int64_t)explicitTrackCount + 1 + idx));
 }
 
-int PartitionPoint(const Vec<uint16_t>* lines, uint16_t bound, bool inclusive) {
+int PartitionPoint(const Vec<uint32_t>* lines, uint32_t bound, bool inclusive) {
     if (!lines) {
         return 0;
     }
@@ -128866,9 +129286,9 @@ LinePlain NamedLineResolver::ResolveLineNames(LinePlacement line,
                 ? start.line
                 : (int16_t)F32Max((float)(explicitTrackCount + 1 + start.line),
                                   0.0f);
-        const Vec<uint16_t>* lines = Find(lookup, end.name, NameSuffix::None);
-        int point = PartitionPoint(lines, (uint16_t)normalizedStart, true);
-        GridLine endLine = FindLineIndex(end.name, (int16_t)end.span, axis,
+        const Vec<uint32_t>* lines = Find(lookup, end.name, NameSuffix::None);
+        int point = PartitionPoint(lines, (uint32_t)normalizedStart, true);
+        GridLine endLine = FindLineIndex(end.name, (int32_t)end.span, axis,
                                          GridAreaEnd::End, point, -1);
         return {PlainPlacement::AtLine(start.line),
                 PlainPlacement::AtLine(endLine.v)};
@@ -128880,9 +129300,9 @@ LinePlain NamedLineResolver::ResolveLineNames(LinePlacement line,
                 ? end.line
                 : (int16_t)F32Max((float)(explicitTrackCount + 1 + end.line),
                                   0.0f);
-        const Vec<uint16_t>* lines = Find(lookup, start.name, NameSuffix::None);
-        int point = PartitionPoint(lines, (uint16_t)normalizedEnd, false);
-        GridLine startLine = FindLineIndex(start.name, (int16_t)start.span,
+        const Vec<uint32_t>* lines = Find(lookup, start.name, NameSuffix::None);
+        int point = PartitionPoint(lines, (uint32_t)normalizedEnd, false);
+        GridLine startLine = FindLineIndex(start.name, (int32_t)start.span,
                                            axis, GridAreaEnd::Start, 0, point);
         return {PlainPlacement::AtLine(startLine.v),
                 PlainPlacement::AtLine(end.line)};
@@ -129049,22 +129469,29 @@ ExplicitGridSize ComputeExplicitGridSizeInAxis(
         }
     }
 
-    uint16_t nonAutoRepeatingTrackCount = 0;
+    uint32_t nonAutoRepeatingTrackCount = 0;
     uint16_t autoRepetitionCount = 0;
     bool allTrackDefsHaveFixedComponent = true;
     for (int i = 0; i < templ.len; i++) {
         const GridTemplateComponent& c = templ[i];
         if (!c.isRepeat) {
-            nonAutoRepeatingTrackCount += 1;
+            nonAutoRepeatingTrackCount =
+                nonAutoRepeatingTrackCount < kMaxGridTracks
+                    ? nonAutoRepeatingTrackCount + 1
+                    : kMaxGridTracks;
             if (!c.single.HasFixedComponent()) {
                 allTrackDefsHaveFixedComponent = false;
             }
             continue;
         }
         if (!c.repeat.count.IsAuto()) {
+            uint64_t additional = (uint64_t)c.repeat.count.count *
+                                  (uint64_t)c.repeat.TrackCount();
             nonAutoRepeatingTrackCount =
-                (uint16_t)(nonAutoRepeatingTrackCount +
-                           c.repeat.count.count * c.repeat.TrackCount());
+                (uint64_t)nonAutoRepeatingTrackCount + additional >
+                        kMaxGridTracks
+                    ? kMaxGridTracks
+                    : nonAutoRepeatingTrackCount + (uint32_t)additional;
         } else {
             autoRepetitionCount += 1;
         }
@@ -129083,19 +129510,31 @@ ExplicitGridSize ComputeExplicitGridSizeInAxis(
     }
 
     if (autoRepetitionCount == 0) {
-        return {0, nonAutoRepeatingTrackCount};
+        return {0, (uint16_t)nonAutoRepeatingTrackCount};
     }
 
     const GridTemplateRepetition* repetition = nullptr;
+    uint32_t autoRepeatInsertionPoint = 0;
     for (int i = 0; i < templ.len; i++) {
         if (templ[i].isRepeat && templ[i].repeat.count.IsAuto()) {
             repetition = &templ[i].repeat;
             break;
         }
+        uint64_t additional = !templ[i].isRepeat
+                                  ? 1u
+                                  : (uint64_t)templ[i].repeat.count.count *
+                                        templ[i].repeat.TrackCount();
+        autoRepeatInsertionPoint =
+            (uint64_t)autoRepeatInsertionPoint + additional > UINT32_MAX
+                ? UINT32_MAX
+                : autoRepeatInsertionPoint + (uint32_t)additional;
     }
     uint16_t repetitionTrackCount = repetition->TrackCount();
+    if (repetitionTrackCount == 0) {
+        return {};
+    }
 
-    uint16_t numRepetitions = 1;
+    uint32_t numRepetitions = 1;
     if (IsSome(autoFitContainerSize)) {
         float innerContainerSize = autoFitContainerSize;
         Optf parentSize = Some(innerContainerSize);
@@ -129147,23 +129586,49 @@ ExplicitGridSize ComputeExplicitGridSizeInAxis(
                 (float)repetitionTrackCount * gapSize;
             float perRepetitionUsedSpace =
                 perRepetitionTrackUsedSpace + perRepetitionGapUsedSpace;
-            float numRepetitionThatFit =
-                (innerContainerSize -
-                 firstRepetitionAndNonRepeatingTracksUsedSpace) /
-                perRepetitionUsedSpace;
+            if (perRepetitionUsedSpace <= 0.0f) {
+                numRepetitions = UINT32_MAX;
+            } else {
+                float numRepetitionThatFit =
+                    (innerContainerSize -
+                     firstRepetitionAndNonRepeatingTracksUsedSpace) /
+                    perRepetitionUsedSpace;
 
-            numRepetitions =
-                autoFitStrategy ==
-                        AutoRepeatStrategy::MaxRepetitionsThatDoNotOverflow
-                    ? (uint16_t)((int)floorf(numRepetitionThatFit) + 1)
-                    : (uint16_t)((int)ceilf(numRepetitionThatFit) + 1);
+                float rounded =
+                    autoFitStrategy ==
+                            AutoRepeatStrategy::MaxRepetitionsThatDoNotOverflow
+                        ? floorf(numRepetitionThatFit)
+                        : ceilf(numRepetitionThatFit);
+
+                numRepetitions =
+                    !isfinite(rounded) || rounded >= 4294967040.0f
+                        ? UINT32_MAX
+                        : rounded < 0.0f ? 1u : (uint32_t)rounded + 1u;
+            }
         }
     }
 
-    uint16_t gridTemplateTrackCount =
-        (uint16_t)(nonAutoRepeatingTrackCount +
-                   repetitionTrackCount * numRepetitions);
-    return {numRepetitions, gridTemplateTrackCount};
+    uint32_t remainingTracks = autoRepeatInsertionPoint >= kMaxGridTracks
+                                   ? 0
+                                   : kMaxGridTracks - autoRepeatInsertionPoint;
+    if (remainingTracks == 0) {
+        numRepetitions = 0;
+    } else {
+        uint32_t maxRepetitions =
+            (remainingTracks + repetitionTrackCount - 1) /
+            repetitionTrackCount;
+        numRepetitions = numRepetitions < 1 ? 1 : numRepetitions;
+        numRepetitions = numRepetitions > maxRepetitions
+                             ? maxRepetitions
+                             : numRepetitions;
+    }
+    uint32_t gridTemplateTrackCount =
+        nonAutoRepeatingTrackCount +
+        (uint32_t)repetitionTrackCount * numRepetitions;
+    gridTemplateTrackCount = gridTemplateTrackCount > kMaxGridTracks
+                                 ? kMaxGridTracks
+                                 : gridTemplateTrackCount;
+    return {(uint16_t)numRepetitions, (uint16_t)gridTemplateTrackCount};
 }
 
 template <typename NextTrack>
@@ -129198,15 +129663,14 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
     VecAppend(*tracks, GridTrack::Gutter(gap));
 
     int autoTrackCount = autoTracks.len;
-    uint16_t nonAutoRepeatingTrackCount = 0;
+    uint64_t nonAutoRepeatingTrackCount = 0;
     for (int i = 0; i < trackTemplate.len; i++) {
         const GridTemplateComponent& c = trackTemplate[i];
         if (!c.isRepeat) {
             nonAutoRepeatingTrackCount += 1;
         } else if (!c.repeat.count.IsAuto()) {
-            nonAutoRepeatingTrackCount =
-                (uint16_t)(nonAutoRepeatingTrackCount +
-                           c.repeat.count.count * c.repeat.TrackCount());
+            nonAutoRepeatingTrackCount +=
+                (uint64_t)c.repeat.count.count * c.repeat.TrackCount();
         }
     }
 
@@ -129231,11 +129695,16 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
     }
 
     int currentTrackIndex = (int)counts.negativeImplicit;
+    int explicitTrackLimit =
+        (int)counts.negativeImplicit + (int)counts.explicitCount;
 
     if (counts.explicitCount > 0) {
         for (int i = 0; i < trackTemplate.len; i++) {
             const GridTemplateComponent& c = trackTemplate[i];
             if (!c.isRepeat) {
+                if (currentTrackIndex >= explicitTrackLimit) {
+                    continue;
+                }
                 VecAppend(*tracks,
                           GridTrack::New(c.single.MinSizingFunction(),
                                          c.single.MaxSizingFunction()));
@@ -129246,7 +129715,9 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
             if (!c.repeat.count.IsAuto()) {
                 int total = (int)c.repeat.TrackCount() * (int)c.repeat.count
                                                              .count;
-                for (int k = 0; k < total; k++) {
+                for (int k = 0;
+                     k < total && currentTrackIndex < explicitTrackLimit;
+                     k++) {
                     TrackSizingFunction f =
                         c.repeat.tracks[k % c.repeat.tracks.len];
                     VecAppend(*tracks, GridTrack::New(f.MinSizingFunction(),
@@ -129256,11 +129727,19 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
                 }
                 continue;
             }
+            uint64_t nonAutoCount = nonAutoRepeatingTrackCount > INT_MAX
+                                        ? INT_MAX
+                                        : nonAutoRepeatingTrackCount;
             int autoRepeatedTrackCount =
-                (int)counts.explicitCount - (int)nonAutoRepeatingTrackCount;
+                (int)counts.explicitCount - (int)nonAutoCount;
+            if (autoRepeatedTrackCount < 0) {
+                autoRepeatedTrackCount = 0;
+            }
             bool isAutoFit = c.repeat.count
                                  .kind == RepetitionCount::Kind::AutoFit;
-            for (int k = 0; k < autoRepeatedTrackCount; k++) {
+            for (int k = 0; k < autoRepeatedTrackCount &&
+                            currentTrackIndex < explicitTrackLimit;
+                 k++) {
                 TrackSizingFunction def = c.repeat
                                               .tracks[k % c.repeat.tracks.len];
                 GridTrack track = GridTrack::New(def.MinSizingFunction(),
@@ -129645,7 +130124,11 @@ bool AxisIsReversed(Direction direction, AbsoluteAxis axis) {
 }
 
 OriginZeroLine AdvancePosition(OriginZeroLine position, bool reversed) {
-    return OriginZeroLine{(int16_t)(position.v + (reversed ? -1 : 1))};
+    int32_t value = (int32_t)position.v + (reversed ? -1 : 1);
+    value = value < INT16_MIN ? INT16_MIN
+            : value > INT16_MAX ? INT16_MAX
+                                : value;
+    return OriginZeroLine{(int16_t)value};
 }
 
 OriginZeroLine SearchStartLine(OriginZeroLine gridStartLine,
@@ -129655,10 +130138,30 @@ OriginZeroLine SearchStartLine(OriginZeroLine gridStartLine,
 
 LineOzl ResolveIndefiniteGridSpan(OriginZeroLine position, uint16_t span,
                                   bool reversed) {
+    auto line = [](int32_t value) {
+        value = value < INT16_MIN ? INT16_MIN
+                : value > INT16_MAX ? INT16_MAX
+                                    : value;
+        return OriginZeroLine{(int16_t)value};
+    };
     if (reversed) {
-        return {(position - span) + (uint16_t)1, position + (uint16_t)1};
+        return {line((int32_t)position.v - span + 1),
+                line((int32_t)position.v + 1)};
     }
-    return {position, position + span};
+    return {position, line((int32_t)position.v + span)};
+}
+
+LineOzl ClampSpanToLimitedGrid(LineOzl span, int16_t minLine,
+                               int16_t maxLine) {
+    int32_t start = span.start.v;
+    start = start < minLine ? minLine
+            : start > (int32_t)maxLine - 1 ? (int32_t)maxLine - 1
+                                          : start;
+    int32_t end = span.end.v;
+    end = end < start + 1 ? start + 1
+          : end > maxLine ? maxLine
+                          : end;
+    return {OriginZeroLine{(int16_t)start}, OriginZeroLine{(int16_t)end}};
 }
 
 LineOzl MirrorHorizontalSpan(LineOzl span, uint16_t explicitColCount) {
@@ -129670,9 +130173,22 @@ LineOzl MirrorHorizontalSpan(LineOzl span, uint16_t explicitColCount) {
 LineOzl MaybeMirrorSpan(LineOzl span, AbsoluteAxis axis, Direction direction,
                         uint16_t explicitColCount) {
     if (axis == AbsoluteAxis::Horizontal && IsRtl(direction)) {
-        return MirrorHorizontalSpan(span, explicitColCount);
+        return MirrorHorizontalSpan(
+            ClampSpanToLimitedGrid(span, kMinOzLine, kMaxOzLine),
+            explicitColCount);
     }
     return span;
+}
+
+LineOzl ClampSpanForAxis(LineOzl span, AbsoluteAxis axis,
+                         Direction direction, uint16_t explicitColCount) {
+    if (axis == AbsoluteAxis::Horizontal && IsRtl(direction)) {
+        int16_t explicitEnd = (int16_t)explicitColCount;
+        return ClampSpanToLimitedGrid(
+            span, (int16_t)(explicitEnd - kMaxOzLine),
+            (int16_t)(explicitEnd - kMinOzLine));
+    }
+    return ClampSpanToLimitedGrid(span, kMinOzLine, kMaxOzLine);
 }
 
 struct PlacementChild {
@@ -129690,9 +130206,14 @@ void RecordGridPlacement(CellOccupancyMatrix* matrix, Vec<GridItem>* items,
                          TaffyTree* tree, NodeId node, int index,
                          AlignItems parentAlignItems,
                          AlignItems parentJustifyItems,
-                         AbsoluteAxis primaryAxis, LineOzl primarySpan,
+                         AbsoluteAxis primaryAxis, Direction direction,
+                         uint16_t explicitColCount, LineOzl primarySpan,
                          LineOzl secondarySpan,
                          CellOccupancyState placementType) {
+    primarySpan = ClampSpanForAxis(primarySpan, primaryAxis, direction,
+                                   explicitColCount);
+    secondarySpan = ClampSpanForAxis(
+        secondarySpan, OtherAxis(primaryAxis), direction, explicitColCount);
     matrix->MarkAreaAs(primaryAxis, primarySpan, secondarySpan, placementType);
 
     LineOzl colSpan =
@@ -129771,11 +130292,13 @@ SpanPair PlaceDefiniteSecondaryAxisItem(const CellOccupancyMatrix& matrix,
     while (true) {
         LineOzl primaryPlacement = ResolveIndefiniteGridSpan(
             position, primarySpanLen, primaryReversed);
-        if (matrix.LineAreaIsUnoccupied(primaryAxis, primaryPlacement,
-                                        secondaryPlacement)) {
+        OptOriginZeroLine collision = matrix.LineAreaCollisionJump(
+            primaryAxis, primaryPlacement, secondaryPlacement,
+            primaryReversed);
+        if (!collision.IsSome()) {
             return {primaryPlacement, secondaryPlacement};
         }
-        position = AdvancePosition(position, primaryReversed);
+        position = collision.val;
     }
 }
 
@@ -129830,11 +130353,13 @@ SpanPair PlaceIndefinitelyPositionedItem(const CellOccupancyMatrix& matrix,
         while (true) {
             LineOzl secondarySpan = ResolveIndefiniteGridSpan(
                 secondaryIdx, secondarySpanLen, secondaryReversed);
-            if (matrix.LineAreaIsUnoccupied(primaryAxis, primarySpan,
-                                            secondarySpan)) {
+            OptOriginZeroLine collision = matrix.LineAreaCollisionJump(
+                secondaryAxis, secondarySpan, primarySpan,
+                secondaryReversed);
+            if (!collision.IsSome()) {
                 return {primarySpan, secondarySpan};
             }
-            secondaryIdx = AdvancePosition(secondaryIdx, secondaryReversed);
+            secondaryIdx = collision.val;
         }
     }
 
@@ -129854,9 +130379,10 @@ SpanPair PlaceIndefinitelyPositionedItem(const CellOccupancyMatrix& matrix,
             primaryIdx = primaryStartPosition;
             continue;
         }
-        if (!matrix.LineAreaIsUnoccupied(primaryAxis, primarySpan,
-                                         secondarySpan)) {
-            primaryIdx = AdvancePosition(primaryIdx, primaryReversed);
+        OptOriginZeroLine collision = matrix.LineAreaCollisionJump(
+            primaryAxis, primarySpan, secondarySpan, primaryReversed);
+        if (collision.IsSome()) {
+            primaryIdx = collision.val;
             continue;
         }
         return {primarySpan, secondarySpan};
@@ -129882,7 +130408,8 @@ void PlaceGridItems(CellOccupancyMatrix* matrix, Vec<GridItem>* items,
         LineOzl secondarySpan = PlaceDefiniteGridItemAxis(
             c, secondaryAxis, direction, explicitColCount);
         RecordGridPlacement(matrix, items, tree, c.node, c.index, alignItems,
-                            justifyItems, primaryAxis, primarySpan,
+                            justifyItems, primaryAxis, direction,
+                            explicitColCount, primarySpan,
                             secondarySpan,
                             CellOccupancyState::DefinitelyPlaced);
     }
@@ -129896,7 +130423,8 @@ void PlaceGridItems(CellOccupancyMatrix* matrix, Vec<GridItem>* items,
         SpanPair spans = PlaceDefiniteSecondaryAxisItem(
             *matrix, c, gridAutoFlow, direction, explicitColCount);
         RecordGridPlacement(matrix, items, tree, c.node, c.index, alignItems,
-                            justifyItems, primaryAxis, spans.primary,
+                            justifyItems, primaryAxis, direction,
+                            explicitColCount, spans.primary,
                             spans.secondary, CellOccupancyState::AutoPlaced);
     }
 
@@ -129920,7 +130448,8 @@ void PlaceGridItems(CellOccupancyMatrix* matrix, Vec<GridItem>* items,
             *matrix, c, gridAutoFlow, posPrimary, posSecondary, direction,
             explicitColCount);
         RecordGridPlacement(matrix, items, tree, c.node, c.index, alignItems,
-                            justifyItems, primaryAxis, spans.primary,
+                            justifyItems, primaryAxis, direction,
+                            explicitColCount, spans.primary,
                             spans.secondary, CellOccupancyState::AutoPlaced);
 
         if (IsDense(gridAutoFlow)) {
@@ -130274,7 +130803,8 @@ float DistributeSpaceUpToLimits(float spaceToDistribute, GridTrack* tracks,
             if (trackAffectedProperty(t) + t.itemIncurredIncrease <
                     trackLimit(t) &&
                 trackIsAffected(t)) {
-                float v = (trackLimit(t) - trackAffectedProperty(t)) /
+                float v = (trackLimit(t) - trackAffectedProperty(t) -
+                           t.itemIncurredIncrease) /
                           trackDistributionProportion(t);
                 if (!haveMin || v < minIncreaseLimit) {
                     minIncreaseLimit = v;
@@ -130294,8 +130824,9 @@ float DistributeSpaceUpToLimits(float spaceToDistribute, GridTrack* tracks,
                 continue;
             }
             float increase = iterationIncrease * trackDistributionProportion(t);
-            if (increase > 0.0f && trackAffectedProperty(t) + increase <=
-                                       trackLimit(t) + kThreshold) {
+            if (increase > 0.0f &&
+                trackAffectedProperty(t) + t.itemIncurredIncrease + increase <=
+                    trackLimit(t) + kThreshold) {
                 t.itemIncurredIncrease += increase;
                 spaceToDistribute -= increase;
             }
@@ -130308,7 +130839,8 @@ template <typename Affected, typename Proportion, typename Limit>
 void DistributeItemSpaceToBaseSizeInner(
     float space, GridTrack* tracks, int n, Affected trackIsAffected,
     Proportion trackDistributionProportion, Limit trackLimit,
-    IntrinsicContributionType intrinsicContributionType) {
+    IntrinsicContributionType intrinsicContributionType,
+    Optf axisInnerNodeSize) {
     if (space == 0.0f) {
         return;
     }
@@ -130342,8 +130874,7 @@ void DistributeItemSpaceToBaseSizeInner(
             return t.maxTrackSizingFunction.IsIntrinsic();
         };
         auto maximumFilter = [](const GridTrack& t) {
-            return t.minTrackSizingFunction.IsMaxContent() ||
-                   t.maxTrackSizingFunction.IsMaxOrFitContent();
+            return t.maxTrackSizingFunction.IsMaxOrFitContent();
         };
         int count = 0;
         for (int i = 0; i < n; i++) {
@@ -130359,6 +130890,9 @@ void DistributeItemSpaceToBaseSizeInner(
 
         bool useAll = count == 0;
         auto filter = [&](const GridTrack& t) {
+            if (!trackIsAffected(t)) {
+                return false;
+            }
             if (useAll) {
                 return true;
             }
@@ -130369,7 +130903,10 @@ void DistributeItemSpaceToBaseSizeInner(
         };
         DistributeSpaceUpToLimits(extraSpace, tracks, n, filter,
                                   trackDistributionProportion, getBaseSize,
-                                  trackLimit);
+                                  [&](const GridTrack& t) {
+                                      return t.FitContentLimit(
+                                          axisInnerNodeSize);
+                                  });
     }
 
     for (int i = 0; i < n; i++) {
@@ -130383,28 +130920,38 @@ void DistributeItemSpaceToBaseSizeInner(
 
 template <typename Affected, typename Limit>
 void DistributeItemSpaceToBaseSize(
-    bool isFlex, bool useFlexFactorForDistribution, float space,
+    bool isFlex, bool, float space,
     GridTrack* tracks, int n, Affected trackIsAffected, Limit trackLimit,
-    IntrinsicContributionType intrinsicContributionType) {
+    IntrinsicContributionType intrinsicContributionType,
+    Optf axisInnerNodeSize) {
     auto one = [](const GridTrack&) { return 1.0f; };
     if (isFlex) {
         auto filter = [&](const GridTrack& t) {
             return t.IsFlexible() && trackIsAffected(t);
         };
-        if (useFlexFactorForDistribution) {
+        float flexFactorSum = 0.0f;
+        for (int i = 0; i < n; i++) {
+            if (filter(tracks[i])) {
+                flexFactorSum += tracks[i].FlexFactor();
+            }
+        }
+        if (flexFactorSum > 0.0f) {
             auto flexFactor = [](const GridTrack& t) { return t.FlexFactor(); };
             DistributeItemSpaceToBaseSizeInner(space, tracks, n, filter,
                                                flexFactor, trackLimit,
-                                               intrinsicContributionType);
+                                               intrinsicContributionType,
+                                               axisInnerNodeSize);
         } else {
             DistributeItemSpaceToBaseSizeInner(space, tracks, n, filter, one,
                                                trackLimit,
-                                               intrinsicContributionType);
+                                               intrinsicContributionType,
+                                               axisInnerNodeSize);
         }
         return;
     }
     DistributeItemSpaceToBaseSizeInner(space, tracks, n, trackIsAffected, one,
-                                       trackLimit, intrinsicContributionType);
+                                       trackLimit, intrinsicContributionType,
+                                       axisInnerNodeSize);
 }
 
 template <typename Affected>
@@ -130672,13 +131219,15 @@ void ResolveIntrinsicTrackSizes(TaffyTree* tree, AbstractAxis axis,
                             return t.FitContentLimitedGrowthLimit(
                                 axisInnerNodeSize);
                         },
-                        IntrinsicContributionType::Minimum);
+                        IntrinsicContributionType::Minimum,
+                        axisInnerNodeSize);
                 } else {
                     DistributeItemSpaceToBaseSize(
                         isFlex, useFlexFactorForDistribution, space,
                         axisTracks + from, count, hasIntrinsicMin,
                         [](const GridTrack& t) { return t.growthLimit; },
-                        IntrinsicContributionType::Minimum);
+                        IntrinsicContributionType::Minimum,
+                        axisInnerNodeSize);
                 }
             }
         }
@@ -130704,13 +131253,15 @@ void ResolveIntrinsicTrackSizes(TaffyTree* tree, AbstractAxis axis,
                             return t.FitContentLimitedGrowthLimit(
                                 axisInnerNodeSize);
                         },
-                        IntrinsicContributionType::Minimum);
+                        IntrinsicContributionType::Minimum,
+                        axisInnerNodeSize);
                 } else {
                     DistributeItemSpaceToBaseSize(
                         isFlex, useFlexFactorForDistribution, space,
                         axisTracks + from, count, hasMinOrMaxContentMin,
                         [](const GridTrack& t) { return t.growthLimit; },
-                        IntrinsicContributionType::Minimum);
+                        IntrinsicContributionType::Minimum,
+                        axisInnerNodeSize);
                 }
             }
         }
@@ -130750,7 +131301,8 @@ void ResolveIntrinsicTrackSizes(TaffyTree* tree, AbstractAxis axis,
                         isFlex, useFlexFactorForDistribution, space,
                         axisTracks + from, count, hasMaxContentMin,
                         [](const GridTrack&) { return INFINITY; },
-                        IntrinsicContributionType::Maximum);
+                        IntrinsicContributionType::Maximum,
+                        axisInnerNodeSize);
                 } else {
                     DistributeItemSpaceToBaseSize(
                         isFlex, useFlexFactorForDistribution, space,
@@ -130759,7 +131311,8 @@ void ResolveIntrinsicTrackSizes(TaffyTree* tree, AbstractAxis axis,
                             return t.FitContentLimitedGrowthLimit(
                                 axisInnerNodeSize);
                         },
-                        IntrinsicContributionType::Maximum);
+                        IntrinsicContributionType::Maximum,
+                        axisInnerNodeSize);
                 }
             }
             FlushPlannedBaseSizeIncreases(axisTracks, nAxisTracks);
@@ -130778,7 +131331,8 @@ void ResolveIntrinsicTrackSizes(TaffyTree* tree, AbstractAxis axis,
                     isFlex, useFlexFactorForDistribution, space,
                     axisTracks + from, count, hasMaxContentMinFn,
                     [](const GridTrack& t) { return t.growthLimit; },
-                    IntrinsicContributionType::Maximum);
+                    IntrinsicContributionType::Maximum,
+                    axisInnerNodeSize);
             }
         }
         FlushPlannedBaseSizeIncreases(axisTracks, nAxisTracks);
@@ -131110,7 +131664,12 @@ void AlignTracks(float gridContainerContentBoxSize, LineF padding, LineF border,
         trackAlignment = Reversed(trackAlignment);
     }
 
-    float totalOffset = origin;
+    float emptyGridOffset =
+        numTracks == 0
+            ? ComputeAlignmentOffset(freeSpace, numTracks, gap,
+                                     trackAlignment, layoutIsReversed, true)
+            : 0.0f;
+    float totalOffset = origin + emptyGridOffset;
     bool seenNonCollapsedTrack = false;
     for (int i = 0; i < n; i++) {
         GridTrack& track = tracks[i];
@@ -131226,7 +131785,9 @@ AlignedItem AlignAndPositionItem(TaffyTree* tree, NodeId node, uint32_t order,
                                  RectF gridArea,
                                  OptAlignItems containerJustifyItems,
                                  OptAlignItems containerAlignItems,
-                                 float baselineShim, Direction direction) {
+                                 float baselineShim, Direction direction,
+                                 float containerBorderBoxWidth,
+                                 RectF containerBorder) {
     CalcResolver calc = tree->calc;
     SizeF gridAreaSize = {gridArea.right - gridArea.left,
                           gridArea.bottom - gridArea.top};
@@ -131236,7 +131797,23 @@ AlignedItem AlignAndPositionItem(TaffyTree* tree, NodeId node, uint32_t order,
     float scrollbarWidth = style.scrollbarWidth;
     Optf aspectRatio = style.aspectRatio;
     OptAlignItems justifySelf = style.justifySelf;
+    if (justifySelf.IsSome()) {
+        justifySelf.val = ResolveSelfRelative(justifySelf.val, style.direction,
+                                              direction, true);
+    }
     OptAlignItems alignSelf = style.alignSelf;
+    if (alignSelf.IsSome()) {
+        alignSelf.val = ResolveSelfRelative(alignSelf.val, style.direction,
+                                            direction, false);
+    }
+    if (containerJustifyItems.IsSome()) {
+        containerJustifyItems.val = ResolveSelfRelative(
+            containerJustifyItems.val, style.direction, direction, true);
+    }
+    if (containerAlignItems.IsSome()) {
+        containerAlignItems.val = ResolveSelfRelative(
+            containerAlignItems.val, style.direction, direction, false);
+    }
     Position position = style.position;
 
     RectFOpt inset = style.inset
@@ -131357,7 +131934,12 @@ AlignedItem AlignAndPositionItem(TaffyTree* tree, NodeId node, uint32_t order,
     tree->SetUnroundedLayout(node, layout);
 
     SizeF contribution = ComputeContentSizeContribution(
-        {xr.start - gridArea.left, yr.start - gridArea.top}, finalSize,
+        {IsRtl(direction)
+             ? containerBorderBoxWidth - (xr.start + finalSize.w) -
+                   containerBorder.right
+             : xr.start - containerBorder.left,
+         yr.start - containerBorder.top},
+        finalSize,
         layoutOutput.contentSize, overflow);
     return {contribution, yr.start, finalSize.h};
 }
@@ -131503,6 +132085,8 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
     SizeFOpt innerNodeSize = {
         MaybeSub(outerNodeSize.w, contentBoxInset.HorizontalAxisSum()),
         MaybeSub(outerNodeSize.h, contentBoxInset.VerticalAxisSum())};
+    SizeFOpt innerMinSize = MaybeSub(minSize, contentBoxInset.SumAxes());
+    SizeFOpt innerMaxSize = MaybeSub(maxSize, contentBoxInset.SumAxes());
 
     if (runMode == RunMode::ComputeSize) {
         if (BothAxisDefined(outerNodeSize)) {
@@ -131548,6 +132132,12 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
     uint16_t explicitRowCount = rowSize.trackCount > nameResolver.areaRowCount
                                     ? rowSize.trackCount
                                     : nameResolver.areaRowCount;
+    explicitColCount = explicitColCount > kMaxGridTracks
+                           ? kMaxGridTracks
+                           : explicitColCount;
+    explicitRowCount = explicitRowCount > kMaxGridTracks
+                           ? kMaxGridTracks
+                           : explicitRowCount;
     nameResolver.explicitColumnCount = explicitColCount;
     nameResolver.explicitRowCount = explicitRowCount;
 
@@ -131633,8 +132223,8 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
     }
 
     TrackSizingAlgorithm(
-        tree, AbstractAxis::Inline, Get(minSize, AbstractAxis::Inline),
-        Get(maxSize, AbstractAxis::Inline), justifyContent, alignContent,
+        tree, AbstractAxis::Inline, Get(innerMinSize, AbstractAxis::Inline),
+        Get(innerMaxSize, AbstractAxis::Inline), justifyContent, alignContent,
         availableGridSpace, innerNodeSize, columns.els, columns.len, rows.els,
         rows.len, items.els, items.len,
         TrackSizeEstimate::MaxTrackSizingFunction, hasBaselineAlignedItem);
@@ -131651,8 +132241,8 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
     }
 
     TrackSizingAlgorithm(
-        tree, AbstractAxis::Block, Get(minSize, AbstractAxis::Block),
-        Get(maxSize, AbstractAxis::Block), alignContent, justifyContent,
+        tree, AbstractAxis::Block, Get(innerMinSize, AbstractAxis::Block),
+        Get(innerMaxSize, AbstractAxis::Block), alignContent, justifyContent,
         availableGridSpace, innerNodeSize, rows.els, rows.len, columns.els,
         columns.len, items.els, items.len, TrackSizeEstimate::BaseSize,
 
@@ -131771,8 +132361,9 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
     bool intrinsicRowContributionChanged = false;
     if (rerunColumnSizing) {
         TrackSizingAlgorithm(
-            tree, AbstractAxis::Inline, Get(minSize, AbstractAxis::Inline),
-            Get(maxSize, AbstractAxis::Inline), justifyContent, alignContent,
+            tree, AbstractAxis::Inline, Get(innerMinSize, AbstractAxis::Inline),
+            Get(innerMaxSize, AbstractAxis::Inline), justifyContent,
+            alignContent,
             availableGridSpace, innerNodeSize, columns.els, columns.len,
             rows.els, rows.len, items.els, items.len,
             TrackSizeEstimate::BaseSize, hasBaselineAlignedItem);
@@ -131817,8 +132408,10 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
 
         if (rerunRowSizing) {
             TrackSizingAlgorithm(
-                tree, AbstractAxis::Block, Get(minSize, AbstractAxis::Block),
-                Get(maxSize, AbstractAxis::Block), alignContent, justifyContent,
+                tree, AbstractAxis::Block,
+                Get(innerMinSize, AbstractAxis::Block),
+                Get(innerMaxSize, AbstractAxis::Block), alignContent,
+                justifyContent,
                 availableGridSpace, innerNodeSize, rows.els, rows.len,
                 columns.els, columns.len, items.els, items.len,
                 TrackSizeEstimate::BaseSize, false);
@@ -131877,6 +132470,7 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
                 rows.els, rows.len, alignContent, false);
 
     SizeF itemContentSizeContribution = SizeF::Zero();
+    SizeF absoluteContentSize = SizeF::Zero();
 
     StableSort(items.els, items.len, [](const GridItem& a, const GridItem& b) {
         return a.sourceOrder < b.sourceOrder;
@@ -131890,7 +132484,8 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
                           rows[(int)item.rowIndexes.end].offset};
         AlignedItem placed = AlignAndPositionItem(
             tree, item.node, (uint32_t)index, gridArea, justifyItems,
-            alignItems, item.baselineShim, direction);
+            alignItems, item.baselineShim, direction, containerBorderBox.w,
+            border);
         item.yPosition = placed.yPosition;
         item.height = placed.height;
         itemContentSizeContribution = Max(itemContentSizeContribution,
@@ -131954,31 +132549,51 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
             TryIntoTrackVecIndex(rowLines.end.val, finalRowCounts, &rowEndIdx);
         }
 
+        auto lineAsStartEdge = [](const Vec<GridTrack>& tracks, int index) {
+            return index + 1 < tracks.len ? tracks[index + 1].offset
+                                          : tracks[index].offset;
+        };
+        auto lineAsEndEdge = [](const Vec<GridTrack>& tracks, int index) {
+            if (index == 0) {
+                return tracks.len > 1 ? tracks[1].offset : tracks[0].offset;
+            }
+            return tracks[index].offset;
+        };
+
         RectF gridArea;
-        gridArea.top = rowStartIdx >= 0 ? rows[rowStartIdx].offset : border.top;
+        gridArea.top = rowStartIdx >= 0
+                           ? lineAsStartEdge(rows, rowStartIdx)
+                           : border.top;
         gridArea.bottom =
             rowEndIdx >= 0
-                ? rows[rowEndIdx].offset
+                ? lineAsEndEdge(rows, rowEndIdx)
                 : containerBorderBox.h - border.bottom - scrollbarGutter.y;
         gridArea
             .left = colStartIdx >= 0
-                        ? columns[colStartIdx].offset
+                        ? lineAsStartEdge(columns, colStartIdx)
                         : (IsRtl(direction) ? border.left + scrollbarGutter.x
                                             : border.left);
         gridArea.right =
             colEndIdx >= 0
-                ? columns[colEndIdx].offset
+                ? lineAsEndEdge(columns, colEndIdx)
                 : (IsRtl(direction) ? containerBorderBox.w - border.right
                                     : containerBorderBox.w - border.right -
                                           scrollbarGutter.x);
 
         AlignedItem placed =
             AlignAndPositionItem(tree, child, order, gridArea, justifyItems,
-                                 alignItems, 0.0f, direction);
-        itemContentSizeContribution = Max(itemContentSizeContribution,
-                                          placed.contentSizeContribution);
+                                 alignItems, 0.0f, direction,
+                                 containerBorderBox.w, border);
+        absoluteContentSize = Max(absoluteContentSize,
+                                  placed.contentSizeContribution);
         order += 1;
     }
+
+    itemContentSizeContribution.w +=
+        IsRtl(direction) ? padding.left : padding.right;
+    itemContentSizeContribution.h += padding.bottom;
+    SizeF finalContentSize =
+        Max(itemContentSizeContribution, absoluteContentSize);
 
     LayoutOutput out;
     if (items.len == 0) {
@@ -132004,7 +132619,7 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
         float gridContainerBaseline =
             chosen->yPosition + UnwrapOr(chosen->baseline, chosen->height);
         out = LayoutOutput::FromSizesAndBaselines(
-            containerBorderBox, itemContentSizeContribution,
+            containerBorderBox, finalContentSize,
             PointFOpt{None(), Some(gridContainerBaseline)});
     }
 
@@ -132472,8 +133087,10 @@ float ComputeAlignmentOffset(float freeSpace, int numItems, float gap,
             case AlignContentKeyword::SpaceBetween:
                 return 0.0f;
             case AlignContentKeyword::SpaceAround:
-                return freeSpace >= 0.0f ? (freeSpace / (float)numItems) / 2.0f
-                                         : freeSpace / 2.0f;
+                return freeSpace >= 0.0f
+                           ? (freeSpace / (float)(numItems > 0 ? numItems : 1)) /
+                                 2.0f
+                                          : freeSpace / 2.0f;
             case AlignContentKeyword::SpaceEvenly:
                 return freeSpace >= 0.0f ? freeSpace / (float)(numItems + 1)
                                          : freeSpace / 2.0f;
@@ -132618,15 +133235,17 @@ RectFOpt RectLpa::MaybeResolveZip(SizeFOpt context, CalcResolver calc) const {
 }
 
 OriginZeroLine IntoOriginZeroLine(GridLine line, uint16_t explicitTrackCount) {
-    int16_t explicitLineCount = (int16_t)(explicitTrackCount + 1);
+    int32_t explicitLineCount = (int32_t)explicitTrackCount + 1;
+    int32_t value = 0;
     if (line.v > 0) {
-        return OriginZeroLine{(int16_t)(line.v - 1)};
+        value = (int32_t)line.v - 1;
+    } else if (line.v < 0) {
+        value = (int32_t)line.v + explicitLineCount;
     }
-    if (line.v < 0) {
-        return OriginZeroLine{(int16_t)(line.v + explicitLineCount)};
-    }
-
-    return OriginZeroLine{0};
+    value = value < kMinOzLine ? kMinOzLine
+            : value > kMaxOzLine ? kMaxOzLine
+                                 : value;
+    return OriginZeroLine{(int16_t)value};
 }
 
 static PlainPlacement IntoOriginZeroIgnoringNamed(const GridPlacement& p,
@@ -132695,10 +133314,10 @@ LinePlain LinePlain::IntoOriginZero(uint16_t explicitTrackCount) const {
 
 uint16_t LinePlain::IndefiniteSpan() const {
     if (start.IsSpan()) {
-        return start.span;
+        return start.span < kMaxGridTracks ? start.span : kMaxGridTracks;
     }
     if (end.IsSpan()) {
-        return end.span;
+        return end.span < kMaxGridTracks ? end.span : kMaxGridTracks;
     }
 
     return 1;
@@ -132855,7 +133474,10 @@ bool operator==(const Style& a, const Style& b) {
            SameSlice(a.gridAutoColumns, b.gridAutoColumns) &&
            a.gridAutoFlow == b.gridAutoFlow &&
 
-           SameSlice(a.gridTemplateAreas, b.gridTemplateAreas) &&
+           SameSlice(a.gridTemplateAreas.areas, b.gridTemplateAreas.areas) &&
+           a.gridTemplateAreas.rowCount == b.gridTemplateAreas.rowCount &&
+           a.gridTemplateAreas.columnCount ==
+               b.gridTemplateAreas.columnCount &&
            SameSlice(a.gridTemplateColumnNames, b.gridTemplateColumnNames) &&
            SameSlice(a.gridTemplateRowNames, b.gridTemplateRowNames) &&
 
@@ -133315,6 +133937,8 @@ const char* TaffyTree::GetDebugLabel(NodeId node) const {
     switch (d->style.display) {
         case Display::Block:
             return "BLOCK";
+        case Display::FlowRoot:
+            return "FLOW-ROOT";
         case Display::Grid:
             return "GRID";
         default:
@@ -133392,6 +134016,9 @@ LayoutOutput TaffyTree::ComputeBlockChildLayout(NodeId node, LayoutInput inputs,
         switch (displayMode) {
             case Display::Block:
                 out = ComputeBlockLayout(this, node, inputs, blockCtx);
+                break;
+            case Display::FlowRoot:
+                out = ComputeBlockLayout(this, node, inputs, nullptr);
                 break;
             case Display::Grid:
                 out = ComputeGridLayout(this, node, inputs);
@@ -140142,25 +140769,46 @@ int TextLayoutRangeRects(TextLayout* tl, Str s, int u8a, int u8b, Bounds* out,
 #if GPUI_OS_WINDOWS
 
 #include <d3d11.h>
+#include <d3d12.h>
 #include <d3dcompiler.h>
 #include <dwrite.h>
 #include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <math.h>
 
 namespace gpui {
 
-bool PaintGpuOn() {
-    static int on = -1;
-    if (on < 0) {
+enum GpuApi : int {
+    kGpuUnknown = -1,
+    kGpuOff = 0,
+    kGpuD3d11 = 11,
+    kGpuD3d12 = 12,
+};
+
+static int PaintGpuApi() {
+    static int api = kGpuUnknown;
+    if (api == kGpuUnknown) {
         char buf[16] = {};
         DWORD n = GetEnvironmentVariableA("GPUI_PAINT", buf, sizeof(buf));
-        on = (n > 0 && n < sizeof(buf) && base::StrEqI(Str(buf), "gpu")) ? 1
-                                                                         : 0;
-        if (on) {
-            logf("paint: GPU backend (GPUI_PAINT=gpu)");
+        Str value = n > 0 && n < sizeof(buf) ? Str(buf) : Str{};
+        api = base::StrEqI(value, "gpu") || base::StrEqI(value, "d3d11")
+                  ? kGpuD3d11
+              : base::StrEqI(value, "d3d12") ? kGpuD3d12
+                                               : kGpuOff;
+        if (api != kGpuOff) {
+            logf("paint: GPU backend (D3D%d, GPUI_PAINT=%s)", api,
+                 value);
         }
     }
-    return on == 1;
+    return api;
+}
+
+bool PaintGpuOn() {
+    return PaintGpuApi() != kGpuOff;
+}
+
+bool PaintD3d12On() {
+    return PaintGpuApi() == kGpuD3d12;
 }
 
 int PaintGpuSamples() {
@@ -140462,11 +141110,91 @@ struct Gpu {
 
 static Gpu gGpu;
 
+constexpr int kD12FrameCount = 3;
+constexpr int kD12ImageSlots = 128;
+constexpr UINT64 kD12UploadBytes = 16ull * 1024 * 1024;
+
+struct D12Frame {
+    ID3D12CommandAllocator* allocator = nullptr;
+    ID3D12Resource* upload = nullptr;
+    uint8_t* mapped = nullptr;
+    UINT64 uploadAt = 0;
+    UINT64 fenceValue = 0;
+
+    Vec<ID3D12Resource*> textureUploads;
+};
+
+struct D12Pipelines {
+    int samples = 0;
+    ID3D12PipelineState* quad = nullptr;
+    ID3D12PipelineState* cover = nullptr;
+    ID3D12PipelineState* tri = nullptr;
+    ID3D12PipelineState* evenOdd = nullptr;
+    ID3D12PipelineState* nonZero = nullptr;
+};
+
+struct D12ImageSlot {
+    const Image* img = nullptr;
+    ID3D12Resource* tex = nullptr;
+    int descriptor = -1;
+};
+
+struct D12Gpu {
+    ID3D12Device* dev = nullptr;
+    ID3D12CommandQueue* queue = nullptr;
+    IDXGIFactory4* factory = nullptr;
+    ID3D12GraphicsCommandList* list = nullptr;
+    ID3D12RootSignature* root = nullptr;
+    ID3DBlob* vsQuad = nullptr;
+    ID3DBlob* psQuad = nullptr;
+    ID3DBlob* vsTri = nullptr;
+    ID3DBlob* psTri = nullptr;
+    ID3D12DescriptorHeap* srvHeap = nullptr;
+    UINT srvStep = 0;
+    ID3D12Fence* fence = nullptr;
+    HANDLE fenceEvent = nullptr;
+    UINT64 nextFence = 1;
+    ID3D12Resource* atlas = nullptr;
+    D3D12_RESOURCE_STATES atlasState = D3D12_RESOURCE_STATE_COPY_DEST;
+    D12Pipelines pipes[4] = {};
+    D12ImageSlot images[kD12ImageSlots] = {};
+    int imageCount = 0;
+    IDWriteFactory* dwrite = nullptr;
+    bool ready = false;
+};
+
+struct D12Target {
+    HWND hwnd = nullptr;
+    IDXGISwapChain3* swap = nullptr;
+    ID3D12DescriptorHeap* rtvHeap = nullptr;
+    ID3D12DescriptorHeap* dsvHeap = nullptr;
+    ID3D12Resource* back[kD12FrameCount] = {};
+    ID3D12Resource* msaa = nullptr;
+    ID3D12Resource* depth = nullptr;
+    ID3D12Resource* offTex = nullptr;
+    ID3D12Resource* readback = nullptr;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT readbackLayout = {};
+    UINT64 readbackBytes = 0;
+    D12Frame frames[kD12FrameCount];
+    int frameIx = 0;
+    bool offscreen = false;
+    bool clearStencil = true;
+    int pxW = 0;
+    int pxH = 0;
+    int samples = 1;
+};
+
+static D12Gpu gD12;
+
 struct Batch {
     Vec<Inst> insts;
     Vec<TriVert> tris;
     ID3D11ShaderResourceView* image = nullptr;
-    GpuTarget* target = nullptr;
+    int image12 = -1;
+    void* target = nullptr;
+    int pxW = 0;
+    int pxH = 0;
+    bool offscreen = false;
 
     Vec<float> clipStack;
     float clip[4] = {0, 0, 1e6f, 1e6f};
@@ -140501,6 +141229,374 @@ static bool CompileShader(const char* entry, const char* target,
     if (err) {
         err->Release();
     }
+    return true;
+}
+
+static D3D12_HEAP_PROPERTIES D12Heap(D3D12_HEAP_TYPE type) {
+    D3D12_HEAP_PROPERTIES h = {};
+    h.Type = type;
+    h.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    h.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    h.CreationNodeMask = 1;
+    h.VisibleNodeMask = 1;
+    return h;
+}
+
+static D3D12_RESOURCE_DESC D12Buffer(UINT64 bytes) {
+    D3D12_RESOURCE_DESC d = {};
+    d.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    d.Width = bytes;
+    d.Height = 1;
+    d.DepthOrArraySize = 1;
+    d.MipLevels = 1;
+    d.Format = DXGI_FORMAT_UNKNOWN;
+    d.SampleDesc.Count = 1;
+    d.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    return d;
+}
+
+static D3D12_RESOURCE_DESC D12Texture(int w, int h, DXGI_FORMAT format,
+                                     int samples,
+                                     D3D12_RESOURCE_FLAGS flags) {
+    D3D12_RESOURCE_DESC d = {};
+    d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    d.Width = (UINT64)w;
+    d.Height = (UINT)h;
+    d.DepthOrArraySize = 1;
+    d.MipLevels = 1;
+    d.Format = format;
+    d.SampleDesc.Count = (UINT)samples;
+    d.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    d.Flags = flags;
+    return d;
+}
+
+static void D12Barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* r,
+                       D3D12_RESOURCE_STATES before,
+                       D3D12_RESOURCE_STATES after) {
+    if (!list || !r || before == after) {
+        return;
+    }
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = r;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = before;
+    b.Transition.StateAfter = after;
+    list->ResourceBarrier(1, &b);
+}
+
+static D3D12_CPU_DESCRIPTOR_HANDLE D12SrvCpu(int ix) {
+    D3D12_CPU_DESCRIPTOR_HANDLE h = gD12.srvHeap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += (SIZE_T)ix * gD12.srvStep;
+    return h;
+}
+
+static D3D12_GPU_DESCRIPTOR_HANDLE D12SrvGpu(int ix) {
+    D3D12_GPU_DESCRIPTOR_HANDLE h = gD12.srvHeap->GetGPUDescriptorHandleForHeapStart();
+    h.ptr += (UINT64)ix * gD12.srvStep;
+    return h;
+}
+
+static int D12PipeIx(int samples) {
+    return samples == 2 ? 1 : samples == 4 ? 2 : samples == 8 ? 3 : 0;
+}
+
+static D3D12_BLEND_DESC D12Blend() {
+    D3D12_BLEND_DESC b = {};
+    b.RenderTarget[0].BlendEnable = TRUE;
+    b.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
+    b.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    b.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    b.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    b.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    b.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    b.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    return b;
+}
+
+static D3D12_RASTERIZER_DESC D12Raster(int samples) {
+    D3D12_RASTERIZER_DESC r = {};
+    r.FillMode = D3D12_FILL_MODE_SOLID;
+    r.CullMode = D3D12_CULL_MODE_NONE;
+    r.DepthClipEnable = TRUE;
+    r.MultisampleEnable = samples > 1;
+    return r;
+}
+
+static D3D12_DEPTH_STENCIL_DESC D12DepthOff() {
+    D3D12_DEPTH_STENCIL_DESC d = {};
+    d.DepthEnable = FALSE;
+    d.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    d.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    d.StencilEnable = FALSE;
+    d.StencilReadMask = 0xff;
+    d.StencilWriteMask = 0xff;
+    return d;
+}
+
+static D3D12_DEPTH_STENCILOP_DESC D12StencilOp(D3D12_STENCIL_OP pass,
+                                               D3D12_COMPARISON_FUNC func) {
+    D3D12_DEPTH_STENCILOP_DESC o = {};
+    o.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    o.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+    o.StencilPassOp = pass;
+    o.StencilFunc = func;
+    return o;
+}
+
+static bool D12MakePipelines(int samples) {
+    D12Gpu* g = &gD12;
+    D12Pipelines* p = &g->pipes[D12PipeIx(samples)];
+    if (p->quad) {
+        return true;
+    }
+    p->samples = samples;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d = {};
+    d.pRootSignature = g->root;
+    d.VS = {g->vsQuad->GetBufferPointer(), g->vsQuad->GetBufferSize()};
+    d.PS = {g->psQuad->GetBufferPointer(), g->psQuad->GetBufferSize()};
+    d.BlendState = D12Blend();
+    d.SampleMask = UINT_MAX;
+    d.RasterizerState = D12Raster(samples);
+    d.DepthStencilState = D12DepthOff();
+    d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    d.NumRenderTargets = 1;
+    d.RTVFormats[0] = DXGI_FORMAT_B8G8R8A8_UNORM;
+    d.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    d.SampleDesc.Count = (UINT)samples;
+    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
+                                                    (void**)&p->quad))) {
+        return false;
+    }
+
+    D3D12_DEPTH_STENCIL_DESC cover = D12DepthOff();
+    cover.StencilEnable = TRUE;
+    cover.FrontFace = D12StencilOp(D3D12_STENCIL_OP_ZERO,
+                                   D3D12_COMPARISON_FUNC_NOT_EQUAL);
+    cover.BackFace = cover.FrontFace;
+    d.DepthStencilState = cover;
+    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
+                                                    (void**)&p->cover))) {
+        return false;
+    }
+
+    D3D12_INPUT_ELEMENT_DESC input[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 8,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+    };
+    d.InputLayout = {input, 3};
+    d.VS = {g->vsTri->GetBufferPointer(), g->vsTri->GetBufferSize()};
+    d.PS = {g->psTri->GetBufferPointer(), g->psTri->GetBufferSize()};
+    d.DepthStencilState = D12DepthOff();
+    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
+                                                    (void**)&p->tri))) {
+        return false;
+    }
+
+    d.PS = {};
+    d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+    D3D12_DEPTH_STENCIL_DESC stencil = D12DepthOff();
+    stencil.StencilEnable = TRUE;
+    stencil.FrontFace = D12StencilOp(D3D12_STENCIL_OP_INVERT,
+                                     D3D12_COMPARISON_FUNC_ALWAYS);
+    stencil.BackFace = stencil.FrontFace;
+    d.DepthStencilState = stencil;
+    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
+                                                    (void**)&p->evenOdd))) {
+        return false;
+    }
+    stencil.FrontFace = D12StencilOp(D3D12_STENCIL_OP_INCR,
+                                     D3D12_COMPARISON_FUNC_ALWAYS);
+    stencil.BackFace = D12StencilOp(D3D12_STENCIL_OP_DECR,
+                                    D3D12_COMPARISON_FUNC_ALWAYS);
+    d.DepthStencilState = stencil;
+    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
+                                                    (void**)&p->nonZero))) {
+        return false;
+    }
+    return true;
+}
+
+static bool D12EnsureGpu(PaintApp* pa) {
+    D12Gpu* g = &gD12;
+    if (g->ready) {
+        return true;
+    }
+    if (!pa) {
+        return false;
+    }
+    IDXGIFactory4* factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&factory))) {
+        return false;
+    }
+    IDXGIAdapter1* chosen = nullptr;
+    for (UINT i = 0;; i++) {
+        IDXGIAdapter1* adapter = nullptr;
+        if (factory->EnumAdapters1(i, &adapter) == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+        DXGI_ADAPTER_DESC1 desc = {};
+        adapter->GetDesc1(&desc);
+        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+            SUCCEEDED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0,
+                                        __uuidof(ID3D12Device), nullptr))) {
+            chosen = adapter;
+            break;
+        }
+        adapter->Release();
+    }
+    HRESULT hr = chosen
+                     ? D3D12CreateDevice(chosen, D3D_FEATURE_LEVEL_11_0,
+                                         __uuidof(ID3D12Device),
+                                         (void**)&g->dev)
+                     : E_FAIL;
+    if (chosen) {
+        chosen->Release();
+    }
+    if (FAILED(hr)) {
+        IDXGIAdapter* warp = nullptr;
+        if (SUCCEEDED(factory->EnumWarpAdapter(__uuidof(IDXGIAdapter),
+                                               (void**)&warp))) {
+            hr = D3D12CreateDevice(warp, D3D_FEATURE_LEVEL_11_0,
+                                   __uuidof(ID3D12Device), (void**)&g->dev);
+            warp->Release();
+        }
+    }
+    if (FAILED(hr) || !g->dev) {
+        factory->Release();
+        logf("paint/d3d12: D3D12CreateDevice failed %08x", (unsigned)hr);
+        return false;
+    }
+    g->factory = factory;
+    D3D12_COMMAND_QUEUE_DESC qd = {};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    if (FAILED(g->dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue),
+                                           (void**)&g->queue))) {
+        return false;
+    }
+    ID3D12CommandAllocator* bootstrap = nullptr;
+    if (FAILED(g->dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                               __uuidof(ID3D12CommandAllocator),
+                                               (void**)&bootstrap)) ||
+        FAILED(g->dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                         bootstrap, nullptr,
+                                         __uuidof(ID3D12GraphicsCommandList),
+                                         (void**)&g->list))) {
+        gpui_paintgpu_win_Rel(&bootstrap);
+        return false;
+    }
+    g->list->Close();
+    bootstrap->Release();
+
+    D3D12_DESCRIPTOR_HEAP_DESC hd = {};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.NumDescriptors = 1 + kD12ImageSlots;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    if (FAILED(g->dev->CreateDescriptorHeap(&hd, __uuidof(ID3D12DescriptorHeap),
+                                             (void**)&g->srvHeap))) {
+        return false;
+    }
+    g->srvStep = g->dev->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
+    for (int i = 0; i < 2; i++) {
+        ranges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        ranges[i].NumDescriptors = 1;
+        ranges[i].BaseShaderRegister = (UINT)(i + 1);
+        ranges[i].OffsetInDescriptorsFromTableStart = 0;
+    }
+    D3D12_ROOT_PARAMETER rp[4] = {};
+    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rp[0].Constants.ShaderRegister = 0;
+    rp[0].Constants.Num32BitValues = 4;
+    rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rp[1].Descriptor.ShaderRegister = 0;
+    rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    for (int i = 0; i < 2; i++) {
+        rp[i + 2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[i + 2].DescriptorTable.NumDescriptorRanges = 1;
+        rp[i + 2].DescriptorTable.pDescriptorRanges = &ranges[i];
+        rp[i + 2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+    D3D12_STATIC_SAMPLER_DESC samp = {};
+    samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samp.MaxLOD = D3D12_FLOAT32_MAX;
+    samp.ShaderRegister = 0;
+    samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_SIGNATURE_DESC rsd = {};
+    rsd.NumParameters = 4;
+    rsd.pParameters = rp;
+    rsd.NumStaticSamplers = 1;
+    rsd.pStaticSamplers = &samp;
+    rsd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+    ID3DBlob* sig = nullptr;
+    ID3DBlob* err = nullptr;
+    hr = D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &sig,
+                                     &err);
+    if (FAILED(hr)) {
+        if (err) {
+            logf("paint/d3d12: root signature failed: %s",
+                 Str((const char*)err->GetBufferPointer()));
+            err->Release();
+        }
+        return false;
+    }
+    hr = g->dev->CreateRootSignature(0, sig->GetBufferPointer(),
+                                     sig->GetBufferSize(),
+                                     __uuidof(ID3D12RootSignature),
+                                     (void**)&g->root);
+    sig->Release();
+    if (err) {
+        err->Release();
+    }
+    if (FAILED(hr)) {
+        return false;
+    }
+    if (!CompileShader("VSQuad", "vs_5_0", &g->vsQuad) ||
+        !CompileShader("PSQuad", "ps_5_0", &g->psQuad) ||
+        !CompileShader("VSTri", "vs_5_0", &g->vsTri) ||
+        !CompileShader("PSTri", "ps_5_0", &g->psTri)) {
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC atlas = D12Texture(
+        kAtlasDim, kAtlasDim, DXGI_FORMAT_R8_UNORM, 1,
+        D3D12_RESOURCE_FLAG_NONE);
+    if (FAILED(g->dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &atlas,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+            (void**)&g->atlas))) {
+        return false;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Format = DXGI_FORMAT_R8_UNORM;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Texture2D.MipLevels = 1;
+    g->dev->CreateShaderResourceView(g->atlas, &sv, D12SrvCpu(0));
+    if (FAILED(g->dev->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                    __uuidof(ID3D12Fence),
+                                    (void**)&g->fence))) {
+        return false;
+    }
+    g->fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!g->fenceEvent) {
+        return false;
+    }
+    g->dwrite = (IDWriteFactory*)PaintSharedDwrite(pa);
+    gGpu.dwrite = g->dwrite;
+    g->ready = true;
     return true;
 }
 
@@ -140586,6 +141682,9 @@ static bool MakeStencilStates(Gpu* g) {
 }
 
 static bool EnsureGpu(PaintApp* pa) {
+    if (PaintD3d12On()) {
+        return D12EnsureGpu(pa);
+    }
     Gpu* g = &gGpu;
     if (g->ready) {
         return true;
@@ -140757,7 +141856,456 @@ static bool EnsureTriBuf(Gpu* g, int n) {
     return true;
 }
 
-static GpuTarget* T(PaintCtx* ctx) {
+static void D12Wait(UINT64 value) {
+    if (!value || gD12.fence->GetCompletedValue() >= value) {
+        return;
+    }
+    if (SUCCEEDED(gD12.fence->SetEventOnCompletion(value, gD12.fenceEvent))) {
+        WaitForSingleObject(gD12.fenceEvent, INFINITE);
+    }
+}
+
+static void D12WaitTarget(D12Target* t) {
+    if (!t) {
+        return;
+    }
+    for (int i = 0; i < kD12FrameCount; i++) {
+        D12Wait(t->frames[i].fenceValue);
+        t->frames[i].fenceValue = 0;
+    }
+}
+
+static bool D12MakeFrames(D12Target* t) {
+    D3D12_HEAP_PROPERTIES uploadHeap = D12Heap(D3D12_HEAP_TYPE_UPLOAD);
+    D3D12_RESOURCE_DESC upload = D12Buffer(kD12UploadBytes);
+    for (int i = 0; i < kD12FrameCount; i++) {
+        D12Frame* f = &t->frames[i];
+        if (FAILED(gD12.dev->CreateCommandAllocator(
+                D3D12_COMMAND_LIST_TYPE_DIRECT,
+                __uuidof(ID3D12CommandAllocator), (void**)&f->allocator)) ||
+            FAILED(gD12.dev->CreateCommittedResource(
+                &uploadHeap, D3D12_HEAP_FLAG_NONE, &upload,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                __uuidof(ID3D12Resource), (void**)&f->upload)) ||
+            FAILED(f->upload->Map(0, nullptr, (void**)&f->mapped))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void D12FreeSurfaces(D12Target* t) {
+    if (!t) {
+        return;
+    }
+    D12WaitTarget(t);
+    for (int i = 0; i < kD12FrameCount; i++) {
+        gpui_paintgpu_win_Rel(&t->back[i]);
+    }
+    gpui_paintgpu_win_Rel(&t->msaa);
+    gpui_paintgpu_win_Rel(&t->depth);
+    gpui_paintgpu_win_Rel(&t->offTex);
+    gpui_paintgpu_win_Rel(&t->readback);
+    gpui_paintgpu_win_Rel(&t->rtvHeap);
+    gpui_paintgpu_win_Rel(&t->dsvHeap);
+}
+
+static void D12FreeTarget(D12Target* t) {
+    if (!t) {
+        return;
+    }
+    D12FreeSurfaces(t);
+    for (int i = 0; i < kD12FrameCount; i++) {
+        if (t->frames[i].upload && t->frames[i].mapped) {
+            t->frames[i].upload->Unmap(0, nullptr);
+        }
+        for (ID3D12Resource* upload : t->frames[i].textureUploads) {
+            gpui_paintgpu_win_Rel(&upload);
+        }
+        gpui_paintgpu_win_Rel(&t->frames[i].upload);
+        gpui_paintgpu_win_Rel(&t->frames[i].allocator);
+    }
+    gpui_paintgpu_win_Rel(&t->swap);
+    delete t;
+}
+
+static D3D12_CPU_DESCRIPTOR_HANDLE D12Rtv(D12Target* t, int ix) {
+    D3D12_CPU_DESCRIPTOR_HANDLE h =
+        t->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += (SIZE_T)ix * gD12.dev->GetDescriptorHandleIncrementSize(
+                              D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    return h;
+}
+
+static D3D12_CPU_DESCRIPTOR_HANDLE D12Dsv(D12Target* t) {
+    return t->dsvHeap->GetCPUDescriptorHandleForHeapStart();
+}
+
+static bool D12MakeSurfaceHeaps(D12Target* t) {
+    D3D12_DESCRIPTOR_HEAP_DESC hd = {};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    hd.NumDescriptors = 4;
+    if (FAILED(gD12.dev->CreateDescriptorHeap(
+            &hd, __uuidof(ID3D12DescriptorHeap), (void**)&t->rtvHeap))) {
+        return false;
+    }
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    hd.NumDescriptors = 1;
+    return SUCCEEDED(gD12.dev->CreateDescriptorHeap(
+        &hd, __uuidof(ID3D12DescriptorHeap), (void**)&t->dsvHeap));
+}
+
+static int D12SupportedSamples(int wanted) {
+    int n = wanted;
+    while (n > 1) {
+        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS q = {};
+        q.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        q.SampleCount = (UINT)n;
+        if (SUCCEEDED(gD12.dev->CheckFeatureSupport(
+                D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &q, sizeof(q))) &&
+            q.NumQualityLevels > 0) {
+            return n;
+        }
+        n /= 2;
+    }
+    return 1;
+}
+
+static bool D12MakeWindowSurfaces(D12Target* t) {
+    if (!D12MakeSurfaceHeaps(t)) {
+        return false;
+    }
+    for (int i = 0; i < kD12FrameCount; i++) {
+        if (FAILED(t->swap->GetBuffer((UINT)i, __uuidof(ID3D12Resource),
+                                      (void**)&t->back[i]))) {
+            return false;
+        }
+        gD12.dev->CreateRenderTargetView(t->back[i], nullptr, D12Rtv(t, i));
+    }
+    t->samples = D12SupportedSamples(t->samples);
+    D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
+    if (t->samples > 1) {
+        D3D12_RESOURCE_DESC color = D12Texture(
+            t->pxW, t->pxH, DXGI_FORMAT_B8G8R8A8_UNORM, t->samples,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        D3D12_CLEAR_VALUE cv = {};
+        cv.Format = color.Format;
+        if (FAILED(gD12.dev->CreateCommittedResource(
+                &heap, D3D12_HEAP_FLAG_NONE, &color,
+                D3D12_RESOURCE_STATE_RENDER_TARGET, &cv,
+                __uuidof(ID3D12Resource), (void**)&t->msaa))) {
+            return false;
+        }
+        D3D12_RENDER_TARGET_VIEW_DESC rv = {};
+        rv.Format = color.Format;
+        rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMS;
+        gD12.dev->CreateRenderTargetView(t->msaa, &rv, D12Rtv(t, 3));
+    }
+    D3D12_RESOURCE_DESC depth = D12Texture(
+        t->pxW, t->pxH, DXGI_FORMAT_D24_UNORM_S8_UINT, t->samples,
+        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    D3D12_CLEAR_VALUE dv = {};
+    dv.Format = depth.Format;
+    dv.DepthStencil.Depth = 1.f;
+    if (FAILED(gD12.dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &depth,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE, &dv,
+            __uuidof(ID3D12Resource), (void**)&t->depth))) {
+        return false;
+    }
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
+    dsv.Format = depth.Format;
+    dsv.ViewDimension = t->samples > 1 ? D3D12_DSV_DIMENSION_TEXTURE2DMS
+                                       : D3D12_DSV_DIMENSION_TEXTURE2D;
+    gD12.dev->CreateDepthStencilView(t->depth, &dsv, D12Dsv(t));
+    t->clearStencil = true;
+    return D12MakePipelines(t->samples);
+}
+
+static bool D12MakeOffscreenSurfaces(D12Target* t) {
+    if (!D12MakeSurfaceHeaps(t)) {
+        return false;
+    }
+    D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC color = D12Texture(
+        t->pxW, t->pxH, DXGI_FORMAT_B8G8R8A8_UNORM, 1,
+        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    D3D12_CLEAR_VALUE cv = {};
+    cv.Format = color.Format;
+    if (FAILED(gD12.dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &color,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &cv,
+            __uuidof(ID3D12Resource), (void**)&t->offTex))) {
+        return false;
+    }
+    gD12.dev->CreateRenderTargetView(t->offTex, nullptr, D12Rtv(t, 3));
+    UINT rows = 0;
+    UINT64 rowBytes = 0;
+    gD12.dev->GetCopyableFootprints(&color, 0, 1, 0, &t->readbackLayout,
+                                    &rows, &rowBytes, &t->readbackBytes);
+    D3D12_HEAP_PROPERTIES readHeap = D12Heap(D3D12_HEAP_TYPE_READBACK);
+    D3D12_RESOURCE_DESC read = D12Buffer(t->readbackBytes);
+    if (FAILED(gD12.dev->CreateCommittedResource(
+            &readHeap, D3D12_HEAP_FLAG_NONE, &read,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            __uuidof(ID3D12Resource), (void**)&t->readback))) {
+        return false;
+    }
+    t->samples = 1;
+    D3D12_RESOURCE_DESC depth = D12Texture(
+        t->pxW, t->pxH, DXGI_FORMAT_D24_UNORM_S8_UINT, 1,
+        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    D3D12_CLEAR_VALUE dv = {};
+    dv.Format = depth.Format;
+    dv.DepthStencil.Depth = 1.f;
+    if (FAILED(gD12.dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &depth,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE, &dv,
+            __uuidof(ID3D12Resource), (void**)&t->depth))) {
+        return false;
+    }
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
+    dsv.Format = depth.Format;
+    dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    gD12.dev->CreateDepthStencilView(t->depth, &dsv, D12Dsv(t));
+    t->clearStencil = true;
+    return D12MakePipelines(1);
+}
+
+static bool D12BeginCommands(D12Target* t) {
+    t->frameIx = t->offscreen ? 0 : (int)t->swap->GetCurrentBackBufferIndex();
+    D12Frame* f = &t->frames[t->frameIx];
+    D12Wait(f->fenceValue);
+    f->fenceValue = 0;
+    for (ID3D12Resource* upload : f->textureUploads) {
+        gpui_paintgpu_win_Rel(&upload);
+    }
+    f->textureUploads.len = 0;
+    f->uploadAt = 0;
+    if (FAILED(f->allocator->Reset()) ||
+        FAILED(gD12.list->Reset(f->allocator, nullptr))) {
+        return false;
+    }
+    ID3D12DescriptorHeap* heaps[] = {gD12.srvHeap};
+    gD12.list->SetDescriptorHeaps(1, heaps);
+    gD12.list->SetGraphicsRootSignature(gD12.root);
+    float viewport[4] = {(float)t->pxW, (float)t->pxH, 0, 0};
+    gD12.list->SetGraphicsRoot32BitConstants(0, 4, viewport, 0);
+    gD12.list->SetGraphicsRootDescriptorTable(2, D12SrvGpu(0));
+    gD12.list->SetGraphicsRootDescriptorTable(3, D12SrvGpu(0));
+    D3D12_VIEWPORT vp = {};
+    vp.Width = (float)t->pxW;
+    vp.Height = (float)t->pxH;
+    vp.MaxDepth = 1.f;
+    gD12.list->RSSetViewports(1, &vp);
+    D3D12_RECT scissor = {0, 0, t->pxW, t->pxH};
+    gD12.list->RSSetScissorRects(1, &scissor);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv =
+        t->offscreen ? D12Rtv(t, 3)
+                     : (t->msaa ? D12Rtv(t, 3) : D12Rtv(t, t->frameIx));
+    if (!t->offscreen && !t->msaa) {
+        D12Barrier(gD12.list, t->back[t->frameIx],
+                   D3D12_RESOURCE_STATE_PRESENT,
+                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE dsv = D12Dsv(t);
+    gD12.list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+    if (t->clearStencil) {
+        gD12.list->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_STENCIL, 1.f, 0,
+                                         0, nullptr);
+        t->clearStencil = false;
+    }
+    if (gD12.atlasState == D3D12_RESOURCE_STATE_COPY_DEST) {
+        D12Barrier(gD12.list, gD12.atlas, gD12.atlasState,
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        gD12.atlasState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+    gB.target = t;
+    gB.image = nullptr;
+    gB.image12 = -1;
+    gB.pxW = t->pxW;
+    gB.pxH = t->pxH;
+    gB.offscreen = t->offscreen;
+    gB.insts.len = 0;
+    gB.tris.len = 0;
+    gB.clipStack.len = 0;
+    gB.clip[0] = 0;
+    gB.clip[1] = 0;
+    gB.clip[2] = (float)t->pxW;
+    gB.clip[3] = (float)t->pxH;
+    gB.stats = FrameStats{};
+    return true;
+}
+
+static bool D12FinishCommands(D12Target* t, bool wait) {
+    D12Frame* f = &t->frames[t->frameIx];
+    if (FAILED(gD12.list->Close())) {
+        return false;
+    }
+    ID3D12CommandList* lists[] = {gD12.list};
+    gD12.queue->ExecuteCommandLists(1, lists);
+    UINT64 value = gD12.nextFence++;
+    if (FAILED(gD12.queue->Signal(gD12.fence, value))) {
+        return false;
+    }
+    f->fenceValue = value;
+    if (wait) {
+        D12Wait(value);
+        f->fenceValue = 0;
+    }
+    return true;
+}
+
+static void* D12Upload(UINT64 bytes, UINT64 align,
+                       D3D12_GPU_VIRTUAL_ADDRESS* gpu) {
+    D12Target* t = (D12Target*)gB.target;
+    if (!t || !bytes) {
+        return nullptr;
+    }
+    D12Frame* f = &t->frames[t->frameIx];
+    UINT64 at = (f->uploadAt + align - 1) & ~(align - 1);
+    if (at + bytes > kD12UploadBytes) {
+        logf("paint/d3d12: frame upload exhausted (%llu bytes)",
+             (unsigned long long)(at + bytes));
+        return nullptr;
+    }
+    f->uploadAt = at + bytes;
+    if (gpu) {
+        *gpu = f->upload->GetGPUVirtualAddress() + at;
+    }
+    return f->mapped + at;
+}
+
+static bool D12UploadTexture(ID3D12Resource* texture,
+                             D3D12_RESOURCE_STATES* state,
+                             DXGI_FORMAT format, int x, int y, int w, int h,
+                             int bytesPerPixel, const uint8_t* pixels,
+                             int srcPitch) {
+    D12Target* t = (D12Target*)gB.target;
+    if (!t || !texture || !state || !pixels || w <= 0 || h <= 0) {
+        return false;
+    }
+    UINT rowPitch = (UINT)((w * bytesPerPixel + 255) & ~255);
+    UINT64 bytes = (UINT64)rowPitch * (UINT64)h;
+    D12Frame* f = &t->frames[t->frameIx];
+    UINT64 at = (f->uploadAt + 511) & ~511ull;
+    ID3D12Resource* source = f->upload;
+    UINT64 offset = at;
+    uint8_t* dst = nullptr;
+    if (at + bytes <= kD12UploadBytes) {
+        f->uploadAt = at + bytes;
+        dst = f->mapped + at;
+    } else {
+        D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_UPLOAD);
+        D3D12_RESOURCE_DESC desc = D12Buffer(bytes);
+        if (FAILED(gD12.dev->CreateCommittedResource(
+                &heap, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                __uuidof(ID3D12Resource), (void**)&source)) ||
+            FAILED(source->Map(0, nullptr, (void**)&dst))) {
+            gpui_paintgpu_win_Rel(&source);
+            return false;
+        }
+        offset = 0;
+        if (!VecAppend(f->textureUploads, source)) {
+            source->Unmap(0, nullptr);
+            gpui_paintgpu_win_Rel(&source);
+            return false;
+        }
+    }
+    for (int row = 0; row < h; row++) {
+        memcpy(dst + (size_t)row * rowPitch,
+               pixels + (size_t)row * (size_t)srcPitch,
+               (size_t)w * (size_t)bytesPerPixel);
+    }
+    if (source != f->upload) {
+        source->Unmap(0, nullptr);
+    }
+    D12Barrier(gD12.list, texture, *state, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = source;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint.Offset = offset;
+    src.PlacedFootprint.Footprint.Format = format;
+    src.PlacedFootprint.Footprint.Width = (UINT)w;
+    src.PlacedFootprint.Footprint.Height = (UINT)h;
+    src.PlacedFootprint.Footprint.Depth = 1;
+    src.PlacedFootprint.Footprint.RowPitch = rowPitch;
+    D3D12_TEXTURE_COPY_LOCATION dest = {};
+    dest.pResource = texture;
+    dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    gD12.list->CopyTextureRegion(&dest, (UINT)x, (UINT)y, 0, &src, nullptr);
+    D12Barrier(gD12.list, texture, D3D12_RESOURCE_STATE_COPY_DEST,
+               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    *state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    return true;
+}
+
+enum TriMode : int {
+    kTriColor,
+    kTriEvenOdd,
+    kTriNonZero,
+};
+
+static void D12SubmitQuads(bool cover) {
+    if (gB.insts.len == 0 || !gB.target) {
+        return;
+    }
+    D12Target* t = (D12Target*)gB.target;
+    UINT64 bytes = (UINT64)gB.insts.len * sizeof(Inst);
+    D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
+    void* dst = D12Upload(bytes, 16, &gpu);
+    if (!dst) {
+        gB.insts.len = 0;
+        return;
+    }
+    memcpy(dst, gB.insts.els, (size_t)bytes);
+    D12Pipelines* p = &gD12.pipes[D12PipeIx(t->samples)];
+    gD12.list->SetPipelineState(cover ? p->cover : p->quad);
+    gD12.list->SetGraphicsRootShaderResourceView(1, gpu);
+    gD12.list->SetGraphicsRootDescriptorTable(2, D12SrvGpu(0));
+    gD12.list->SetGraphicsRootDescriptorTable(
+        3, D12SrvGpu(gB.image12 >= 0 ? gB.image12 : 0));
+    gD12.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    gD12.list->OMSetStencilRef(0);
+    gD12.list->DrawInstanced(4, (UINT)gB.insts.len, 0, 0);
+    gB.stats.instances += gB.insts.len;
+    gB.stats.draws++;
+    gB.insts.len = 0;
+}
+
+static void D12SubmitTris(D3D12_PRIMITIVE_TOPOLOGY topology, TriMode mode) {
+    if (gB.tris.len == 0 || !gB.target) {
+        return;
+    }
+    D12Target* t = (D12Target*)gB.target;
+    UINT64 bytes = (UINT64)gB.tris.len * sizeof(TriVert);
+    D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
+    void* dst = D12Upload(bytes, 16, &gpu);
+    if (!dst) {
+        gB.tris.len = 0;
+        return;
+    }
+    memcpy(dst, gB.tris.els, (size_t)bytes);
+    D12Pipelines* p = &gD12.pipes[D12PipeIx(t->samples)];
+    ID3D12PipelineState* state =
+        mode == kTriEvenOdd ? p->evenOdd
+                            : mode == kTriNonZero ? p->nonZero : p->tri;
+    gD12.list->SetPipelineState(state);
+    D3D12_VERTEX_BUFFER_VIEW vb = {};
+    vb.BufferLocation = gpu;
+    vb.SizeInBytes = (UINT)bytes;
+    vb.StrideInBytes = sizeof(TriVert);
+    gD12.list->IASetVertexBuffers(0, 1, &vb);
+    gD12.list->IASetPrimitiveTopology(topology);
+    gD12.list->OMSetStencilRef(0);
+    gD12.list->DrawInstanced((UINT)gB.tris.len, 1, 0, 0);
+    gB.stats.pathTriangles += gB.tris.len / 3;
+    gB.stats.draws++;
+    gB.tris.len = 0;
+}
+
+static GpuTarget* T11(PaintCtx* ctx) {
     return ctx ? (GpuTarget*)ctx->rt : nullptr;
 }
 
@@ -140771,17 +142319,20 @@ static void SetViewportCb(Gpu* g, float w, float h) {
 }
 
 static void FlushQuads();
-static void FlushTris(D3D11_PRIMITIVE_TOPOLOGY topo, bool colorWrite,
-                      ID3D11DepthStencilState* ds);
+static void FlushTris(D3D_PRIMITIVE_TOPOLOGY topo, TriMode mode);
 
 static void Flush() {
     FlushQuads();
-    FlushTris(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, true, gGpu.dsOff);
+    FlushTris(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, kTriColor);
 }
 
 static void FlushQuads() {
     Gpu* g = &gGpu;
     if (gB.insts.len == 0 || !gB.target) {
+        return;
+    }
+    if (PaintD3d12On()) {
+        D12SubmitQuads(false);
         return;
     }
     if (!EnsureInstBuf(g, gB.insts.len)) {
@@ -140812,10 +142363,13 @@ static void FlushQuads() {
     gB.insts.len = 0;
 }
 
-static void FlushTris(D3D11_PRIMITIVE_TOPOLOGY topo, bool colorWrite,
-                      ID3D11DepthStencilState* ds) {
+static void FlushTris(D3D_PRIMITIVE_TOPOLOGY topo, TriMode mode) {
     Gpu* g = &gGpu;
     if (gB.tris.len == 0 || !gB.target) {
+        return;
+    }
+    if (PaintD3d12On()) {
+        D12SubmitTris(topo, mode);
         return;
     }
     if (!EnsureTriBuf(g, gB.tris.len)) {
@@ -140833,6 +142387,10 @@ static void FlushTris(D3D11_PRIMITIVE_TOPOLOGY topo, bool colorWrite,
     UINT stride = sizeof(TriVert);
     UINT off = 0;
     g->ctx->VSSetShader(g->vsTri, nullptr, 0);
+    bool colorWrite = mode == kTriColor;
+    ID3D11DepthStencilState* ds =
+        mode == kTriEvenOdd ? g->dsEvenOdd
+                            : mode == kTriNonZero ? g->dsNonZero : g->dsOff;
     g->ctx->PSSetShader(colorWrite ? g->psTri : nullptr, nullptr, 0);
     g->ctx->IASetInputLayout(g->triLayout);
     g->ctx->IASetVertexBuffers(0, 1, &g->triBuf, &stride, &off);
@@ -140851,7 +142409,7 @@ static void FlushTris(D3D11_PRIMITIVE_TOPOLOGY topo, bool colorWrite,
 
 static void EnsureQuadPhase() {
     if (gB.tris.len > 0) {
-        FlushTris(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, true, gGpu.dsOff);
+        FlushTris(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, kTriColor);
     }
 }
 
@@ -140868,7 +142426,7 @@ static void gpui_paintgpu_win_Push(const Inst& i) {
 
 static void Quad(PaintCtx* ctx, int kind, float x, float y, float w, float h,
                  Rgba c, float radius = 0, float border = 0) {
-    if (!T(ctx) || w <= 0 || h <= 0) {
+    if (!gB.target || w <= 0 || h <= 0) {
         return;
     }
     c = PaintFade(ctx, c);
@@ -140908,7 +142466,18 @@ static void FreeSurfaces(GpuTarget* t) {
 }
 
 void PaintTargetFree(PaintCtx* ctx) {
-    GpuTarget* t = T(ctx);
+    if (PaintD3d12On()) {
+        D12Target* t = ctx ? (D12Target*)ctx->rt : nullptr;
+        D12FreeTarget(t);
+        if (ctx) {
+            ctx->rt = nullptr;
+        }
+        if (gB.target == t) {
+            gB.target = nullptr;
+        }
+        return;
+    }
+    GpuTarget* t = T11(ctx);
     if (!t) {
         return;
     }
@@ -141010,6 +142579,10 @@ static void BeginFrameState(Gpu* g, GpuTarget* t) {
 
     gB.target = t;
     gB.image = nullptr;
+    gB.image12 = -1;
+    gB.pxW = t->pxW;
+    gB.pxH = t->pxH;
+    gB.offscreen = t->offscreen;
     gB.insts.len = 0;
     gB.tris.len = 0;
     gB.clipStack.len = 0;
@@ -141020,7 +142593,183 @@ static void BeginFrameState(Gpu* g, GpuTarget* t) {
     gB.stats = FrameStats{};
 }
 
+static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW,
+                                int pxH) {
+    if (!ctx || !ctx->pa || !D12EnsureGpu(ctx->pa)) {
+        return false;
+    }
+    HWND hwnd = (HWND)native;
+    if (!hwnd || pxW <= 0 || pxH <= 0) {
+        return false;
+    }
+    D12Target* t = (D12Target*)ctx->rt;
+    if (t && (t->hwnd != hwnd || t->offscreen)) {
+        D12FreeTarget(t);
+        ctx->rt = nullptr;
+        t = nullptr;
+    }
+    if (!t) {
+        t = new D12Target();
+        t->hwnd = hwnd;
+        t->pxW = pxW;
+        t->pxH = pxH;
+        t->samples = PaintGpuSamples();
+        DXGI_SWAP_CHAIN_DESC1 desc = {};
+        desc.Width = (UINT)pxW;
+        desc.Height = (UINT)pxH;
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        desc.BufferCount = kD12FrameCount;
+        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        IDXGISwapChain1* swap1 = nullptr;
+        HRESULT hr = gD12.factory->CreateSwapChainForHwnd(
+            gD12.queue, hwnd, &desc, nullptr, nullptr, &swap1);
+        if (SUCCEEDED(hr)) {
+            hr = swap1->QueryInterface(__uuidof(IDXGISwapChain3),
+                                       (void**)&t->swap);
+            swap1->Release();
+        }
+        if (FAILED(hr) || !t->swap || !D12MakeFrames(t) ||
+            !D12MakeWindowSurfaces(t)) {
+            D12FreeTarget(t);
+            return false;
+        }
+        gD12.factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+        ctx->rt = (PaintTarget*)t;
+    } else if (t->pxW != pxW || t->pxH != pxH) {
+        D12FreeSurfaces(t);
+        t->pxW = pxW;
+        t->pxH = pxH;
+        scene::Invalidate();
+        if (FAILED(t->swap->ResizeBuffers(kD12FrameCount, (UINT)pxW,
+                                          (UINT)pxH,
+                                          DXGI_FORMAT_B8G8R8A8_UNORM, 0)) ||
+            !D12MakeWindowSurfaces(t)) {
+            D12FreeTarget(t);
+            ctx->rt = nullptr;
+            return false;
+        }
+    }
+    return D12BeginCommands(t);
+}
+
+static bool D12PaintTargetEnd(PaintCtx* ctx) {
+    D12Target* t = ctx ? (D12Target*)ctx->rt : nullptr;
+    if (!t || t->offscreen) {
+        return false;
+    }
+    Flush();
+    bool skip = scene::SkipPresent();
+    ID3D12Resource* back = t->back[t->frameIx];
+    if (t->msaa) {
+        if (!skip) {
+            D12Barrier(gD12.list, t->msaa,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET,
+                       D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+            D12Barrier(gD12.list, back, D3D12_RESOURCE_STATE_PRESENT,
+                       D3D12_RESOURCE_STATE_RESOLVE_DEST);
+            gD12.list->ResolveSubresource(back, 0, t->msaa, 0,
+                                          DXGI_FORMAT_B8G8R8A8_UNORM);
+            D12Barrier(gD12.list, back, D3D12_RESOURCE_STATE_RESOLVE_DEST,
+                       D3D12_RESOURCE_STATE_PRESENT);
+            D12Barrier(gD12.list, t->msaa,
+                       D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+                       D3D12_RESOURCE_STATE_RENDER_TARGET);
+        }
+    } else {
+        D12Barrier(gD12.list, back, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_PRESENT);
+    }
+    gLastStats = gB.stats;
+    gB.target = nullptr;
+    if (!D12FinishCommands(t, false)) {
+        return false;
+    }
+    if (skip) {
+        return true;
+    }
+    HRESULT hr = t->swap->Present(0, 0);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+        D12FreeTarget(t);
+        ctx->rt = nullptr;
+        return false;
+    }
+    return SUCCEEDED(hr);
+}
+
+static bool D12PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
+    if (!ctx || !ctx->pa || !D12EnsureGpu(ctx->pa) || pxW <= 0 || pxH <= 0) {
+        return false;
+    }
+    if (ctx->rt) {
+        D12FreeTarget((D12Target*)ctx->rt);
+        ctx->rt = nullptr;
+    }
+    D12Target* t = new D12Target();
+    t->offscreen = true;
+    t->pxW = pxW;
+    t->pxH = pxH;
+    if (!D12MakeFrames(t) || !D12MakeOffscreenSurfaces(t)) {
+        D12FreeTarget(t);
+        return false;
+    }
+    ctx->rt = (PaintTarget*)t;
+    if (!D12BeginCommands(t)) {
+        D12FreeTarget(t);
+        ctx->rt = nullptr;
+        return false;
+    }
+    float clear[4] = {0, 0, 0, 0};
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = D12Rtv(t, 3);
+    gD12.list->ClearRenderTargetView(rtv, clear, 0, nullptr);
+    return true;
+}
+
+static bool D12PaintTargetEndOffscreen(PaintCtx* ctx, uint8_t* outBgra) {
+    D12Target* t = ctx ? (D12Target*)ctx->rt : nullptr;
+    if (!t || !t->offscreen) {
+        return false;
+    }
+    Flush();
+    D12Barrier(gD12.list, t->offTex, D3D12_RESOURCE_STATE_RENDER_TARGET,
+               D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = t->offTex;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    D3D12_TEXTURE_COPY_LOCATION dst = {};
+    dst.pResource = t->readback;
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = t->readbackLayout;
+    gD12.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    gB.target = nullptr;
+    bool ok = D12FinishCommands(t, true);
+    if (ok && outBgra) {
+        uint8_t* mapped = nullptr;
+        D3D12_RANGE read = {0, (SIZE_T)t->readbackBytes};
+        if (SUCCEEDED(t->readback->Map(0, &read, (void**)&mapped))) {
+            for (int y = 0; y < t->pxH; y++) {
+                memcpy(outBgra + (size_t)y * (size_t)t->pxW * 4,
+                       mapped + (size_t)y *
+                                    t->readbackLayout.Footprint.RowPitch,
+                       (size_t)t->pxW * 4);
+            }
+            D3D12_RANGE wrote = {0, 0};
+            t->readback->Unmap(0, &wrote);
+        } else {
+            ok = false;
+        }
+    }
+    D12FreeTarget(t);
+    ctx->rt = nullptr;
+    return ok;
+}
+
 bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
+    if (PaintD3d12On()) {
+        return D12PaintTargetBegin(ctx, native, pxW, pxH);
+    }
     if (!ctx || !ctx->pa || !EnsureGpu(ctx->pa)) {
         return false;
     }
@@ -141029,7 +142778,7 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
         return false;
     }
     Gpu* g = &gGpu;
-    GpuTarget* t = T(ctx);
+    GpuTarget* t = T11(ctx);
     if (t && (t->hwnd != hwnd || t->offscreen)) {
         gpuw::PaintTargetFree(ctx);
         t = nullptr;
@@ -141076,12 +142825,15 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
             return false;
         }
     }
-    BeginFrameState(g, T(ctx));
+    BeginFrameState(g, T11(ctx));
     return true;
 }
 
 bool PaintTargetEnd(PaintCtx* ctx) {
-    GpuTarget* t = T(ctx);
+    if (PaintD3d12On()) {
+        return D12PaintTargetEnd(ctx);
+    }
+    GpuTarget* t = T11(ctx);
     if (!t) {
         return false;
     }
@@ -141107,6 +142859,9 @@ bool PaintTargetEnd(PaintCtx* ctx) {
 }
 
 bool PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
+    if (PaintD3d12On()) {
+        return D12PaintTargetBeginOffscreen(ctx, pxW, pxH);
+    }
     if (!ctx || !ctx->pa || !EnsureGpu(ctx->pa) || pxW <= 0 || pxH <= 0) {
         return false;
     }
@@ -141159,7 +142914,10 @@ bool PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
 }
 
 bool PaintTargetEndOffscreen(PaintCtx* ctx, uint8_t* outBgra) {
-    GpuTarget* t = T(ctx);
+    if (PaintD3d12On()) {
+        return D12PaintTargetEndOffscreen(ctx, outBgra);
+    }
+    GpuTarget* t = T11(ctx);
     if (!t || !t->offscreen) {
         return false;
     }
@@ -141183,8 +142941,7 @@ bool PaintTargetEndOffscreen(PaintCtx* ctx, uint8_t* outBgra) {
 }
 
 void CanvasClear(PaintCtx* ctx, Rgba c) {
-    GpuTarget* t = T(ctx);
-    if (!t) {
+    if (!gB.target) {
         return;
     }
 
@@ -141193,12 +142950,22 @@ void CanvasClear(PaintCtx* ctx, Rgba c) {
         Flush();
         Rgba f = PaintFade(ctx, c);
         float col[4] = {f.r / 255.f, f.g / 255.f, f.b / 255.f, f.a / 255.f};
+        if (PaintD3d12On()) {
+            D12Target* t = (D12Target*)gB.target;
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv =
+                t->offscreen
+                    ? D12Rtv(t, 3)
+                    : (t->msaa ? D12Rtv(t, 3) : D12Rtv(t, t->frameIx));
+            gD12.list->ClearRenderTargetView(rtv, col, 0, nullptr);
+            return;
+        }
+        GpuTarget* t = (GpuTarget*)gB.target;
         ID3D11RenderTargetView* rtv =
             t->offscreen ? t->offRtv : (t->msaaRtv ? t->msaaRtv : t->backRtv);
         gGpu.ctx->ClearRenderTargetView(rtv, col);
         return;
     }
-    Quad(ctx, kQuadRect, 0, 0, (float)t->pxW, (float)t->pxH, c);
+    Quad(ctx, kQuadRect, 0, 0, (float)gB.pxW, (float)gB.pxH, c);
 }
 
 void CanvasFillRect(PaintCtx* ctx, float x, float y, float w, float h, Rgba c) {
@@ -141252,7 +143019,7 @@ static void StrokeDisc(float cx, float cy, float r, Rgba c) {
 
 void CanvasLine(PaintCtx* ctx, float x1, float y1, float x2, float y2,
                 float stroke, Rgba c, const float* dash) {
-    if (!T(ctx) || stroke <= 0) {
+    if (!gB.target || stroke <= 0) {
         return;
     }
     c = PaintFade(ctx, c);
@@ -141303,7 +143070,8 @@ void CanvasEllipse(PaintCtx* ctx, float cx, float cy, float rx, float ry,
 }
 
 void CanvasPushClip(PaintCtx* ctx, float x, float y, float w, float h) {
-    if (!T(ctx)) {
+    (void)ctx;
+    if (!gB.target) {
         return;
     }
 
@@ -141490,6 +143258,11 @@ static void PathCover(PaintCtx* ctx, GpuPath* p, const Inst& proto) {
     VecAppend(gB.insts, i);
     (void)ctx;
 
+    if (PaintD3d12On()) {
+        D12SubmitQuads(true);
+        return;
+    }
+
     if (!EnsureInstBuf(g, gB.insts.len)) {
         gB.insts.len = 0;
         return;
@@ -141518,13 +143291,13 @@ static void PathCover(PaintCtx* ctx, GpuPath* p, const Inst& proto) {
 
 static void PathFillWith(PaintCtx* ctx, Path* path, const Inst& proto) {
     GpuPath* p = P(path);
-    if (!T(ctx) || !p || p->pts.len < 6) {
+    if (!gB.target || !p || p->pts.len < 6) {
         return;
     }
     Flush();
     PathStencil(ctx, p);
-    FlushTris(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, false,
-              p->winding ? gGpu.dsNonZero : gGpu.dsEvenOdd);
+    FlushTris(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+              p->winding ? kTriNonZero : kTriEvenOdd);
     PathCover(ctx, p, proto);
 }
 
@@ -141562,7 +143335,7 @@ void PathFillGradient(PaintCtx* ctx, Path* p, float x0, float y0, float x1,
 void PathStroke(PaintCtx* ctx, Path* path, float stroke, Rgba c,
                 bool roundCaps) {
     GpuPath* p = P(path);
-    if (!T(ctx) || !p || stroke <= 0) {
+    if (!gB.target || !p || stroke <= 0) {
         return;
     }
     c = PaintFade(ctx, c);
@@ -141597,6 +143370,49 @@ struct ImageSlot {
 
 static ImageSlot gImages[kImageSlots];
 static int gImageNext = 0;
+
+static int D12ImageDescriptor(const Image* img) {
+    for (int i = 0; i < gD12.imageCount; i++) {
+        if (gD12.images[i].img == img) {
+            return gD12.images[i].descriptor;
+        }
+    }
+    if (gD12.imageCount >= kD12ImageSlots) {
+        return -1;
+    }
+    const uint8_t* bgra = nullptr;
+    int w = 0, h = 0;
+    if (!PaintImagePixels(img, &bgra, &w, &h) || !bgra || w <= 0 || h <= 0) {
+        return -1;
+    }
+    D12ImageSlot* slot = &gD12.images[gD12.imageCount];
+    D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
+    D3D12_RESOURCE_DESC td = D12Texture(
+        w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 1, D3D12_RESOURCE_FLAG_NONE);
+    if (FAILED(gD12.dev->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &td,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+            (void**)&slot->tex))) {
+        return -1;
+    }
+    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COPY_DEST;
+    if (!D12UploadTexture(slot->tex, &state, DXGI_FORMAT_B8G8R8A8_UNORM, 0,
+                          0, w, h, 4, bgra, w * 4)) {
+        gpui_paintgpu_win_Rel(&slot->tex);
+        return -1;
+    }
+    slot->img = img;
+    slot->descriptor = 1 + gD12.imageCount;
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Texture2D.MipLevels = 1;
+    gD12.dev->CreateShaderResourceView(slot->tex, &sv,
+                                       D12SrvCpu(slot->descriptor));
+    gD12.imageCount++;
+    return slot->descriptor;
+}
 
 static ID3D11ShaderResourceView* ImageSrv(const Image* img) {
     for (int i = 0; i < kImageSlots; i++) {
@@ -141640,18 +143456,29 @@ static ID3D11ShaderResourceView* ImageSrv(const Image* img) {
 }
 
 void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
-    if (!T(ctx) || !img || b.w <= 0 || b.h <= 0) {
-        return;
-    }
-    ID3D11ShaderResourceView* srv = ImageSrv(img);
-    if (!srv) {
+    if (!gB.target || !img || b.w <= 0 || b.h <= 0) {
         return;
     }
     EnsureQuadPhase();
+    if (PaintD3d12On()) {
+        int descriptor = D12ImageDescriptor(img);
+        if (descriptor < 0) {
+            return;
+        }
+        if (gB.image12 != descriptor) {
+            FlushQuads();
+            gB.image12 = descriptor;
+        }
+    } else {
+        ID3D11ShaderResourceView* srv = ImageSrv(img);
+        if (!srv) {
+            return;
+        }
 
-    if (gB.image != srv) {
-        FlushQuads();
-        gB.image = srv;
+        if (gB.image != srv) {
+            FlushQuads();
+            gB.image = srv;
+        }
     }
     Inst i = {};
     i.rect[0] = b.x;
@@ -141670,6 +143497,7 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
     gpui_paintgpu_win_Push(i);
     FlushQuads();
     gB.image = nullptr;
+    gB.image12 = -1;
 }
 
 static GlyphEntry* AtlasFind(const GlyphKey& k) {
@@ -141759,13 +143587,21 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
             return false;
         }
     }
-    D3D11_BOX box = {};
-    box.left = (UINT)a->penX;
-    box.top = (UINT)a->penY;
-    box.right = (UINT)(a->penX + w);
-    box.bottom = (UINT)(a->penY + h);
-    box.back = 1;
-    g->ctx->UpdateSubresource(a->tex, 0, &box, gray.els, (UINT)w, 0);
+    if (PaintD3d12On()) {
+        if (!D12UploadTexture(gD12.atlas, &gD12.atlasState,
+                              DXGI_FORMAT_R8_UNORM, a->penX, a->penY, w, h, 1,
+                              gray.els, w)) {
+            return false;
+        }
+    } else {
+        D3D11_BOX box = {};
+        box.left = (UINT)a->penX;
+        box.top = (UINT)a->penY;
+        box.right = (UINT)(a->penX + w);
+        box.bottom = (UINT)(a->penY + h);
+        box.back = 1;
+        g->ctx->UpdateSubresource(a->tex, 0, &box, gray.els, (UINT)w, 0);
+    }
 
     e->used = true;
     e->key.face = face;
@@ -141913,7 +143749,7 @@ struct GlyphSink : public IDWriteTextRenderer {
 void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
                     bool clip, float clipW) {
     (void)clipW;
-    if (!T(ctx) || !tl) {
+    if (!gB.target || !tl) {
         return;
     }
     auto* layout = (IDWriteTextLayout*)tl;
@@ -145951,10 +147787,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam,
         case WM_DESTROY: {
             KillTimer(hwnd, 1);
             App* app = win->app;
-            AccessibilityWinClose(win->plat->accessibility);
-            win->plat->accessibility = nullptr;
-            delete win->plat;
+            PlatWindow* plat = win->plat;
+            AccessibilityWinClose(plat->accessibility);
+            plat->accessibility = nullptr;
             WindowClosed(win);
+            delete plat;
 
             if (!AppAnyWindowOpen(app)) {
                 PostQuitMessage(0);
