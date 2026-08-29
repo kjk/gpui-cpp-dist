@@ -16,11 +16,47 @@
 
 namespace base {
 
-template <typename T, size_t N>
-char (&DimofSizeHelper(T (&array)[N]))[N];
-#define dimof(array) (sizeof(DimofSizeHelper(array)))
-
 static int VsnprintfUtf8(Str buf, const char* fmt, va_list args);
+
+float StrToFloatUnchecked(Str s) {
+    if (!s.s || s.len <= 0) {
+        return 0;
+    }
+    char local[128];
+    char* buf = local;
+    if (s.len >= (int)sizeof(local)) {
+        Str temp = AllocStrTemp(s.len);
+        if (!temp.s) {
+            return 0;
+        }
+        buf = temp.s;
+    }
+    memcpy(buf, s.s, (size_t)s.len);
+    buf[s.len] = 0;
+    return strtof(buf, nullptr);
+}
+
+int StrToIntUnchecked(Str s) {
+    if (!s.s || s.len <= 0) {
+        return 0;
+    }
+    int i = 0;
+    while (i < s.len && s.s[i] <= ' ') {
+        i++;
+    }
+    bool negative = false;
+    if (i < s.len && (s.s[i] == '+' || s.s[i] == '-')) {
+        negative = s.s[i] == '-';
+        i++;
+    }
+    uint64_t value = 0;
+    while (i < s.len && s.s[i] >= '0' && s.s[i] <= '9') {
+        value = value * 10 + (uint64_t)(s.s[i] - '0');
+        i++;
+    }
+    int64_t signedValue = negative ? -(int64_t)value : (int64_t)value;
+    return (int)signedValue;
+}
 
 void* AllocZero(int count, int size) {
     return calloc(count, size);
@@ -30,7 +66,7 @@ static_assert(sizeof(Arena) <= kArenaHeaderSize,
               "Arena header must fit in reserved header bytes");
 
 using ArenaFlags = uint64_t;
-enum : ArenaFlags {
+enum : uint8_t {
     ArenaFlagNoChain = 1ull << 0,
     ArenaFlagLargePages = 1ull << 1,
 };
@@ -586,8 +622,8 @@ GPUI_NOINLINE void* ArenaVecAlloc(Arena* a, int count, int elSize, int align,
     if (count > (INT_MAX - hdrSize) / elSize) {
         return nullptr;
     }
-    return a
-        ->Push((uint64_t)(hdrSize + count * elSize), (uint64_t)align, false);
+    return a->Push((uint64_t)hdrSize + (uint64_t)count * (uint64_t)elSize,
+                   (uint64_t)align, false);
 }
 
 GPUI_NOINLINE bool VecRealloc(Arena* a, void** els, int len, int* cap,
@@ -808,7 +844,7 @@ static FILE* VecDbgOut() {
 }
 
 int VecDbgBirth(const char* file, int line, const char* func, char kind,
-                int elSize) {
+                int elSize) noexcept {
     int id = gVecDbgNextId++;
     FILE* f = VecDbgOut();
     if (f) {
@@ -818,7 +854,7 @@ int VecDbgBirth(const char* file, int line, const char* func, char kind,
     return id;
 }
 
-void VecDbgGrow(int id, int len, int oldCap, int needed, int newCap) {
+void VecDbgGrow(int id, int len, int oldCap, int needed, int newCap) noexcept {
     FILE* f = VecDbgOut();
     if (f) {
         fprintf(f, "G %d %d %d %d %d\n", id, len, oldCap, needed, newCap);
@@ -826,7 +862,7 @@ void VecDbgGrow(int id, int len, int oldCap, int needed, int newCap) {
 }
 
 void VecDbgSegment(int id, int len, int want, int lastSegCap, int newSegCap,
-                   int totalCap, bool reused) {
+                   int totalCap, bool reused) noexcept {
     FILE* f = VecDbgOut();
     if (f) {
         fprintf(f, "S %d %d %d %d %d %d %d\n", id, len, want, lastSegCap,
@@ -834,14 +870,14 @@ void VecDbgSegment(int id, int len, int want, int lastSegCap, int newSegCap,
     }
 }
 
-void VecDbgDeath(int id, int len, int cap) {
+void VecDbgDeath(int id, int len, int cap) noexcept {
     FILE* f = VecDbgOut();
     if (f) {
         fprintf(f, "D %d %d %d\n", id, len, cap);
     }
 }
 
-void VecDbgArenaDeath(int id, int len, int totalCap, int segCount) {
+void VecDbgArenaDeath(int id, int len, int totalCap, int segCount) noexcept {
     FILE* f = VecDbgOut();
     if (f) {
         fprintf(f, "E %d %d %d %d\n", id, len, totalCap, segCount);
@@ -1449,6 +1485,8 @@ static FmtArg::Kind typeFromConv(char c) {
             return FmtArg::Kind::Str;
         case 'v':
             return FmtArg::Kind::Any;
+        default:
+            break;
     }
     return FmtArg::Kind::None;
 }
@@ -1632,7 +1670,6 @@ static Str bufFmt(Str buf, const char* fmt, ...) {
 }
 
 static void evalDefault(Fmt& fmt, const FmtArg& arg) {
-    TempStr s;
     Str buf(fmt.buf, (int)dimof(fmt.buf));
     switch (arg.t) {
         case FmtArg::Kind::Char:
@@ -4136,7 +4173,10 @@ static bool ReadFileAll(const char* path, Vec<uint8_t>* out) {
         fclose(f);
         return false;
     }
-    rewind(f);
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return false;
+    }
     VecReset(*out);
     int n = (int)size;
     if (n == 0) {
@@ -4694,7 +4734,8 @@ void DrawOpsBuilder::StrokeWidth(float w) {
     uint16_t op = kOpStrokeWidth;
     uint8_t* p = VecAppendBlanks(data, 6);
     if (p) {
-        memcpy(p, &op, 2);
+        p[0] = (uint8_t)op;
+        p[1] = (uint8_t)(op >> 8);
         memcpy(p + 2, &w, 4);
     }
 }
@@ -5495,7 +5536,7 @@ Rgba RgbaOpacity(Rgba c, float a01) {
     if (a01 > 1) {
         a01 = 1;
     }
-    c.a = (uint8_t)(c.a * a01);
+    c.a = (uint8_t)((float)c.a * a01);
     return c;
 }
 
@@ -5507,10 +5548,10 @@ Rgba RgbaMix(Rgba a, Rgba b, float t) {
         t = 1;
     }
     Rgba o;
-    o.r = (uint8_t)(a.r * t + b.r * (1 - t) + 0.5f);
-    o.g = (uint8_t)(a.g * t + b.g * (1 - t) + 0.5f);
-    o.b = (uint8_t)(a.b * t + b.b * (1 - t) + 0.5f);
-    o.a = (uint8_t)(a.a * t + b.a * (1 - t) + 0.5f);
+    o.r = (uint8_t)lroundf((float)a.r * t + (float)b.r * (1 - t));
+    o.g = (uint8_t)lroundf((float)a.g * t + (float)b.g * (1 - t));
+    o.b = (uint8_t)lroundf((float)a.b * t + (float)b.b * (1 - t));
+    o.a = (uint8_t)lroundf((float)a.a * t + (float)b.a * (1 - t));
     return o;
 }
 
@@ -5559,7 +5600,8 @@ Rgba HslaToRgba(Hsla c) {
 }
 
 Hsla HslaFromRgba(Rgba c) {
-    float r = c.r / 255.f, g = c.g / 255.f, b = c.b / 255.f;
+    float r = (float)c.r / 255.f, g = (float)c.g / 255.f,
+          b = (float)c.b / 255.f;
     float mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
     float mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
     float delta = mx - mn;
@@ -5583,7 +5625,7 @@ Hsla HslaFromRgba(Rgba c) {
             h = ((r - g) / delta + 4.f) / 6.f;
         }
     }
-    return Hsla{h, s, l, c.a / 255.f};
+    return Hsla{h, s, l, (float)c.a / 255.f};
 }
 
 Rgba RgbaHsla(float h, float s, float l, float a01) {
@@ -5682,9 +5724,9 @@ Rgba RgbaBlend(Rgba base, Rgba over) {
     if (over.a == 0) {
         return base;
     }
-    float f = over.a / 255.f;
+    float f = (float)over.a / 255.f;
     auto mix = [&](uint8_t b, uint8_t o) {
-        return (uint8_t)(b * (1.f - f) + o * f);
+        return (uint8_t)((float)b * (1.f - f) + (float)o * f);
     };
     return Rgba8(mix(base.r, over.r), mix(base.g, over.g), mix(base.b, over.b),
                  base.a);
@@ -5713,9 +5755,9 @@ static float FromLinear(float c) {
 }
 
 static void RgbToOklab(Rgba c, float* L, float* A, float* B) {
-    float lr = ToLinear(c.r / 255.f);
-    float lg = ToLinear(c.g / 255.f);
-    float lb = ToLinear(c.b / 255.f);
+    float lr = ToLinear((float)c.r / 255.f);
+    float lg = ToLinear((float)c.g / 255.f);
+    float lb = ToLinear((float)c.b / 255.f);
     float l = 0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb;
     float m = 0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb;
     float s = 0.0883024619f * lr + 0.2817188376f * lg + 0.6299787005f * lb;
@@ -5740,7 +5782,7 @@ static Rgba OklabToRgb(float L, float A, float B, float alpha) {
 Rgba RgbaMixOklab(Rgba a, Rgba b, float factor) {
     factor = Clamp01(factor);
     float inv = 1.f - factor;
-    float aa = a.a / 255.f, ab = b.a / 255.f;
+    float aa = (float)a.a / 255.f, ab = (float)b.a / 255.f;
     float alpha = aa * factor + ab * inv;
     if (alpha <= 0) {
         return RgbaTransparent();
@@ -7380,10 +7422,10 @@ El* El::Child(El* c) {
 }
 
 float PxToDip(PaintCtx* ctx, int px) {
-    return px * 96.f / (ctx->dpi > 0 ? ctx->dpi : 96.f);
+    return (float)px * 96.f / (ctx->dpi > 0 ? ctx->dpi : 96.f);
 }
 int DipToPx(PaintCtx* ctx, float dip) {
-    return (int)(dip * (ctx->dpi > 0 ? ctx->dpi : 96.f) / 96.f + 0.5f);
+    return (int)lroundf(dip * (ctx->dpi > 0 ? ctx->dpi : 96.f) / 96.f);
 }
 
 static float MeasKeyMaxW(float maxW, bool wrap) {
@@ -7428,6 +7470,9 @@ static uint32_t MurmurHash2(const void* key, int n) {
         case 1:
             h ^= data[0];
             h *= m;
+            break;
+        default:
+            break;
     }
     h ^= h >> 13;
     h *= m;
@@ -7912,7 +7957,12 @@ static void PaintWavyRun(PaintCtx* ctx, float x, float y, float w, Rgba color) {
     }
     PathMoveTo(p, x, y);
     bool up = true;
-    for (float at = kPeriod * 0.5f; at < w; at += kPeriod * 0.5f) {
+    const float kHalfPeriod = kPeriod * 0.5f;
+    for (uint32_t i = 1;; ++i) {
+        const float at = static_cast<float>(i) * kHalfPeriod;
+        if (!(at < w)) {
+            break;
+        }
         PathLineTo(p, x + at, y + (up ? -kAmp : kAmp));
         up = !up;
     }
@@ -9266,7 +9316,7 @@ static void ChartDomain(const ChartSeries& c, float* outMin, float* outMax) {
 }
 
 static Str ChartValueLabel(float v) {
-    float rounded = v < 0 ? -(float)(int)(-v + 0.5f) : (float)(int)(v + 0.5f);
+    float rounded = (float)lroundf(v);
     float d = v - rounded;
     if ((d < 0 ? -d : d) < 0.05f) {
         return fmt("%d", (int)rounded);
@@ -9635,7 +9685,7 @@ static void DrawChart(PaintCtx* ctx, El* e) {
         const float kGridDash[2] = {4.f, 2.f};
         if (barRow) {
             for (int i = 1; i <= 4; i++) {
-                float gx = x + w * (i / 4.f);
+                float gx = x + w * ((float)i / 4.f);
                 CanvasLine(ctx, gx, y, gx, y + plotH, 1.f, th.border,
                            kGridDash);
             }
@@ -9801,7 +9851,7 @@ static void DrawChart(PaintCtx* ctx, El* e) {
             }
         } else {
             float t = n > 1 ? (ctx->mouseX - x) / (w / (float)(n - 1)) : 0.f;
-            index = (int)(t + 0.5f);
+            index = (int)lroundf(t);
             if (index < 0) {
                 index = 0;
             }
@@ -12077,7 +12127,7 @@ static bool LooksLikeSvg(const uint8_t* b, int len) {
     return false;
 }
 
-enum class SrcBytes : int32_t {
+enum class SrcBytes : uint8_t {
     No,
     Yes,
     Pending
@@ -12367,20 +12417,21 @@ bool KeyChordParse(Str spec, KeyChord* out) {
             break;
         }
         Str part = Str(spec.s + i, dash - i);
-        if (base::StrEqI(part, "ctrl")) {
+        bool secondary = base::StrEqI(part, "secondary");
+        if (base::StrEqI(part, "ctrl") || (secondary && !GPUI_OS_MAC)) {
             c.ctrl = true;
         } else if (base::StrEqI(part, "cmd") ||
                    base::StrEqI(part, "super") ||
                    base::StrEqI(part, "win")) {
             c.platform = true;
-        } else if (base::StrEqI(part, "secondary")) {
-
+        }
 #if GPUI_OS_MAC
+        else if (secondary) {
+
             c.platform = true;
-#else
-            c.ctrl = true;
+        }
 #endif
-        } else if (base::StrEqI(part, "alt") ||
+        else if (base::StrEqI(part, "alt") ||
                    base::StrEqI(part, "option")) {
             c.alt = true;
         } else if (base::StrEqI(part, "shift")) {
@@ -12978,39 +13029,17 @@ KeyMatch KeymapMatch(const KeyChord& chord, const uint32_t* contexts,
 namespace gpui {
 
 int SceneLevelOn() {
-    static int lvl = -1;
-    if (lvl >= 0) {
-        return lvl;
-    }
-    char buf[16] = {};
-    const char* env = getenv("GPUI_SCENE");
-    if (env) {
-        StrCopyZ(buf, (int)sizeof(buf), env);
-    }
+#if GPUI_OS_WINDOWS
+    static_assert((int)WinSceneMode::Off == kSceneOff);
+    static_assert((int)WinSceneMode::Replay == kSceneReplay);
+    static_assert((int)WinSceneMode::Cache == kSceneCache);
+    static_assert((int)WinSceneMode::Skip == kSceneSkip);
+    static_assert((int)WinSceneMode::Damage == kSceneDamage);
+    return (int)WinPaintOptionsGet().scene;
+#else
 
-    lvl = kSceneSkip;
-    if (!buf[0]) {
-        return lvl;
-    }
-    Str value(buf);
-    if (base::StrEqI(value, "0") || base::StrEqI(value, "off")) {
-        lvl = kSceneOff;
-    } else if (base::StrEqI(value, "1") || base::StrEqI(value, "replay") ||
-               base::StrEqI(value, "on")) {
-        lvl = kSceneReplay;
-    } else if (base::StrEqI(value, "cache")) {
-        lvl = kSceneCache;
-    } else if (base::StrEqI(value, "skip")) {
-        lvl = kSceneSkip;
-    } else if (base::StrEqI(value, "damage")) {
-        lvl = kSceneDamage;
-    } else {
-        logf("paint: GPUI_SCENE=%s is not a level; leaving it at skip",
-             Str(buf));
-        return lvl;
-    }
-    logf("paint: scene layer at %s (GPUI_SCENE)", Str(buf));
-    return lvl;
+    return kSceneSkip;
+#endif
 }
 
 namespace scene {
@@ -13630,17 +13659,6 @@ void Invalidate() {
 }
 
 void Reset() {
-
-    if (gStats.frames > 0) {
-        logf(
-            "scene: frames=%d unchanged=%d partial=%d meanDamage=%.1f%% "
-            "cacheLive=%d",
-            gStats.frames, gStats.framesUnchanged, gStats.framesPartial,
-            gStats.framesPartial
-                ? 100.0 * gStats.damageFracSum / gStats.framesPartial
-                : 0.0,
-            gCacheLive);
-    }
     CacheClear();
     Invalidate();
 }
@@ -13675,6 +13693,8 @@ static Path* BuildPath(PaintCtx* ctx, const PathRec& pr) {
                 break;
             case kVClose:
                 PathClose(p);
+                break;
+            default:
                 break;
         }
     }
@@ -13841,15 +13861,6 @@ bool FrameEnd(PaintCtx* ctx, Bounds* damage) {
         dmg = Intersect(acc, whole);
     }
 
-    static int logged = 0;
-    if (!identical && gHavePrev && logged < 8) {
-        logged++;
-        logf(
-            "scene: changed %d of %d prims, damage %.0fx%.0f at %.0f,%.0f "
-            "(view %.0fx%.0f)",
-            changed, gCur.len, dmg.w, dmg.h, dmg.x, dmg.y, whole.w, whole.h);
-    }
-
     bool skip = identical && SceneLevelOn() >= kSceneSkip;
     gSkipPresent = skip;
     if (identical) {
@@ -13984,6 +13995,8 @@ void Replay(PaintCtx* ctx, const Bounds* damage) {
                 }
                 break;
             }
+            default:
+                break;
         }
     }
     if (pushed) {
@@ -14536,7 +14549,7 @@ static float AttrF(Str tag, const char* name, float def) {
     if (!GetAttr(tag, name, buf, 64)) {
         return def;
     }
-    return (float)atof(buf);
+    return StrToFloatUnchecked(Str(buf));
 }
 
 static bool ParseSvgColor(Str s, Rgba* out) {
@@ -14796,13 +14809,13 @@ static SvgCtx RefineCtx(const SvgIcon* ic, const SvgCtx& outer, Str tag) {
     }
     char buf[64];
     if (GetAttr(tag, "font-size", buf, 64)) {
-        float v = (float)atof(buf);
+        float v = StrToFloatUnchecked(Str(buf));
         if (v > 0) {
             cur.fontSize = v;
         }
     }
     if (GetAttr(tag, "font-weight", buf, 64)) {
-        cur.bold = StrEqI(Str(buf), "bold") || atoi(buf) >= 600;
+        cur.bold = StrEqI(Str(buf), "bold") || StrToIntUnchecked(Str(buf)) >= 600;
     }
     if (GetAttr(tag, "text-anchor", buf, 64)) {
         Str v(buf);
@@ -14818,14 +14831,14 @@ static SvgCtx RefineCtx(const SvgIcon* ic, const SvgCtx& outer, Str tag) {
         }
     }
     if (GetAttr(tag, "fill-opacity", buf, 64)) {
-        float o = (float)atof(buf);
+        float o = StrToFloatUnchecked(Str(buf));
         if (o < 0) {
             o = 0;
         }
         if (o > 1) {
             o = 1;
         }
-        cur.fill.a = (uint8_t)(o * 255.f + 0.5f);
+        cur.fill.a = (uint8_t)lroundf(o * 255.f);
         cur.hasFill = cur.hasFill || o < 1.f;
     }
     if (GetAttrStr(tag, "filter", &tr)) {
@@ -14833,13 +14846,13 @@ static SvgCtx RefineCtx(const SvgIcon* ic, const SvgCtx& outer, Str tag) {
     }
 
     if (GetAttr(tag, "x", buf, 64)) {
-        cur.x = (float)atof(buf);
+        cur.x = StrToFloatUnchecked(Str(buf));
     }
     if (GetAttr(tag, "y", buf, 64)) {
-        cur.y = (float)atof(buf);
+        cur.y = StrToFloatUnchecked(Str(buf));
     }
     if (GetAttr(tag, "textLength", buf, 64)) {
-        cur.textLength = (float)atof(buf);
+        cur.textLength = StrToFloatUnchecked(Str(buf));
     }
     return cur;
 }
@@ -14991,14 +15004,14 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
                     ParseSvgColor(Str(sc), &c)) {
 
                     if (GetAttr(tag, "stop-opacity", sc, 64)) {
-                        float o = (float)atof(sc);
+                        float o = StrToFloatUnchecked(Str(sc));
                         if (o < 0) {
                             o = 0;
                         }
                         if (o > 1) {
                             o = 1;
                         }
-                        c.a = (uint8_t)(o * 255.f + 0.5f);
+                        c.a = (uint8_t)lroundf(o * 255.f);
                     }
                     ic->gradients[gradIx].color = c;
                     ic->gradients[gradIx].hasColor = true;
@@ -15646,13 +15659,13 @@ static void FrameBenchTick(Window* win, float secs) {
         char buf[16] = {};
 #if GPUI_OS_WINDOWS
         DWORD n = GetEnvironmentVariableA("GPUI_FRAME_BENCH", buf, sizeof(buf));
-        want = (n > 0 && n < sizeof(buf)) ? atoi(buf) : 0;
+        want = (n > 0 && n < sizeof(buf)) ? StrToIntUnchecked(Str(buf)) : 0;
 #else
         const char* e = getenv("GPUI_FRAME_BENCH");
         if (e) {
             StrCopyZ(buf, (int)sizeof(buf), e);
         }
-        want = buf[0] ? atoi(buf) : 0;
+        want = buf[0] ? StrToIntUnchecked(Str(buf)) : 0;
 #endif
         if (want > 0) {
 
@@ -15694,7 +15707,7 @@ static void FrameBenchTick(Window* win, float secs) {
     logf(
         "frame-bench n=%d mean=%.3fms median=%.3fms p95=%.3fms min=%.3fms "
         "max=%.3fms",
-        n, sum / n, samples[n / 2], samples[(int)(n * 0.95f)], samples[0],
+        n, sum / n, samples[n / 2], samples[(int)((float)n * 0.95f)], samples[0],
         samples[n - 1]);
     double sb = 0, sl = 0, sp = 0;
     for (int i = 0; i < n; i++) {
@@ -17644,7 +17657,7 @@ int WindowTimerMs(Window* win) {
     if (soonest < 0) {
         return 0;
     }
-    int ms = (int)((soonest - now) * 1000.0 + 0.5);
+    int ms = (int)lround((soonest - now) * 1000.0);
     return ms > 0 ? ms : 1;
 }
 
@@ -17878,6 +17891,11 @@ int GpuiTakeRuntimeArgs(int argc, char** argv) {
     for (int i = 0; i < argc; i++) {
         const char* a = argv[i];
         size_t kGeomLen = strlen(kGeom);
+#if GPUI_OS_WINDOWS
+        if (i > 0 && a && WinPaintOptionsTakeArg(Str(a))) {
+            continue;
+        }
+#endif
         if (i > 0 && a && strcmp(a, "-gpui-inspector") == 0) {
             gInspectorAsked = true;
             continue;
@@ -17901,11 +17919,11 @@ int GpuiTakeRuntimeArgs(int argc, char** argv) {
 }
 
 void WindowClampToDisplay(int* dipW, int* dipH, int screenW, int screenH) {
-    if (screenW > 0 && *dipW > (int)(screenW * 0.85f)) {
-        *dipW = (int)(screenW * 0.85f);
+    if (screenW > 0 && *dipW > (int)((float)screenW * 0.85f)) {
+        *dipW = (int)((float)screenW * 0.85f);
     }
-    if (screenH > 0 && *dipH > (int)(screenH * 0.85f)) {
-        *dipH = (int)(screenH * 0.85f);
+    if (screenH > 0 && *dipH > (int)((float)screenH * 0.85f)) {
+        *dipH = (int)((float)screenH * 0.85f);
     }
 }
 
@@ -19601,6 +19619,8 @@ SliderState* HslaSliders::At(int index) {
             return &lightness;
         case 3:
             return &alpha;
+        default:
+            break;
     }
     return nullptr;
 }
@@ -20871,7 +20891,11 @@ static int DateCompare(LocalDate a, LocalDate b) {
 }
 
 intptr_t DatePickerDateKey(LocalDate date) {
-    return (intptr_t)(date.year * 10000 + date.month * 100 + date.day);
+    intptr_t key = date.year;
+    intptr_t month = date.month;
+    intptr_t day = date.day;
+    key = key * 10000 + month * 100 + day;
+    return key;
 }
 
 LocalDate DatePickerDateFromKey(intptr_t key) {
@@ -23666,12 +23690,10 @@ static bool DockNormalizePass(DockState* s) {
             DockNode& n = s->nodes[i];
 
             int clamped = n.activeIx;
-            if (n.panel.len == 0) {
+            if (n.panel.len == 0 || clamped < 0) {
                 clamped = 0;
             } else if (clamped >= n.panel.len) {
                 clamped = n.panel.len - 1;
-            } else if (clamped < 0) {
-                clamped = 0;
             }
             if (clamped != n.activeIx) {
                 n.activeIx = clamped;
@@ -26765,7 +26787,7 @@ El* Textarea::New(Ctx* cx, InputState* state,
     }
     float numW = 0;
     if (lineNumbers) {
-        numW = 12.f + 7.f * (rows >= 100 ? 3 : (rows >= 10 ? 2 : 1));
+        numW = 12.f + 7.f * (float)(rows >= 100 ? 3 : (rows >= 10 ? 2 : 1));
     }
 
     bool folding = lineNumbers && LayoutModeIsFolding(state->mode);
@@ -27863,9 +27885,8 @@ void InputScrollToCaret(InputState* s, float caretX, float caretY,
             s->scrollY = caretY + lineH + lineH - s->viewH;
         }
 
-        if (dir == InputMoveDir::Up && s->scrollY > wasY) {
-            s->scrollY = wasY;
-        } else if (dir == InputMoveDir::Down && s->scrollY < wasY) {
+        if ((dir == InputMoveDir::Up && s->scrollY > wasY) ||
+            (dir == InputMoveDir::Down && s->scrollY < wasY)) {
             s->scrollY = wasY;
         }
         float mostY = s->contentH - s->viewH;
@@ -28056,7 +28077,7 @@ static Str NormalizeInput(Arena* a, const InputState* s, Str newText) {
     if (!hasBreak) {
         return out;
     }
-    char* buf = (char*)Alloc(a, (size_t)out.len + 1);
+    char* buf = (char*)Alloc(a, out.len + 1);
     int n = 0;
     for (int i = 0; i < out.len; i++) {
         if (out.s[i] != '\n' && out.s[i] != '\r') {
@@ -38070,7 +38091,7 @@ float TileRoundToGrid(float v, float grid) {
     }
     float t = v / grid;
 
-    float r = t >= 0 ? (float)(int)(t + 0.5f) : -(float)(int)(-t + 0.5f);
+    float r = (float)lroundf(t);
     return r * grid;
 }
 
@@ -40153,7 +40174,8 @@ El* VirtualList::New(Ctx* cx, Str id, const VirtualListOpts& o) {
     if (o.range && visibleCount > 0) {
         rangeRows = (El**)Alloc(a, (int)(sizeof(El*) * (size_t)visibleCount));
         if (rangeRows) {
-            memset(rangeRows, 0, sizeof(El*) * (size_t)visibleCount);
+            memset(static_cast<void*>(rangeRows), 0,
+                   sizeof(El*) * (size_t)visibleCount);
             o.range(o.user, cx, frame.visible.first, frame.visible.end,
                     rangeRows);
         }
@@ -40879,8 +40901,9 @@ El* AvatarGroup::IntoEl() {
     float step = sz - sz * 0.3f;
     int shown = avatars.len < limit ? avatars.len : limit;
     bool more = ellipsis && avatars.len > limit;
-    float chipLeft = shown * step + 4;
-    float w = more ? chipLeft + sz : sz + (shown > 0 ? (shown - 1) * step : 0);
+    float chipLeft = (float)shown * step + 4;
+    float w = more ? chipLeft + sz
+                   : sz + (shown > 0 ? (float)(shown - 1) * step : 0);
     El* box = Div(a)->H(sz)->W(w);
 
     if (more) {
@@ -40894,7 +40917,7 @@ El* AvatarGroup::IntoEl() {
     }
     for (int i = shown - 1; i >= 0; i--) {
         box->Child(
-            avatars[i]->WithSize(size)->IntoEl()->Absolute()->Left(i * step));
+            avatars[i]->WithSize(size)->IntoEl()->Absolute()->Left((float)i * step));
     }
     return box;
 }
@@ -45799,7 +45822,6 @@ static void ApplyDialogButtonVariant(Button* button, ButtonVariant variant) {
             break;
         case ButtonVariant::Custom:
 
-            break;
         case ButtonVariant::Default:
             break;
     }
@@ -46269,7 +46291,7 @@ El* Dialog::IntoEl(WinSize size) {
                     ->H(viewH)
                     ->FlexCol()
                     ->ItemsCenter()
-                    ->PadT((viewH * 0.1f + layerIx * 16.f) * delta)
+                     ->PadT((viewH * 0.1f + (float)layerIx * 16.f) * delta)
                     ->Child(panel);
     Str trap = StrDup(a, fmt("dialog-%d", layerIx));
 
@@ -48797,7 +48819,9 @@ Str HtmlAttrValue(Arena* a, Str attrs, const char* name) {
 
 static bool HtmlBlockKind(Str n, MdKind* kind, uint8_t* level) {
     *level = 0;
-    if (base::StrEqI(n, "p")) {
+    if (base::StrEqI(n, "p") || base::StrEqI(n, "dt") ||
+        base::StrEqI(n, "dd") || base::StrEqI(n, "summary") ||
+        base::StrEqI(n, "figcaption")) {
         *kind = MdKind::Paragraph;
     } else if (n.len == 2 && base::StrStartsWithI(n, "h") &&
                n.s[1] >= '1' && n.s[1] <= '6') {
@@ -48817,10 +48841,6 @@ static bool HtmlBlockKind(Str n, MdKind* kind, uint8_t* level) {
         *kind = MdKind::Row;
     } else if (base::StrEqI(n, "td") || base::StrEqI(n, "th")) {
         *kind = MdKind::Cell;
-    } else if (base::StrEqI(n, "dt") || base::StrEqI(n, "dd") ||
-               base::StrEqI(n, "summary") || base::StrEqI(n, "figcaption")) {
-
-        *kind = MdKind::Paragraph;
     } else if (base::StrEqI(n, "div") || base::StrEqI(n, "section") ||
                base::StrEqI(n, "article") || base::StrEqI(n, "main") ||
                base::StrEqI(n, "header") || base::StrEqI(n, "footer") ||
@@ -51703,7 +51723,10 @@ static Str LabelMasked(Arena* a, Str text) {
     static const char bullet[] = "\xe2\x80\xa2";
     for (int i = 0; i < chars; i++) {
 
-        memcpy(out + i * 3, bullet, 3);
+        char* dst = out + (size_t)i * 3;
+        dst[0] = bullet[0];
+        dst[1] = bullet[1];
+        dst[2] = bullet[2];
     }
     return Str(out, chars * 3);
 }
@@ -54787,7 +54810,7 @@ int ScaleBand::LeastIndex(float tick) const {
     if (step == 0) {
         return 0;
     }
-    int index = (int)((tick - outer) / step + 0.5f);
+    int index = (int)lroundf((tick - outer) / step);
     if (index < 0) {
         index = 0;
     }
@@ -57995,8 +58018,6 @@ void SearchableListState::OnAction(SearchableListState* self, Ctx* cx,
     }
     switch (SelectActionOf(ev->action, self->open, false)) {
         case SelectAction::Open:
-            SelectToggleOpen(self, cx);
-            return;
         case SelectAction::Dismiss:
             SelectToggleOpen(self, cx);
             return;
@@ -59461,8 +59482,8 @@ El* Settings::IntoEl() {
             }
             sub->Child(TextEl(a, group.title)->Font(16)->Fg(th.foreground));
             BindClick(sub, StrDup(a, fmt("group-%d-%d", i, g)),
-                      ListenTo(state, &SettingsState::OnGroupClick,
-                               (intptr_t)(i * 64 + g)));
+                       ListenTo(state, &SettingsState::OnGroupClick,
+                                (intptr_t)i * 64 + (intptr_t)g));
             side->Child(sub);
         }
     }
@@ -64394,7 +64415,7 @@ void TextViewState::SetText(Str value, App* app, Window* window) {
 void TextViewState::PushStr(Str value, App* app, Window* window) {
     if (value.len <= 0) return;
     int oldLen = text.len;
-    char* joined = (char*)Alloc(nullptr, (size_t)oldLen + value.len + 1);
+    char* joined = (char*)Alloc(nullptr, oldLen + value.len + 1);
     if (!joined) return;
     if (oldLen > 0) memcpy(joined, text.s, (size_t)oldLen);
     memcpy(joined + oldLen, value.s, (size_t)value.len);
@@ -64881,7 +64902,6 @@ static void MdBlockNode(MdBuild* b, const md::Node* n) {
         }
         case md::NodeKind::Definition:
 
-            break;
         default:
             break;
     }
@@ -65947,7 +65967,7 @@ El* TextView::ScrollTable(MdNode* n) {
 }
 
 El* TextView::Table(MdNode* n) {
-    enum {
+    enum : uint8_t {
 
         kMaxLen = 150
     };
@@ -67937,7 +67957,7 @@ static bool ui_theme_ParseHex(Str s, Rgba* out) {
         }
     } else {
         for (int i = 0; i < n / 2; i++) {
-            v[i] = d[i * 2] * 16 + d[i * 2 + 1];
+            v[i] = d[(size_t)i * 2] * 16 + d[(size_t)i * 2 + 1];
         }
     }
     *out = Rgba8((uint8_t)v[0], (uint8_t)v[1], (uint8_t)v[2], (uint8_t)v[3]);
@@ -68404,7 +68424,7 @@ static Rgba ClampAlpha(Rgba c, float max) {
 }
 
 static void ClampToken(Rgba* flat, Background* tok, bool raw, float max) {
-    float a = tok->color.a / 255.f;
+    float a = (float)tok->color.a / 255.f;
     float target = a < max ? a : max;
     Background b = raw ? BackgroundClampAlpha(*tok, max)
                        : BackgroundOpacity(*tok, a > 0 ? target / a : 1.f);
@@ -69868,7 +69888,8 @@ static El* ThemedCalendarItem(void* user, Ctx* cx, El* item,
 El* Calendar::IntoEl() {
     const Theme& th = ThemeNow(cx->app);
 
-    float width = (CalendarWidth(size) - (bare ? 24.f : 0.f)) * numberOfMonths;
+    float width = (CalendarWidth(size) - (bare ? 24.f : 0.f)) *
+                  (float)numberOfMonths;
 
     if (state.IsValid()) {
         gpui::Calendar* calendar =
@@ -72466,7 +72487,7 @@ static void StartResourceSampling(FpsMonitor* self, Ctx* cx) {
     if (!self->showResources || self->resourceTimer || !cx->win) {
         return;
     }
-    int ms = (int)(self->resourceInterval * 1000.f + 0.5f);
+    int ms = (int)lroundf(self->resourceInterval * 1000.f);
 
     if (ms < 200) {
         ms = 200;
@@ -81724,9 +81745,8 @@ static int32_t PeekBytesEmailDomain(Str bytes, int32_t start, bool xmpp) {
     bool dot = false;
     while (index < bytes.len) {
         uint8_t byte = (uint8_t)bytes.s[index];
-        if (byte == '-' || byte == '_' || IsAsciiAlphanumeric(byte)) {
-
-        } else if (byte == '/' && xmpp) {
+        if (byte == '-' || byte == '_' || IsAsciiAlphanumeric(byte) ||
+            (byte == '/' && xmpp)) {
 
         } else if (byte == '.' && index + 1 < bytes.len &&
                    IsAsciiAlphanumeric((uint8_t)bytes.s[index + 1])) {
@@ -84142,10 +84162,8 @@ State TextBefore(Tokenizer* t) {
             TokenizerAttempt(t, StateNext(StateName::TextBefore),
                              StateNext(StateName::TextBeforeData));
             return StateRetry(StateName::LabelEndStart);
-        case '{':
-
-            return StateRetry(StateName::TextBeforeData);
         default:
+
             return StateRetry(StateName::TextBeforeData);
     }
 }
@@ -85107,11 +85125,11 @@ ArenaAlign ArenaAlignNew(Arena* a, int32_t count) {
     int32_t head = base::VarintSize((uint32_t)count);
     int32_t bytes = (count + 3) / 4;
 
-    char* mem = (char*)a->Push((uint64_t)(head + bytes), 1, false);
+    char* mem = (char*)a->Push((uint64_t)head + (uint64_t)bytes, 1, false);
     if (!mem) {
         return kArenaAlignNone;
     }
-    memset(mem, 0, (size_t)(head + bytes));
+    memset(mem, 0, (size_t)head + (size_t)bytes);
     base::VarintPut(mem, (uint32_t)count);
     return (ArenaAlign)base::ArenaOffsetOf(a, mem);
 }
@@ -88172,11 +88190,14 @@ static bool RoleNameMatches(Str snake, const char* variantName) {
     for (int i = 0; variantName[i]; i++) {
         char ch = variantName[i];
         if (ch >= 'A' && ch <= 'Z') {
-            if (i > 0 && (at >= snake.len || snake.s[at++] != '_'))
-                return false;
+            if (i > 0) {
+                if (at >= snake.len || snake.s[at] != '_') return false;
+                at++;
+            }
             ch = (char)(ch - 'A' + 'a');
         }
-        if (at >= snake.len || snake.s[at++] != ch) return false;
+        if (at >= snake.len || snake.s[at] != ch) return false;
+        at++;
     }
     return at == snake.len;
 }
@@ -90502,6 +90523,12 @@ static float PresetNumber(Str name, Str prefix, bool* found) {
     return value;
 }
 
+static bool PresetNumberIs(Str name, Str prefix, float* value) {
+    bool found = false;
+    *value = PresetNumber(name, prefix, &found);
+    return found;
+}
+
 static bool ApplyNullary(El* element, Str name) {
     if (StrEq(name, "flex")) element->Flex();
     else if (StrEq(name, "flex_row")) element->FlexRow();
@@ -90564,24 +90591,24 @@ static bool ApplyNullary(El* element, Str name) {
         bool found = false;
         float n = PresetNumber(name, StrL("gap_"), &found);
         if (found) element->Gap(n * 4);
-        else if ((n = PresetNumber(name, StrL("gap_x_"), &found)), found) element->GapX(n * 4);
-        else if ((n = PresetNumber(name, StrL("gap_y_"), &found)), found) element->GapY(n * 4);
-        else if ((n = PresetNumber(name, StrL("p_"), &found)), found) element->Pad(n * 4);
-        else if ((n = PresetNumber(name, StrL("px_"), &found)), found) element->PadX(n * 4);
-        else if ((n = PresetNumber(name, StrL("py_"), &found)), found) element->PadY(n * 4);
-        else if ((n = PresetNumber(name, StrL("pt_"), &found)), found) element->PadT(n * 4);
-        else if ((n = PresetNumber(name, StrL("pb_"), &found)), found) element->PadB(n * 4);
-        else if ((n = PresetNumber(name, StrL("pl_"), &found)), found) element->PadL(n * 4);
-        else if ((n = PresetNumber(name, StrL("pr_"), &found)), found) element->PadR(n * 4);
-        else if ((n = PresetNumber(name, StrL("m_"), &found)), found) element->Margin(n * 4);
-        else if ((n = PresetNumber(name, StrL("mx_"), &found)), found) element->MarginX(n * 4);
-        else if ((n = PresetNumber(name, StrL("my_"), &found)), found) element->MarginY(n * 4);
-        else if ((n = PresetNumber(name, StrL("mt_"), &found)), found) element->MarginT(n * 4);
-        else if ((n = PresetNumber(name, StrL("mb_"), &found)), found) element->MarginB(n * 4);
-        else if ((n = PresetNumber(name, StrL("ml_"), &found)), found) element->MarginL(n * 4);
-        else if ((n = PresetNumber(name, StrL("mr_"), &found)), found) element->MarginR(n * 4);
-        else if ((n = PresetNumber(name, StrL("rounded_"), &found)), found) element->Radius(n * 4);
-        else if ((n = PresetNumber(name, StrL("border_"), &found)), found) element->style.border = n;
+        else if (PresetNumberIs(name, StrL("gap_x_"), &n)) element->GapX(n * 4);
+        else if (PresetNumberIs(name, StrL("gap_y_"), &n)) element->GapY(n * 4);
+        else if (PresetNumberIs(name, StrL("p_"), &n)) element->Pad(n * 4);
+        else if (PresetNumberIs(name, StrL("px_"), &n)) element->PadX(n * 4);
+        else if (PresetNumberIs(name, StrL("py_"), &n)) element->PadY(n * 4);
+        else if (PresetNumberIs(name, StrL("pt_"), &n)) element->PadT(n * 4);
+        else if (PresetNumberIs(name, StrL("pb_"), &n)) element->PadB(n * 4);
+        else if (PresetNumberIs(name, StrL("pl_"), &n)) element->PadL(n * 4);
+        else if (PresetNumberIs(name, StrL("pr_"), &n)) element->PadR(n * 4);
+        else if (PresetNumberIs(name, StrL("m_"), &n)) element->Margin(n * 4);
+        else if (PresetNumberIs(name, StrL("mx_"), &n)) element->MarginX(n * 4);
+        else if (PresetNumberIs(name, StrL("my_"), &n)) element->MarginY(n * 4);
+        else if (PresetNumberIs(name, StrL("mt_"), &n)) element->MarginT(n * 4);
+        else if (PresetNumberIs(name, StrL("mb_"), &n)) element->MarginB(n * 4);
+        else if (PresetNumberIs(name, StrL("ml_"), &n)) element->MarginL(n * 4);
+        else if (PresetNumberIs(name, StrL("mr_"), &n)) element->MarginR(n * 4);
+        else if (PresetNumberIs(name, StrL("rounded_"), &n)) element->Radius(n * 4);
+        else if (PresetNumberIs(name, StrL("border_"), &n)) element->style.border = n;
         else return false;
     }
     return true;
@@ -90996,17 +91023,13 @@ static bool MotionTarget(const shell::SpecNode* node, const char* property,
                          const Style& style, float* target) {
     bool declared = false;
     for (const shell::SpecOp& op : node->ops) {
-        if (strcmp(property, "opacity") == 0 && StrEq(op.name, "opacity"))
-            declared = true;
-        else if (strcmp(property, "width") == 0 &&
-                 (StrEq(op.name, "w") || StrEq(op.name, "size")))
-            declared = true;
-        else if (strcmp(property, "height") == 0 &&
-                 (StrEq(op.name, "h") || StrEq(op.name, "size")))
-            declared = true;
-        else if (strcmp(property, "left") == 0 && StrEq(op.name, "left"))
-            declared = true;
-        else if (strcmp(property, "top") == 0 && StrEq(op.name, "top"))
+        if ((strcmp(property, "opacity") == 0 && StrEq(op.name, "opacity")) ||
+            (strcmp(property, "width") == 0 &&
+             (StrEq(op.name, "w") || StrEq(op.name, "size"))) ||
+            (strcmp(property, "height") == 0 &&
+             (StrEq(op.name, "h") || StrEq(op.name, "size"))) ||
+            (strcmp(property, "left") == 0 && StrEq(op.name, "left")) ||
+            (strcmp(property, "top") == 0 && StrEq(op.name, "top")))
             declared = true;
     }
     if (!declared) return false;
@@ -92137,8 +92160,10 @@ static bool ParseSemver(Str value, int* major, int* minor, int* patch) {
             number = number * 10 + value.s[at++] - '0';
         }
         parts[part] = number;
-        if (part < 2 && (at >= value.len || value.s[at++] != '.'))
-            return false;
+        if (part < 2) {
+            if (at >= value.len || value.s[at] != '.') return false;
+            at++;
+        }
     }
     if (at < value.len) {
         if (value.s[at] != '-' && value.s[at] != '+') return false;
@@ -96999,7 +97024,7 @@ static JSValue NativeVirtualList(JSContext* ctx, JSValueConst, int argc,
 static uint8_t ShellThemeByte(float value) {
     if (value <= 0) return 0;
     if (value >= 1) return 255;
-    return (uint8_t)floorf(value * 255.f + 0.5f);
+    return (uint8_t)lroundf(value * 255.f);
 }
 
 static Rgba ShellThemeRgba(Hsla color) {
@@ -98539,14 +98564,16 @@ static JSValue NativeFs(JSContext* ctx, JSValueConst, int argc,
                           "recursive", "fs.mkdir(path, options)",
                           &job->recursive);
     } else if (operation == shell::FsOperation::Write) {
-        if (argc < 2) {
+        if (argc < 2 ||
+            (!JS_IsString(argv[1]) &&
+             JS_GetTypedArrayType(argv[1]) != JS_TYPED_ARRAY_UINT8)) {
             JS_ThrowTypeError(ctx, "fs.writeFile(path, contents) expects a string or Uint8Array");
             ok = false;
         } else if (JS_IsString(argv[1])) {
             Str input;
             ok = JsString(ctx, argv[1], arena, &input);
             if (ok) job->input = StrDup(input);
-        } else if (JS_GetTypedArrayType(argv[1]) == JS_TYPED_ARRAY_UINT8) {
+        } else {
             size_t count = 0;
             uint8_t* bytes = JS_GetUint8Array(ctx, &count, argv[1]);
             ok = bytes != nullptr || count == 0;
@@ -98556,9 +98583,6 @@ static JSValue NativeFs(JSContext* ctx, JSValueConst, int argc,
                 JS_ThrowRangeError(ctx, "fs.writeFile contents are too large");
                 ok = false;
             }
-        } else {
-            JS_ThrowTypeError(ctx, "fs.writeFile(path, contents) expects a string or Uint8Array");
-            ok = false;
         }
         if (ok && job->input.len > shell::kFsMaxWriteBytes) {
             JS_ThrowRangeError(ctx, "fs.writeFile contents exceed the 8388608-byte write limit");
@@ -99966,8 +99990,8 @@ ShellRuntime* ShellRuntime::New(App*, ShellError* error) {
         runtime->Release();
         return nullptr;
     }
-    JS_SetMemoryLimit(runtime->impl->jsRuntime, 256u * 1024u * 1024u);
-    JS_SetMaxStackSize(runtime->impl->jsRuntime, 1024u * 1024u);
+    JS_SetMemoryLimit(runtime->impl->jsRuntime, (size_t)256 * 1024 * 1024);
+    JS_SetMaxStackSize(runtime->impl->jsRuntime, (size_t)1024 * 1024);
     JS_SetInterruptHandler(runtime->impl->jsRuntime, Interrupt, runtime->impl);
     JS_SetModuleLoaderFunc(runtime->impl->jsRuntime, ModuleNormalize, ModuleLoad,
                            runtime->impl);
@@ -101579,7 +101603,7 @@ static void Sha256Block(uint32_t state[8], const uint8_t block[64]) {
         0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     };
     uint32_t words[64];
-    for (int i = 0; i < 16; i++) words[i] = ReadBig32(block + i * 4);
+    for (int i = 0; i < 16; i++) words[i] = ReadBig32(block + (size_t)i * 4);
     for (int i = 16; i < 64; i++) {
         uint32_t a = words[i - 15];
         uint32_t b = words[i - 2];
@@ -101635,7 +101659,7 @@ void Sha256(Str data, uint8_t digest[32]) {
     }
     Sha256Block(state, tail);
     if (blocks == 2) Sha256Block(state, tail + 64);
-    for (int i = 0; i < 8; i++) WriteBig32(digest + i * 4, state[i]);
+    for (int i = 0; i < 8; i++) WriteBig32(digest + (size_t)i * 4, state[i]);
 }
 
 static void StandardError(Str* error, Str message) {
@@ -101985,10 +102009,10 @@ bool ZlibInflate(Str input, bool gzip, Str* output, Str* error) {
             start += 2 + extra;
         }
         if (flags & 8) {
-            while (start < input.len - 8 && bytes[start++] != 0) {}
+            while (start < input.len - 8 && bytes[start] != 0) start++;
         }
         if (flags & 16) {
-            while (start < input.len - 8 && bytes[start++] != 0) {}
+            while (start < input.len - 8 && bytes[start] != 0) start++;
         }
         if (flags & 2) start += 2;
         trailer = 8;
@@ -128105,9 +128129,7 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
             UnwrapOr(endMain, 0.0f) - MainEnd(resolvedMargin, c.dir);
         float offsetMain;
         if (IsSome(startMain) || IsSome(endMain)) {
-            if (mainIsRtl && IsSome(endMain)) {
-                offsetMain = alignedToMainEnd;
-            } else if (IsSome(startMain)) {
+            if (IsSome(startMain) && !(mainIsRtl && IsSome(endMain))) {
                 offsetMain = startMain + MainStart(c.border, c.dir) +
                              mainStartScrollbarOffset +
                              MainStart(resolvedMargin, c.dir);
@@ -128133,8 +128155,6 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
                                                  : true;
             switch (jc) {
                 case AlignContentKeyword::SpaceBetween:
-                    offsetMain = rev ? endPos : startPos;
-                    break;
                 case AlignContentKeyword::Stretch:
                 case AlignContentKeyword::FlexStart:
                     offsetMain = rev ? endPos : startPos;
@@ -128164,9 +128184,7 @@ SizeF PerformAbsoluteLayoutOnAbsoluteChildren(TaffyTree* tree, NodeId node,
             UnwrapOr(endCross, 0.0f) - CrossEnd(resolvedMargin, c.dir);
         float offsetCross;
         if (IsSome(startCross) || IsSome(endCross)) {
-            if (crossIsRtl && IsSome(endCross)) {
-                offsetCross = alignedToCrossEnd;
-            } else if (IsSome(startCross)) {
+            if (IsSome(startCross) && !(crossIsRtl && IsSome(endCross))) {
                 offsetCross = startCross + CrossStart(c.border, c.dir) +
                               crossStartScrollbarOffset +
                               CrossStart(resolvedMargin, c.dir);
@@ -128664,7 +128682,7 @@ struct CellOccupancyMatrix {
         if (!p) {
             return;
         }
-        memset(p, 0, (size_t)(newRowCount * newColCount));
+        memset(p, 0, (size_t)newRowCount * (size_t)newColCount);
         for (int row = 0; row < oldRowCount; row++) {
             for (int col = 0; col < oldColCount; col++) {
                 p[(row + reqNegRows) * newColCount + (col + reqNegCols)] =
@@ -135210,9 +135228,8 @@ HRESULT WinAccessibility::GetPropertyValue(PROPERTYID property, VARIANT* out) {
         out->bstrVal = value;
     } else if (property == UIA_IsControlElementPropertyId ||
                property == UIA_IsContentElementPropertyId ||
-               property == UIA_IsEnabledPropertyId) {
-        VariantBool(out, true);
-    } else if (property == UIA_IsKeyboardFocusablePropertyId) {
+               property == UIA_IsEnabledPropertyId ||
+               property == UIA_IsKeyboardFocusablePropertyId) {
         VariantBool(out, true);
     } else if (property == UIA_HasKeyboardFocusPropertyId) {
         VariantBool(out, ::GetFocus() == hwnd);
@@ -135552,8 +135569,8 @@ HRESULT WinAccessibilityNode::GetPropertyValue(PROPERTYID property,
         RECT client = {};
         GetClientRect(root->hwnd, &client);
         bool off = node->bounds.Right() <= 0 || node->bounds.Bottom() <= 0 ||
-                   node->bounds.x >= client.right ||
-                   node->bounds.y >= client.bottom;
+                   node->bounds.x >= (float)client.right ||
+                   node->bounds.y >= (float)client.bottom;
         VariantBool(out, off);
     }
     return S_OK;
@@ -135655,8 +135672,8 @@ HRESULT WinAccessibilityNode::get_BoundingRectangle(UiaRect* out) {
     }
     POINT origin = {};
     ClientToScreen(root->hwnd, &origin);
-    out->left = origin.x + node->bounds.x;
-    out->top = origin.y + node->bounds.y;
+    out->left = (float)origin.x + node->bounds.x;
+    out->top = (float)origin.y + node->bounds.y;
     out->width = node->bounds.w;
     out->height = node->bounds.h;
     return S_OK;
@@ -139327,8 +139344,86 @@ int TextLayoutRangeRects(TextLayout* tl, Str s, int u8a, int u8b, Bounds* out,
 
 namespace gpui {
 
+static WinPaintOptions gWinPaintOptions = {
+#if WIN_BACKEND_D3D11 && !WIN_BACKEND_ALL
+    WinPaintBackend::D3D11,
+#elif WIN_BACKEND_D3D12 && !WIN_BACKEND_ALL
+    WinPaintBackend::D3D12,
+#else
+    WinPaintBackend::Direct2D,
+#endif
+    WinPaintMsaa::X4,
+    WinSceneMode::Skip,
+};
+
+const WinPaintOptions& WinPaintOptionsGet() {
+    return gWinPaintOptions;
+}
+
+static bool WinPaintBackendAvailable(WinPaintBackend backend) {
+    return (backend == WinPaintBackend::Direct2D && WIN_BACKEND_DIRECT2D) ||
+           (backend == WinPaintBackend::D3D11 && WIN_BACKEND_D3D11) ||
+           (backend == WinPaintBackend::D3D12 && WIN_BACKEND_D3D12);
+}
+
+bool WinPaintOptionsTakeArg(Str arg) {
+    const Str paint = StrL("__paint=");
+    if (base::StrStartsWith(arg, paint)) {
+        Str value(arg.s + paint.len, arg.len - paint.len);
+        WinPaintBackend backend = WinPaintBackend::Direct2D;
+        bool valid = true;
+        if (base::StrEqI(value, "d2d")) {
+            backend = WinPaintBackend::Direct2D;
+        } else if (base::StrEqI(value, "d3d11")) {
+            backend = WinPaintBackend::D3D11;
+        } else if (base::StrEqI(value, "d3d12")) {
+            backend = WinPaintBackend::D3D12;
+        } else {
+            valid = false;
+        }
+        if (valid && WinPaintBackendAvailable(backend)) {
+            gWinPaintOptions.backend = backend;
+        }
+        return true;
+    }
+
+    const Str msaa = StrL("__msaa=");
+    if (base::StrStartsWith(arg, msaa)) {
+        Str value(arg.s + msaa.len, arg.len - msaa.len);
+        if (base::StrEq(value, "1")) {
+            gWinPaintOptions.msaa = WinPaintMsaa::X1;
+        } else if (base::StrEq(value, "2")) {
+            gWinPaintOptions.msaa = WinPaintMsaa::X2;
+        } else if (base::StrEq(value, "4")) {
+            gWinPaintOptions.msaa = WinPaintMsaa::X4;
+        } else if (base::StrEq(value, "8")) {
+            gWinPaintOptions.msaa = WinPaintMsaa::X8;
+        }
+        return true;
+    }
+
+    const Str scene = StrL("__scene=");
+    if (!base::StrStartsWith(arg, scene)) {
+        return false;
+    }
+    Str value(arg.s + scene.len, arg.len - scene.len);
+    if (base::StrEqI(value, "off")) {
+        gWinPaintOptions.scene = WinSceneMode::Off;
+    } else if (base::StrEqI(value, "replay")) {
+        gWinPaintOptions.scene = WinSceneMode::Replay;
+    } else if (base::StrEqI(value, "cache")) {
+        gWinPaintOptions.scene = WinSceneMode::Cache;
+    } else if (base::StrEqI(value, "skip")) {
+        gWinPaintOptions.scene = WinSceneMode::Skip;
+    } else if (base::StrEqI(value, "damage")) {
+        gWinPaintOptions.scene = WinSceneMode::Damage;
+    }
+    return true;
+}
+
 static inline D2D1_COLOR_F ToD2D(Rgba c) {
-    return D2D1::ColorF(c.r / 255.f, c.g / 255.f, c.b / 255.f, c.a / 255.f);
+    return D2D1::ColorF((float)c.r / 255.f, (float)c.g / 255.f,
+                        (float)c.b / 255.f, (float)c.a / 255.f);
 }
 
 template <typename T>
@@ -139380,13 +139475,17 @@ static void MakeFontFamily(PaintApp* pa, const wchar_t* family, float px,
 
 PaintApp* PaintAppNew() {
     auto* pa = new PaintApp();
-    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &pa->d2d);
+    HRESULT hr;
+#if WIN_BACKEND_DIRECT2D
+    hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &pa->d2d);
     if (FAILED(hr)) {
         delete pa;
         return nullptr;
     }
+#endif
     hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-                             __uuidof(IDWriteFactory), (IUnknown**)&pa->dwrite);
+                             __uuidof(IDWriteFactory),
+                             (IUnknown**)&pa->dwrite);
     if (FAILED(hr)) {
         gpui_paint_win_Rel(&pa->d2d);
         delete pa;
@@ -139446,7 +139545,8 @@ void PaintTargetFree(PaintCtx* ctx) {
 }
 
 static bool EnsureDevice(PaintApp* pa) {
-    if (pa->d2dDevice) {
+#if WIN_BACKEND_DIRECT2D || WIN_BACKEND_D3D11
+    if (pa->d3d) {
         return true;
     }
     UINT flags =
@@ -139485,6 +139585,7 @@ static bool EnsureDevice(PaintApp* pa) {
         gpui_paint_win_Rel(&pa->d3d);
         return false;
     }
+#if WIN_BACKEND_DIRECT2D
     hr = pa->d2d->CreateDevice(pa->dxgi, &pa->d2dDevice);
     if (FAILED(hr)) {
         logf("ID2D1Factory1::CreateDevice failed %08x", (unsigned)hr);
@@ -139493,7 +139594,12 @@ static bool EnsureDevice(PaintApp* pa) {
         gpui_paint_win_Rel(&pa->d3d);
         return false;
     }
+#endif
     return true;
+#else
+    (void)pa;
+    return false;
+#endif
 }
 
 static bool BindBackBuffer(PaintTarget* t) {
@@ -140531,7 +140637,7 @@ static void ApplyLineHeight(IDWriteTextLayout* layout, float fontSize,
     if (n == 0) {
         return;
     }
-    enum {
+    enum : uint16_t {
         kMaxLines = 256
     };
     if (n > kMaxLines) {
@@ -140764,13 +140870,128 @@ int TextLayoutRangeRects(TextLayout* tl, Str s, int u8a, int u8b, Bounds* out,
 #endif
 
 #if GPUI_OS_WINDOWS
-#line 1 "src/gpui/paintgpu_win.cpp"
+#line 1 "src/gpui/paintgpu_shaders_win.cpp"
+
+#if GPUI_OS_WINDOWS && WIN_BACKEND_GPU
+namespace gpui {
+namespace gpuw {
+
+extern const char kShaderVSQuad95[] = R"GPUI95(
+.Ea8f_/IxQo|.D79qZ{?;cKNw#   Cc( uU    )!  uU" +K !  &6  ]=0 +K"NkAt0! j*    M!  @   Kk!   f&2v:K&&``
+.C   ]+c9TH    #   `   M-  +K$   8       ``'   %   !!  b"    8       `   j*    f"
+.                        U5    $   Ee~lI3Z 0bh2}LuDDvoZO%  A!  +K7   @             ^   (   00%   8
+.       ""  +KA       b"  j*    ##      Ss5v5v!   uu5vT5    ]-  j*    "       U5"       4v5v@!  ``5v5
+.v/   XXo<>dfxOTJn@@C]$MK:<voZ 26v! " 0                             q%  GGiy5$wgoZa/        ,   $   (
+.(!     6v5v5v?   pp5v5v#   88,b2\HRhODvB^|O. KR<O. n[L/3GT SGU $$E%6v                            eE8
+.   LIli(m&fr\hOA@PD5LX5lo00h2u_C:<voZ:0  U5&       B2  U5&   $   Z2  U5&   (   n2  U5&   ,   #3  U5&
+.   0   /3  U5&   4   4   ` ``    # i)                    .n+ 6v]Wf9SE\Iq~x*xPM#<8 TH& <"z+ZRFH(WZrEJ
+.A^Sq59wJ9, |S+QkX  +K    @   eE        ,   @       6vA!  e%        !   "   @   E%( 6v'>ad,B)WS(g8d 0
+.d*@OFd)^aN22\ |;["h!:`c&}  uU    (   iI      6v    8       ``#   z*            &   @   00""  f"  0
+.       +K!   (   00, +KG!          ``    (   **  U5c   $       @@    &   %%  U50   "       ((    !
+.   \   b"! @@        !!  z:    /   kK  U5        P   00  6v10  kK  z:        P   00    *$  u5  00
+.        8   I)  +K'   *R5`RrT^Zfto2EuUo%a68I/}>vU4_nd;]=$'@79A@   H " m5  z:c VvL U5k+rK      !   ;;
+.  ( I)$     00    # A!^5`     00    P U5##n*E%    $   `(  EcD!!     $   $d  CKa5@ (   qQ! fv&6@ (
+.   qQ! fv26@ 0   qQ! fv26@ 8   qQ! fv26@ @   qQ! fv26@ H   qQ! fva5@ P   qQ! fv&6@ P   qQ! fv26@ X
+.   uU! KK!   T$  |xwv      $ "                 +Kuv  ww, 0     $$;K      $ " @   00            Kk! B
+.") @     #C  !     H b"      % d$b `     z:A!"     ( ( b"  U5  z:4$E%    +KA 0     A!`     jJ  Kk/
+.         h!@@(w%$r2|d, )%A!@   uUb"$ !   0 0     6v&u@     Cc  gwP 0     $$/K      znb"`   ``A!( "
+.   d$  z*# $ "   fFZ5      f C!        6v, 88Q!I%    +K" 0 (   ` `     +K" "     m.# f&Xv`     &f  -
+.Ka   @   b"b"      % $     vx# f&R ` @   00w 8v    0 (     =%  tt        U5& 00*"b"`   ``_#( "   ` @
+.     55  Kk'         C @ (       kKa5@ (   3SK !     z"b",L  U5    :"+Kzxwv+K!   _gF%    +K- M-@0r*E
+.%    H%@ 0   TT" G7%$& \@71j*T%$ "   a!n*E%  6v6v  A!  >~tx      Q#``c!+(eEcS9 2*I%$$  +Kl*@ (   A!A
+.!  *   xli"    Kk4 n.J@!!d$fS7v26@ @   M-` ,K    ( ( +K  6v&u@     TT" G7%$& \@71j*T%$ %   a!n*E%  6
+.v6v  $$  >~tx      Q#``c!+(eEcS9 2*E%A!  +Kl*@ (   A!A!  (   xli"        E%$"`     00@ -Ka   0   006
+.!8v    4$6vGcA!7v!   z"b"    ``_#(     W7+KU5    :"+KEcD!,K#   !Qm*E%    ? E%5} 6jV$   ,   8       6
+.v!   2   @   00    !                                   !!                b"
+.                                                                                  )GPUI95";
+extern const int kShaderVSQuadSize = 2248;
+uint8_t kShaderVSQuadBytes[2248] = {};
+
+extern const char kShaderPSQuad95[] = R"GPUI95(
+.Ea8fuE4Z#>[9i+9Sx~W=\{()&   XX7 U5!   2"  M-"   f   t,  eE6 +K"NkAHD            8   pp    C#5v\5##+K
+.%   %|^|&%  @@    (   a!  88  6v!       TT  @@                      (   A!  +KH   (   C#  +K    4v5v
+.a"  U5    T   [;! +K    4   b"  Kk5v5v7   A!  U5#   `Dj@9Lc`%L+cQ[Y `RQ]%U9$(XcO9psF@1l)#;6RG%ESHbTP
+.?V4O.BIw:nqDI9a>&m<|0O,APP-Y63\+  M-    "   J*      U5    ,       Kk!   M%          6v!   (   $$& 6v
+.@   "       00    !   ""# #C(           $$  +K    (l! Q1$ +K        $$  ``    (l! E%" +K        ""
+.  +K    $F  b"! @@        !!  z:    WH  Ww  U5        P   00  6v%$  u5  M-        8   ((  6v%$  M%
+.  ""      6v!   X   44\ +K'>!$r]pW`/RE/!IYe=,IkQ"N00A-Z4L#wg!:`cw.  j*    0   j*            P
+.       +K'   *R5`/'=j=dJ"'oBXL<r.q+  M-  00C   `6U5\\  8 @@0     ;[P @ eE0 $   9Yk!  3(E%6vD!`   z:C
+..  <x``aAVvU5    ,$,KyxWvU5    ,$,KDcc 7v    ,$,KDcc ,K!   8(8vDca ! !   ,$,KDcc ,K"   8(8vDc` 7v!
+.   ,$,KyxWv+K!   ,$,KDcc ,K#   P(6vDcD!!     D$6vb"  j*& I)*"b"    ``%)0 8   /OVvU5!   &"+K{x7v
+.      znc"C#  ``>*0 8   HH  cK$ 0     <<6v      4 A!    ``# d$2 `     &f  "     p E%    6v' I)h b"
+.    U5' (     C#U5      - P@C#U5        Kk&&U5      UKA!A!  E%E%    ppW$  UP  "     p E%      $ I)I!
+.b"    U5! (     @ @ z:    ? P@h(U5      e @@Ra  eEd<5 2*E%A!  +K{*@ P   >~tx+K      h"    6v# d$T"`
+. 0   003!8v    Euq*j*    = KkK++K      " "     uU# $ !   2"b")f  "     T$6vEcD!!     [cF%A!  +K/ b"t
+. +K+K  ww8 0     $$+K      $ "         6v        pp  Gw( 0     <<6v      T A!    pp! #": `     3S! B
+."1 @     .n` ,K    S#G%A!  ``, r2r"E%    +K& 0     f&;K6v      U5NL7v      znc",L  U5    CKG%""! U5
+.      +K{x7v      h<b"    ``x$(     Q1  q5" ( "   S3+K      t A!    00# d$2 ` 0   z:  8v    ( (
+.     6v& M-0(b"    ``x$(     ` @                   ``# r2U%E%    +K@'0     ddKv      W!U5ML6v      t
+. A!        B"A @     XX  !     H b"`       E%B `     &f  -Ka       z:! "       $ |x6v      T A!&6
+.        ! !     _   Gw( 0     Q16v      jvA!A!    b"b"1 @     #C  a`@       A!A!    tt    x66v
+.      T A!&6        J `     }]! ##1 @ (   M-  !     )!b"    U5% (     22  i5< (     8xa5U5    -!U5-,
+.6vU5    J"c"A!  U5" A!` +KcA6v+K    8 b"    U5U5  (   ""            **  x*" $ "   D$j*j*    * ` @
+.   Ss6v!!- @ 0   &f  ww8 0 (   Y9mvU5    ( $     Kk_]sb[b$W2!    ' eEH(j*00    qKA!@   @@y $ "   R"
+.  L%" 7v    z"b"""  ``( ( &   99  i50 ( $   S3+K+K      +Ke"7v+K    J"b"A!  j*U5    ``de  Gw( 0 (
+.   <<6v+K    )!b"A!  U5p*z:U%E%b"  +K. 0 h"  A!  U5# ( $   @ @     55R j*L++K+K    J"b"A!  U5# ( $
+.   h(]5+K      ! L++K+K    )!b",L  +K    $ $     ^"  E%B ` @   &f  -Ka   @   z:! " !   \$6vqM  ,K
+.    p E%b"  +K* 0 (   Q16v+K    :"+KoM# !     #+H%b"  +K- M-Q!E%A!  +Kx*@ 0   88  0 ( r2Q!E%b"  +K"
+. 0     ` ` +K    ^ !af&+K+K    v"+K^y! KkIYJ r"E%A!  +K{*@ P   ]==%,K      Q%    +K- M-#3j*      dA`
+. @   ;[! a!) @ (   .n` 7v    h +K+K  Gw$ 0     f&+K      " " ""      b"9 @ 0   >~Vv@@0   <   ddkv``!
+.       NL7v+K    _gH%((  +KN-@ Q%  I)  +K' eE++U5U5    fZb"A!  ``( ( $   %%  x*! $ "   k+U5U5    M!A
+.!`   U5# d$2 ` @   z:  " !   ( ( 2r!c"2DvKk&&U5U5    t A!`   uU  $ "       XP' 8v!   !Qq*(("   !   !
+.Qq*00    R j*Rq+K+K    8 b"A!  ``l$( &   W7IK+K    >"+KGc# ,K    P E%    +K3&0 (   DDhv+K    :"+KoM#
+. !     <dF%A!  +K- M-r"E%A!  U5+K    +K8Y  Vv* E%i!6vKk  Gw$ 0     Q16vU5    H b"`   uU# I)h b"`   j
+.*U5      f&+K      : !af&+KU5    B"+KFcB!!     8 b"    ``T"(     22  i5z*0     f&+K      =!U5wW/'?}2
+.   g!  A!        %   K#  f&  U5!   4   b"                          (                     z:  6v!   (
+.                                                                         )GPUI95";
+extern const int kShaderPSQuadSize = 3028;
+uint8_t kShaderPSQuadBytes[3028] = {};
+
+extern const char kShaderVSTri95[] = R"GPUI95(
+.Ea8f#3Ewyz&{%~YK#JoAib]h!   n." z:    T   }]    /   9#  Pp  PP=;@ON&  @   U5&   !   **    SK5vF%D 9y
+.  j*[V:bR"  00    $   p   ,,  +K!       ~>                          $   `   KkLDk|4OsFKk"   !   J*
+.  +K            00#       @   A!    .       &v5vi*    4v5v@!  6v@   0   b"        1!      tt5v5v
+.    &v5vi*    lBq\\j1pSF5!GOREwV7$YYJ?- !!A!j*                            ;[& 6v064OBv]Wf9SE\Iq~x*xP
+.M#<8 TH& <"z+ZRFH(WZrEJA^Sq59wJ9, J?!D*XzlU1  00    (   M-            8       ``""  g#            #
+.   0   HH9!6vO           ``    (   **>   d:,9^<GU]!>fFSJ,% cN"2LX_8s"HXr)GN0   (   b"  +K&       0
+.   ((        \   .n            !!  E%  6v'   :*            ,   A!  Kk!   V"  @       6v!   8   $$8 `
+.`.Z6x$j#gzRh2W 8r{W_8,KA7!)AgJWI!'odPVL<W  6vW5  r   q1$ RP% b"LFf"    E%  6vO 00H(n*    6vO 00hH]5j
+.*     "``llWv+K    @$  mlwv      "   "B  a5)+0 $   $d  CK26@ 0   qQ! fva5@ 8   uU! KK    T$  |xwv
+.      $ "                 +KEF  b"9 @     >~Vv      M!f"          9 PP##r*      % @     A!A!    6v"
+. "     m.# f&Xv`     &f  -Ka       b"b"      % $     Ac& f&)%B!@   @@)%$ !   ))  t*T%$ "   k+d5U5
+.    -!U5bAvv``    z"c"    ``' A!=7 +E;"   "   $       Kk    &           6v
+.                                                      A!
+.                                                                                 )GPUI95";
+extern const int kShaderVSTriSize = 1112;
+uint8_t kShaderVSTriBytes[1112] = {};
+
+extern const char kShaderPSTri95[] = R"GPUI95(
+.Ea8fhX~QqQR,hLB[q9>`7*C-9   uU8 6v"   D$  +K"   k   n.  Kk) 6v"NkAt0                pp    C#5v\5##Kk
+.!   %|^|&%  @@    (   a!  88  6v!       y92)=jhm`BY3&V6.o*)A7}s*I6I~.BIw:nqDI9a>&m<|0O,APP-Y63V%  b"
+.  6v    )!      b"  +K!       44    =           @@    "   ;{' uU'           ((  6v    (l! .n! +K
+.        $$  ``    L@  Y9(o&;CTs($gkm1KU4_nd;uUo%a68I/}>v*5{nB:L   0   U5    0           ``        **
+.  ``.ZU7E0.UDODvoZgy_+"6$   4   r"  Gg0 3K#+00hH]5j*    <x``llWv+K    ,$,KDc` ,K!   P(6vDcD!!     D$
+.6v`   j*& I)*"b"    ``M%( &   W7;K+K    &"+K{x7v      znc"A!  ``f&( &   44  q5" (     ..+K      4 A!
+.    ``# d$2 `     &f  "     p E%    6v' I)h b"    U5' (     C#U5      - P@C#U5      X KkFFKK      "v
+.c"`   ``.&( "   22  i5z*0     'GVvU5    Z"+KY9?.D<U!  Q!  b"        0   ""        #   0
+.                                                     j*
+.                                                                                  )GPUI95";
+extern const int kShaderPSTriSize = 788;
+uint8_t kShaderPSTriBytes[788] = {};
+
+}
+}
+#endif
+
+#endif
 
 #if GPUI_OS_WINDOWS
+#line 1 "src/gpui/paintgpu_win.cpp"
+
+#if GPUI_OS_WINDOWS && WIN_BACKEND_GPU
 
 #include <d3d11.h>
 #include <d3d12.h>
-#include <d3dcompiler.h>
 #include <dwrite.h>
 #include <dxgi1_2.h>
 #include <dxgi1_4.h>
@@ -140778,54 +140999,16 @@ int TextLayoutRangeRects(TextLayout* tl, Str s, int u8a, int u8b, Bounds* out,
 
 namespace gpui {
 
-enum GpuApi : int {
-    kGpuUnknown = -1,
-    kGpuOff = 0,
-    kGpuD3d11 = 11,
-    kGpuD3d12 = 12,
-};
-
-static int PaintGpuApi() {
-    static int api = kGpuUnknown;
-    if (api == kGpuUnknown) {
-        char buf[16] = {};
-        DWORD n = GetEnvironmentVariableA("GPUI_PAINT", buf, sizeof(buf));
-        Str value = n > 0 && n < sizeof(buf) ? Str(buf) : Str{};
-        api = base::StrEqI(value, "gpu") || base::StrEqI(value, "d3d11")
-                  ? kGpuD3d11
-              : base::StrEqI(value, "d3d12") ? kGpuD3d12
-                                               : kGpuOff;
-        if (api != kGpuOff) {
-            logf("paint: GPU backend (D3D%d, GPUI_PAINT=%s)", api,
-                 value);
-        }
-    }
-    return api;
-}
-
 bool PaintGpuOn() {
-    return PaintGpuApi() != kGpuOff;
+    return WinPaintOptionsGet().backend != WinPaintBackend::Direct2D;
 }
 
 bool PaintD3d12On() {
-    return PaintGpuApi() == kGpuD3d12;
+    return WinPaintOptionsGet().backend == WinPaintBackend::D3D12;
 }
 
 int PaintGpuSamples() {
-    static int n = -1;
-    if (n < 0) {
-        char buf[16] = {};
-        DWORD got =
-            GetEnvironmentVariableA("GPUI_PAINT_MSAA", buf, sizeof(buf));
-        n = 4;
-        if (got > 0 && got < sizeof(buf)) {
-            int v = atoi(buf);
-            if (v == 1 || v == 2 || v == 4 || v == 8) {
-                n = v;
-            }
-        }
-    }
-    return n;
+    return (int)WinPaintOptionsGet().msaa;
 }
 
 namespace gpuw {
@@ -140838,7 +141021,89 @@ static void gpui_paintgpu_win_Rel(T** p) {
     }
 }
 
-enum {
+extern const char kShaderVSQuad95[];
+extern const int kShaderVSQuadSize;
+extern uint8_t kShaderVSQuadBytes[];
+extern const char kShaderPSQuad95[];
+extern const int kShaderPSQuadSize;
+extern uint8_t kShaderPSQuadBytes[];
+extern const char kShaderVSTri95[];
+extern const int kShaderVSTriSize;
+extern uint8_t kShaderVSTriBytes[];
+extern const char kShaderPSTri95[];
+extern const int kShaderPSTriSize;
+extern uint8_t kShaderPSTriBytes[];
+
+static bool DecodeBase95(const char* encoded, uint8_t* out, int expected) {
+    uint32_t bits = 0;
+    int bitCount = 0;
+    int pending = -1;
+    int at = 0;
+    bool lineStart = true;
+    for (const uint8_t* p = (const uint8_t*)encoded; *p; p++) {
+
+        if (*p == '\r' || *p == '\n') {
+            lineStart = true;
+            continue;
+        }
+        if (lineStart) {
+            if (*p != '.') {
+                return false;
+            }
+            lineStart = false;
+            continue;
+        }
+        if (*p < 32 || *p > 126) {
+            return false;
+        }
+        int digit = *p - 32;
+        if (pending < 0) {
+            pending = digit;
+            continue;
+        }
+        uint32_t value = (uint32_t)(pending + digit * 95);
+        bits |= value << bitCount;
+        bitCount += ((value & 8191) > 832) ? 13 : 14;
+        while (bitCount >= 8) {
+            if (at >= expected) {
+                return false;
+            }
+            out[at++] = (uint8_t)(bits & 255);
+            bits >>= 8;
+            bitCount -= 8;
+        }
+        pending = -1;
+    }
+    if (pending >= 0) {
+        if (at >= expected) {
+            return false;
+        }
+        out[at++] = (uint8_t)((bits | ((uint32_t)pending << bitCount)) & 255);
+    }
+    return at == expected;
+}
+
+static bool EnsureShaderBytes() {
+    static int result = -1;
+    if (result >= 0) {
+        return result != 0;
+    }
+    bool ok = DecodeBase95(kShaderVSQuad95, kShaderVSQuadBytes,
+                           kShaderVSQuadSize) &&
+              DecodeBase95(kShaderPSQuad95, kShaderPSQuadBytes,
+                           kShaderPSQuadSize) &&
+              DecodeBase95(kShaderVSTri95, kShaderVSTriBytes,
+                           kShaderVSTriSize) &&
+              DecodeBase95(kShaderPSTri95, kShaderPSTriBytes,
+                           kShaderPSTriSize);
+    result = ok ? 1 : 0;
+    if (!ok) {
+        logf("paint/gpu: embedded shader bytecode is invalid");
+    }
+    return ok;
+}
+
+enum : uint8_t {
     kQuadRect = 0,
     kQuadBorder = 1,
     kQuadEllipse = 2,
@@ -140848,142 +141113,6 @@ enum {
     kQuadGradient = 6,
     kQuadSolid = 7
 };
-
-static const char* kShaderSrc = R"HLSL(
-cbuffer Globals : register(b0) {
-    float2 uViewport;
-    float2 uPad;
-};
-
-struct Inst {
-    float4 rect;   // x, y, w, h in DIPs
-    float4 color;  // straight rgba
-    float4 misc;   // radius, border, kind, unused
-    float4 clip;   // x0, y0, x1, y1 — GPUI's content mask
-    float4 uv;     // atlas rect, or the two gradient endpoints
-    float4 color2; // the gradient's far end
-};
-
-StructuredBuffer<Inst> gInst : register(t0);
-Texture2D<float4> gAtlas : register(t1);
-Texture2D<float4> gImage : register(t2);
-SamplerState gSamp : register(s0);
-
-struct VSOut {
-    float4 pos    : SV_Position;
-    float2 local  : TEXCOORD0;
-    float2 halfsz : TEXCOORD1;
-    float4 color  : COLOR0;
-    float4 color2 : COLOR1;
-    float4 misc   : TEXCOORD2;
-    float4 clipr  : TEXCOORD3;
-    float2 uv     : TEXCOORD4;
-    float2 gpos   : TEXCOORD5;
-    float4 uvraw  : TEXCOORD6;
-};
-
-VSOut VSQuad(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
-    Inst i = gInst[iid];
-    float2 corner = float2((vid == 1 || vid == 3) ? 1.0 : 0.0,
-                           (vid >= 2) ? 1.0 : 0.0);
-    float2 p = i.rect.xy + corner * i.rect.zw;
-    VSOut o;
-    o.pos = float4(p.x / uViewport.x * 2.0 - 1.0,
-                   1.0 - p.y / uViewport.y * 2.0, 0.0, 1.0);
-    o.halfsz = i.rect.zw * 0.5;
-    o.local = p - (i.rect.xy + o.halfsz);
-    o.color = i.color;
-    o.color2 = i.color2;
-    o.misc = i.misc;
-    o.clipr = i.clip;
-    o.uv = lerp(i.uv.xy, i.uv.zw, corner);
-    o.uvraw = i.uv;
-    o.gpos = p;
-    return o;
-}
-
-// iq's rounded box: negative inside, and in the same units as the position,
-// which here are DIPs and therefore pixels.
-float sdRound(float2 p, float2 b, float r) {
-    float2 q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
-
-float4 PSQuad(VSOut v) : SV_Target {
-    if (v.gpos.x < v.clipr.x || v.gpos.x > v.clipr.z ||
-        v.gpos.y < v.clipr.y || v.gpos.y > v.clipr.w) {
-        discard;
-    }
-    int kind = (int)(v.misc.z + 0.5);
-    if (kind == 5) {
-        // Already premultiplied: WIC decoded it that way.
-        float4 t = gImage.Sample(gSamp, v.uv) * v.color.a;
-        if (t.a <= 0.0) {
-            discard;
-        }
-        return t;
-    }
-    float4 col = v.color;
-    float cov = 1.0;
-    if (kind == 0 || kind == 1) {
-        float r = min(v.misc.x, min(v.halfsz.x, v.halfsz.y));
-        float d = sdRound(v.local, v.halfsz, r);
-        float outer = saturate(0.5 - d);
-        cov = (kind == 0) ? outer : outer - saturate(0.5 - (d + v.misc.y));
-    } else if (kind == 2 || kind == 3) {
-        float2 rr = max(v.halfsz, 1e-4);
-        // Close enough to a distance for an antialiased edge, and exact on a
-        // circle, which is what almost every one of these is.
-        float d = (length(v.local / rr) - 1.0) * min(rr.x, rr.y);
-        float outer = saturate(0.5 - d);
-        cov = (kind == 2) ? outer : outer - saturate(0.5 - (d + v.misc.y));
-    } else if (kind == 4) {
-        cov = gAtlas.Sample(gSamp, v.uv).r;
-    } else if (kind == 6) {
-        float2 d = v.uvraw.zw - v.uvraw.xy;
-        float t = saturate(dot(v.gpos - v.uvraw.xy, d) / max(dot(d, d), 1e-6));
-        col = lerp(v.color, v.color2, t);
-    }
-    float a = col.a * cov;
-    if (a <= 0.0) {
-        discard;
-    }
-    return float4(col.rgb * a, a);
-}
-
-// ─── triangles ───────────────────────────────────────────────────────────
-
-struct TriIn {
-    float2 pos   : POSITION;
-    float4 color : COLOR;
-    float4 clipr : TEXCOORD0;
-};
-
-struct TriOut {
-    float4 pos   : SV_Position;
-    float4 color : COLOR;
-    float4 clipr : TEXCOORD0;
-    float2 gpos  : TEXCOORD1;
-};
-
-TriOut VSTri(TriIn i) {
-    TriOut o;
-    o.pos = float4(i.pos.x / uViewport.x * 2.0 - 1.0,
-                   1.0 - i.pos.y / uViewport.y * 2.0, 0.0, 1.0);
-    o.color = i.color;
-    o.clipr = i.clipr;
-    o.gpos = i.pos;
-    return o;
-}
-
-float4 PSTri(TriOut v) : SV_Target {
-    if (v.gpos.x < v.clipr.x || v.gpos.x > v.clipr.z ||
-        v.gpos.y < v.clipr.y || v.gpos.y > v.clipr.w) {
-        discard;
-    }
-    return float4(v.color.rgb * v.color.a, v.color.a);
-}
-)HLSL";
 
 struct Inst {
     float rect[4];
@@ -141001,10 +141130,10 @@ struct TriVert {
 };
 
 static void SetColor(float* out, Rgba c) {
-    out[0] = c.r / 255.f;
-    out[1] = c.g / 255.f;
-    out[2] = c.b / 255.f;
-    out[3] = c.a / 255.f;
+    out[0] = (float)c.r / 255.f;
+    out[1] = (float)c.g / 255.f;
+    out[2] = (float)c.b / 255.f;
+    out[3] = (float)c.a / 255.f;
 }
 
 constexpr int kAtlasDim = 1024;
@@ -141145,10 +141274,6 @@ struct D12Gpu {
     IDXGIFactory4* factory = nullptr;
     ID3D12GraphicsCommandList* list = nullptr;
     ID3D12RootSignature* root = nullptr;
-    ID3DBlob* vsQuad = nullptr;
-    ID3DBlob* psQuad = nullptr;
-    ID3DBlob* vsTri = nullptr;
-    ID3DBlob* psTri = nullptr;
     ID3D12DescriptorHeap* srvHeap = nullptr;
     UINT srvStep = 0;
     ID3D12Fence* fence = nullptr;
@@ -141208,32 +141333,9 @@ const FrameStats& LastFrameStats() {
     return gLastStats;
 }
 
-static bool CompileShader(const char* entry, const char* target,
-                          ID3DBlob** out) {
-    ID3DBlob* err = nullptr;
-    UINT flags =
-        D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_WARNINGS_ARE_ERRORS;
-    HRESULT hr =
-        D3DCompile(kShaderSrc, strlen(kShaderSrc), "gpui.hlsl", nullptr,
-                   nullptr, entry, target, flags, 0, out, &err);
-    if (FAILED(hr)) {
-        if (err) {
-            logf("paint/gpu: %s failed: %s", Str(entry),
-                 Str((const char*)err->GetBufferPointer()));
-            err->Release();
-        } else {
-            logf("paint/gpu: %s failed %08x", Str(entry), (unsigned)hr);
-        }
-        return false;
-    }
-    if (err) {
-        err->Release();
-    }
-    return true;
-}
-
 static D3D12_HEAP_PROPERTIES D12Heap(D3D12_HEAP_TYPE type) {
-    D3D12_HEAP_PROPERTIES h = {};
+    D3D12_HEAP_PROPERTIES h;
+    memset(&h, 0, sizeof(h));
     h.Type = type;
     h.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
     h.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
@@ -141303,7 +141405,8 @@ static int D12PipeIx(int samples) {
 }
 
 static D3D12_BLEND_DESC D12Blend() {
-    D3D12_BLEND_DESC b = {};
+    D3D12_BLEND_DESC b;
+    memset(&b, 0, sizeof(b));
     b.RenderTarget[0].BlendEnable = TRUE;
     b.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
     b.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
@@ -141316,7 +141419,8 @@ static D3D12_BLEND_DESC D12Blend() {
 }
 
 static D3D12_RASTERIZER_DESC D12Raster(int samples) {
-    D3D12_RASTERIZER_DESC r = {};
+    D3D12_RASTERIZER_DESC r;
+    memset(&r, 0, sizeof(r));
     r.FillMode = D3D12_FILL_MODE_SOLID;
     r.CullMode = D3D12_CULL_MODE_NONE;
     r.DepthClipEnable = TRUE;
@@ -141325,7 +141429,8 @@ static D3D12_RASTERIZER_DESC D12Raster(int samples) {
 }
 
 static D3D12_DEPTH_STENCIL_DESC D12DepthOff() {
-    D3D12_DEPTH_STENCIL_DESC d = {};
+    D3D12_DEPTH_STENCIL_DESC d;
+    memset(&d, 0, sizeof(d));
     d.DepthEnable = FALSE;
     d.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     d.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
@@ -141337,7 +141442,8 @@ static D3D12_DEPTH_STENCIL_DESC D12DepthOff() {
 
 static D3D12_DEPTH_STENCILOP_DESC D12StencilOp(D3D12_STENCIL_OP pass,
                                                D3D12_COMPARISON_FUNC func) {
-    D3D12_DEPTH_STENCILOP_DESC o = {};
+    D3D12_DEPTH_STENCILOP_DESC o;
+    memset(&o, 0, sizeof(o));
     o.StencilFailOp = D3D12_STENCIL_OP_KEEP;
     o.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
     o.StencilPassOp = pass;
@@ -141352,10 +141458,11 @@ static bool D12MakePipelines(int samples) {
         return true;
     }
     p->samples = samples;
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC d = {};
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d;
+    memset(&d, 0, sizeof(d));
     d.pRootSignature = g->root;
-    d.VS = {g->vsQuad->GetBufferPointer(), g->vsQuad->GetBufferSize()};
-    d.PS = {g->psQuad->GetBufferPointer(), g->psQuad->GetBufferSize()};
+    d.VS = {kShaderVSQuadBytes, (SIZE_T)kShaderVSQuadSize};
+    d.PS = {kShaderPSQuadBytes, (SIZE_T)kShaderPSQuadSize};
     d.BlendState = D12Blend();
     d.SampleMask = UINT_MAX;
     d.RasterizerState = D12Raster(samples);
@@ -141390,8 +141497,8 @@ static bool D12MakePipelines(int samples) {
          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
     };
     d.InputLayout = {input, 3};
-    d.VS = {g->vsTri->GetBufferPointer(), g->vsTri->GetBufferSize()};
-    d.PS = {g->psTri->GetBufferPointer(), g->psTri->GetBufferSize()};
+    d.VS = {kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize};
+    d.PS = {kShaderPSTriBytes, (SIZE_T)kShaderPSTriSize};
     d.DepthStencilState = D12DepthOff();
     if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
                                                     (void**)&p->tri))) {
@@ -141422,12 +141529,13 @@ static bool D12MakePipelines(int samples) {
     return true;
 }
 
+#if WIN_BACKEND_D3D12
 static bool D12EnsureGpu(PaintApp* pa) {
     D12Gpu* g = &gD12;
     if (g->ready) {
         return true;
     }
-    if (!pa) {
+    if (!pa || !EnsureShaderBytes()) {
         return false;
     }
     IDXGIFactory4* factory = nullptr;
@@ -141525,7 +141633,8 @@ static bool D12EnsureGpu(PaintApp* pa) {
         rp[i + 2].DescriptorTable.pDescriptorRanges = &ranges[i];
         rp[i + 2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     }
-    D3D12_STATIC_SAMPLER_DESC samp = {};
+    D3D12_STATIC_SAMPLER_DESC samp;
+    memset(&samp, 0, sizeof(samp));
     samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     samp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -141562,13 +141671,6 @@ static bool D12EnsureGpu(PaintApp* pa) {
     if (FAILED(hr)) {
         return false;
     }
-    if (!CompileShader("VSQuad", "vs_5_0", &g->vsQuad) ||
-        !CompileShader("PSQuad", "ps_5_0", &g->psQuad) ||
-        !CompileShader("VSTri", "vs_5_0", &g->vsTri) ||
-        !CompileShader("PSTri", "ps_5_0", &g->psTri)) {
-        return false;
-    }
-
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC atlas = D12Texture(
         kAtlasDim, kAtlasDim, DXGI_FORMAT_R8_UNORM, 1,
@@ -141599,6 +141701,9 @@ static bool D12EnsureGpu(PaintApp* pa) {
     g->ready = true;
     return true;
 }
+#else
+static bool D12EnsureGpu(PaintApp*) { return false; }
+#endif
 
 static bool MakeAtlas(Gpu* g) {
     D3D11_TEXTURE2D_DESC td = {};
@@ -141641,7 +141746,8 @@ static bool MakeWhite(Gpu* g) {
 }
 
 static bool MakeStencilStates(Gpu* g) {
-    D3D11_DEPTH_STENCIL_DESC d = {};
+    D3D11_DEPTH_STENCIL_DESC d;
+    memset(&d, 0, sizeof(d));
     d.DepthEnable = FALSE;
     d.StencilEnable = FALSE;
     if (FAILED(g->dev->CreateDepthStencilState(&d, &g->dsOff))) {
@@ -141651,7 +141757,8 @@ static bool MakeStencilStates(Gpu* g) {
     d.StencilEnable = TRUE;
     d.StencilReadMask = 0xff;
     d.StencilWriteMask = 0xff;
-    D3D11_DEPTH_STENCILOP_DESC inv = {};
+    D3D11_DEPTH_STENCILOP_DESC inv;
+    memset(&inv, 0, sizeof(inv));
     inv.StencilFailOp = D3D11_STENCIL_OP_KEEP;
     inv.StencilDepthFailOp = D3D11_STENCIL_OP_KEEP;
     inv.StencilPassOp = D3D11_STENCIL_OP_INVERT;
@@ -141671,7 +141778,8 @@ static bool MakeStencilStates(Gpu* g) {
         return false;
     }
 
-    D3D11_DEPTH_STENCILOP_DESC cover = {};
+    D3D11_DEPTH_STENCILOP_DESC cover;
+    memset(&cover, 0, sizeof(cover));
     cover.StencilFailOp = D3D11_STENCIL_OP_ZERO;
     cover.StencilDepthFailOp = D3D11_STENCIL_OP_ZERO;
     cover.StencilPassOp = D3D11_STENCIL_OP_ZERO;
@@ -141700,28 +141808,19 @@ static bool EnsureGpu(PaintApp* pa) {
         return false;
     }
 
-    ID3DBlob* vsq = nullptr;
-    ID3DBlob* psq = nullptr;
-    ID3DBlob* vst = nullptr;
-    ID3DBlob* pst = nullptr;
-    bool ok = CompileShader("VSQuad", "vs_5_0", &vsq) &&
-              CompileShader("PSQuad", "ps_5_0", &psq) &&
-              CompileShader("VSTri", "vs_5_0", &vst) &&
-              CompileShader("PSTri", "ps_5_0", &pst);
-    if (ok) {
-        ok = SUCCEEDED(g->dev->CreateVertexShader(vsq->GetBufferPointer(),
-                                                  vsq->GetBufferSize(), nullptr,
-                                                  &g->vsQuad)) &&
-             SUCCEEDED(g->dev->CreatePixelShader(psq->GetBufferPointer(),
-                                                 psq->GetBufferSize(), nullptr,
-                                                 &g->psQuad)) &&
-             SUCCEEDED(g->dev->CreateVertexShader(vst->GetBufferPointer(),
-                                                  vst->GetBufferSize(), nullptr,
-                                                  &g->vsTri)) &&
-             SUCCEEDED(g->dev->CreatePixelShader(pst->GetBufferPointer(),
-                                                 pst->GetBufferSize(), nullptr,
-                                                 &g->psTri));
-    }
+    bool ok = EnsureShaderBytes() &&
+              SUCCEEDED(g->dev->CreateVertexShader(
+                  kShaderVSQuadBytes, (SIZE_T)kShaderVSQuadSize, nullptr,
+                  &g->vsQuad)) &&
+              SUCCEEDED(g->dev->CreatePixelShader(
+                  kShaderPSQuadBytes, (SIZE_T)kShaderPSQuadSize, nullptr,
+                  &g->psQuad)) &&
+              SUCCEEDED(g->dev->CreateVertexShader(
+                  kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize, nullptr,
+                  &g->vsTri)) &&
+              SUCCEEDED(g->dev->CreatePixelShader(
+                  kShaderPSTriBytes, (SIZE_T)kShaderPSTriSize, nullptr,
+                  &g->psTri));
     if (ok) {
         D3D11_INPUT_ELEMENT_DESC el[] = {
             {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
@@ -141731,21 +141830,9 @@ static bool EnsureGpu(PaintApp* pa) {
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
              D3D11_INPUT_PER_VERTEX_DATA, 0},
         };
-        ok = SUCCEEDED(g->dev->CreateInputLayout(el, 3, vst->GetBufferPointer(),
-                                                 vst->GetBufferSize(),
-                                                 &g->triLayout));
-    }
-    if (vsq) {
-        vsq->Release();
-    }
-    if (psq) {
-        psq->Release();
-    }
-    if (vst) {
-        vst->Release();
-    }
-    if (pst) {
-        pst->Release();
+        ok = SUCCEEDED(g->dev->CreateInputLayout(
+            el, 3, kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize,
+            &g->triLayout));
     }
     if (!ok) {
         return false;
@@ -141760,7 +141847,8 @@ static bool EnsureGpu(PaintApp* pa) {
         return false;
     }
 
-    D3D11_BLEND_DESC bd = {};
+    D3D11_BLEND_DESC bd;
+    memset(&bd, 0, sizeof(bd));
     bd.RenderTarget[0].BlendEnable = TRUE;
     bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
     bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
@@ -141773,7 +141861,8 @@ static bool EnsureGpu(PaintApp* pa) {
         return false;
     }
 
-    D3D11_RASTERIZER_DESC rd = {};
+    D3D11_RASTERIZER_DESC rd;
+    memset(&rd, 0, sizeof(rd));
     rd.FillMode = D3D11_FILL_SOLID;
 
     rd.CullMode = D3D11_CULL_NONE;
@@ -141786,7 +141875,8 @@ static bool EnsureGpu(PaintApp* pa) {
         return false;
     }
 
-    D3D11_SAMPLER_DESC sd = {};
+    D3D11_SAMPLER_DESC sd;
+    memset(&sd, 0, sizeof(sd));
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
     sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -142241,7 +142331,7 @@ static bool D12UploadTexture(ID3D12Resource* texture,
     return true;
 }
 
-enum TriMode : int {
+enum TriMode : uint8_t {
     kTriColor,
     kTriEvenOdd,
     kTriNonZero,
@@ -142949,7 +143039,8 @@ void CanvasClear(PaintCtx* ctx, Rgba c) {
     if (!clipped) {
         Flush();
         Rgba f = PaintFade(ctx, c);
-        float col[4] = {f.r / 255.f, f.g / 255.f, f.b / 255.f, f.a / 255.f};
+        float col[4] = {(float)f.r / 255.f, (float)f.g / 255.f,
+                        (float)f.b / 255.f, (float)f.a / 255.f};
         if (PaintD3d12On()) {
             D12Target* t = (D12Target*)gB.target;
             D3D12_CPU_DESCRIPTOR_HANDLE rtv =
@@ -143582,7 +143673,7 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
         a->penX = 0;
         a->penY = 0;
         a->rowH = 0;
-        e = AtlasFind({face, glyph, (uint32_t)(em * 4.f + 0.5f)});
+        e = AtlasFind({face, glyph, (uint32_t)lroundf(em * 4.f)});
         if (!e) {
             return false;
         }
@@ -143606,7 +143697,7 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
     e->used = true;
     e->key.face = face;
     e->key.glyph = glyph;
-    e->key.size4 = (uint32_t)(em * 4.f + 0.5f);
+    e->key.size4 = (uint32_t)lroundf(em * 4.f);
     e->x = a->penX;
     e->y = a->penY;
     e->w = w;
@@ -143623,7 +143714,7 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
 
 static void DrawGlyph(IDWriteFontFace* face, float em, uint16_t glyph, float x,
                       float y, Rgba c) {
-    GlyphKey k = {face, glyph, (uint32_t)(em * 4.f + 0.5f)};
+    GlyphKey k = {face, glyph, (uint32_t)lroundf(em * 4.f)};
     GlyphEntry* e = AtlasFind(k);
     if (!e) {
         return;
@@ -143774,6 +143865,51 @@ void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
         gpuw::CanvasPopClip(ctx);
     }
 }
+
+}
+}
+
+#elif GPUI_OS_WINDOWS
+
+namespace gpui {
+
+bool PaintGpuOn() { return false; }
+bool PaintD3d12On() { return false; }
+int PaintGpuSamples() { return (int)WinPaintOptionsGet().msaa; }
+
+namespace gpuw {
+
+bool PaintTargetBegin(PaintCtx*, void*, int, int) { return false; }
+bool PaintTargetBeginOffscreen(PaintCtx*, int, int) { return false; }
+bool PaintTargetEndOffscreen(PaintCtx*, uint8_t*) { return false; }
+bool PaintTargetEnd(PaintCtx*) { return false; }
+void PaintTargetFree(PaintCtx*) {}
+void CanvasClear(PaintCtx*, Rgba) {}
+void CanvasFillRect(PaintCtx*, float, float, float, float, Rgba) {}
+void CanvasFillRound(PaintCtx*, float, float, float, float, float, Rgba) {}
+void CanvasStrokeRound(PaintCtx*, float, float, float, float, float, float,
+                       Rgba, const float*) {}
+void CanvasLine(PaintCtx*, float, float, float, float, float, Rgba,
+                const float*) {}
+void CanvasEllipse(PaintCtx*, float, float, float, float, float, Rgba) {}
+void CanvasPushClip(PaintCtx*, float, float, float, float) {}
+void CanvasPopClip(PaintCtx*) {}
+Path* PathNew(PaintCtx*, bool) { return nullptr; }
+void PathFree(Path*) {}
+void PathMoveTo(Path*, float, float) {}
+void PathLineTo(Path*, float, float) {}
+void PathCubicTo(Path*, float, float, float, float, float, float) {}
+void PathArcTo(Path*, float, float, float, float, float, bool) {}
+void PathClose(Path*) {}
+void PathFill(PaintCtx*, Path*, Rgba) {}
+void PathFillGradient(PaintCtx*, Path*, float, float, float, float, Rgba,
+                      Rgba) {}
+void PathStroke(PaintCtx*, Path*, float, Rgba, bool) {}
+void PathRealize(PaintCtx*, Path*) {}
+void ImageDraw(PaintCtx*, Image*, Bounds, float) {}
+void TextLayoutDraw(PaintCtx*, TextLayout*, float, float, Rgba, bool, float) {}
+static FrameStats gEmptyStats;
+const FrameStats& LastFrameStats() { return gEmptyStats; }
 
 }
 }
@@ -147278,7 +147414,7 @@ static int ImeStringUtf8(HIMC imc, DWORD which, char* out, int cap) {
         wlen = (int)(sizeof(wbuf) / sizeof(wbuf[0]));
     }
     ImmGetCompositionStringW(imc, which, wbuf,
-                             (DWORD)(wlen * (int)sizeof(wchar_t)));
+                              (DWORD)wlen * (DWORD)sizeof(wchar_t));
     int n =
         WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, out, cap, nullptr, nullptr);
     return n;
@@ -147798,6 +147934,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam,
             }
             return 0;
         }
+        default:
+            break;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -148084,7 +148222,7 @@ int PlatShowMenu(Window* win, const PlatMenuItem* items, int n, float x,
 
     float scale = win->paint.dpi / 96.f;
 
-    int iconPx = (int)((float)kMenuImageSize * scale + 0.5f);
+    int iconPx = (int)lroundf((float)kMenuImageSize * scale);
     if (iconPx < 1) {
         iconPx = 1;
     }
@@ -148094,7 +148232,7 @@ int PlatShowMenu(Window* win, const PlatMenuItem* items, int n, float x,
     if (!menu) {
         return 0;
     }
-    POINT pt = {(LONG)(x * scale + 0.5f), (LONG)(y * scale + 0.5f)};
+    POINT pt = {(LONG)lroundf(x * scale), (LONG)lroundf(y * scale)};
     ClientToScreen(hwnd, &pt);
 
     SetForegroundWindow(hwnd);
@@ -148413,7 +148551,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, buf, n, nullptr, nullptr);
         argv[i] = buf;
     }
-    LocalFree(wargv);
+    LocalFree(static_cast<void*>(wargv));
     argc = gpui::GpuiTakeRuntimeArgs(argc, argv);
     return GpuiMain(argc, argv);
 }
@@ -148544,10 +148682,8 @@ static float GpuUsagePercentLocked() {
         return -1.f;
     }
 
-    enum {
-        kMaxTypes = 16,
-        kNameMax = 256
-    };
+    static constexpr int kMaxTypes = 16;
+    static constexpr int kNameMax = 256;
     char names[kMaxTypes][32] = {};
     double busy[kMaxTypes] = {};
     int nTypes = 0;
@@ -149074,7 +149210,7 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
     }
 
     DWORD pathLen = uc.dwUrlPathLength + uc.dwExtraInfoLength;
-    wchar_t* path = cracked ? AllocArray<wchar_t>(pathLen + 2) : nullptr;
+    wchar_t* path = cracked ? AllocArray<wchar_t>((int)pathLen + 2) : nullptr;
     if (cracked && path && pathLen > 0) {
         memcpy(path, uc.lpszUrlPath, (size_t)pathLen * sizeof(wchar_t));
     }
@@ -149549,7 +149685,7 @@ static void RefreshBattery(SysState* s) {
             continue;
         }
         s->battery.present = true;
-        s->battery.pct = (float)atoi(buf);
+        s->battery.pct = (float)StrToIntUnchecked(Str(buf));
         snprintf(path, sizeof(path), "/sys/class/power_supply/%s/status",
                  ent->d_name);
         if (ReadSmallFile(path, buf, (int)sizeof(buf)) > 0) {
@@ -155010,7 +155146,7 @@ virtual HRESULT STDMETHODCALLTYPE get_ScrollBarStyle( COREWEBVIEW2_SCROLLBAR_STY
 virtual HRESULT STDMETHODCALLTYPE put_ScrollBarStyle( COREWEBVIEW2_SCROLLBAR_STYLE value) = 0;
 };
 
-enum {
+enum : uint8_t {
     kCookieSameSiteNone = 0,
     kCookieSameSiteLax = 1,
     kCookieSameSiteStrict = 2,
@@ -156139,7 +156275,8 @@ struct DragDropEnumCtx {
 };
 
 static BOOL CALLBACK InjectDragDropTarget(HWND hwnd, LPARAM param) {
-    DragDropEnumCtx* ctx = (DragDropEnumCtx*)param;
+
+    DragDropEnumCtx* ctx = reinterpret_cast<DragDropEnumCtx*>(param);
     DragDropTarget* target = new DragDropTarget();
     target->hwnd = hwnd;
     target->ctx = ctx->handlerCtx;
@@ -157402,7 +157539,9 @@ static bool AttachCustomProtocolHandler(WebView* wv, EventRegistrationToken* tok
         if (SUCCEEDED(wv->webview->QueryInterface(__uuidof(ICoreWebView2_22), (void**)&wv22))) {
 
             HRESULT hr = wv22->AddWebResourceRequestedFilterWithRequestSourceKinds(
-                ToCWstrTemp(filter), kWebResourceContextAll, kWebResourceRequestSourceKindsAll);
+                ToCWstrTemp(filter), kWebResourceContextAll,
+                (COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS)
+                    kWebResourceRequestSourceKindsAll);
             wry_wry_win_Rel(&wv22);
             if (FAILED(hr)) {
                 return false;

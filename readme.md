@@ -40,9 +40,13 @@ bun run.ts gpui_shell -- examples/js_todolist --dev
 loads and renders once without opening a window, and `types <directory>` writes
 the matching `gpui.d.ts` declarations.
 
-Windows uses Direct2D by default. Set `GPUI_PAINT=d3d11` (`gpu` is an alias) or
-`GPUI_PAINT=d3d12` before launching an example to select the native custom GPU
-renderer; `GPUI_PAINT_MSAA=1|2|4|8` controls its sample count.
+Windows builds Direct2D by default. Pass
+`--win-backend=d2d|d3d11|d3d12|all` to `build.ts` or `run.ts` to choose what
+the executable contains. An `all` build retains the process-start
+`__paint=d2d|d3d11|d3d12` selector; `__msaa=1|2|4|8` controls the custom
+renderers' sample count, and `__scene=off|replay|cache|skip|damage` selects the
+scene optimization level (`skip` by default). Pass those after `run.ts`'s
+`--`; Windows removes them from `argv` before calling `GpuiMain`.
 
 ## What is here
 
@@ -66,8 +70,11 @@ C11. The platform halves are already inside `gpui.cpp` behind `GPUI_OS_*`
 guards, so the same source set builds on all four:
 
 - **Windows** — `cl /std:c++20 /EHsc /utf-8 /DUNICODE /D_UNICODE`, static CRT;
-  links against the Win32, Direct2D, DirectWrite, D3D11, D3D12 and DXGI import
-  libraries.
+  define one of `WIN_BACKEND_DIRECT2D`, `WIN_BACKEND_D3D11` or
+  `WIN_BACKEND_D3D12` and link its import libraries. With no definition the
+  compatibility default is Direct2D. `WIN_BACKEND_ALL` compiles and links all
+  three. The custom backends already contain their shader bytecode and do not
+  require `d3dcompiler.lib` or `D3DCompiler_47.dll`.
 - **Linux** — `g++ -std=c++20` with `pkg-config --cflags --libs x11 cairo pangocairo`.
 - **macOS** — `clang++ -std=c++20 -x objective-c++` with the Cocoa, CoreText and
   IOKit frameworks. The file is Objective-C++ because the mac half is.
@@ -84,7 +91,7 @@ No other dependencies, no nested build system, no STL containers.
 
 ## This copy
 
-Amalgamated from gpui-cpp [`65d36c6ae82850945be8a035e76ab6d338d833bb`](https://github.com/kjk/gpui-cpp/commit/65d36c6ae82850945be8a035e76ab6d338d833bb).
+Amalgamated from gpui-cpp [`9e9d78e286b9ebbf24ea60eb7294840d5c40eb76`](https://github.com/kjk/gpui-cpp/commit/9e9d78e286b9ebbf24ea60eb7294840d5c40eb76).
 
-[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/65d36c6ae82850945be8a035e76ab6d338d833bb...main)
+[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/9e9d78e286b9ebbf24ea60eb7294840d5c40eb76...main)
 shows every commit this copy is behind by; if that page is empty, it is current.

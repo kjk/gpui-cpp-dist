@@ -54,6 +54,25 @@ export const isDist = existsSync(join(scriptDir, "gpui.h"));
 export const root = isDist ? scriptDir : resolve(scriptDir, "..");
 process.chdir(root);
 
+// Shader bytecode is checked in so an ordinary build needs neither fxc nor
+// D3DCompiler_47.dll. Refuse to silently amalgamate stale bytecode after the
+// HLSL changes; the explicit generator is the only writer.
+function ensureWinShadersCurrent(fail: (msg: string) => never): void {
+  if (isDist) {
+    return;
+  }
+  const sourcePath = join(root, "src/gpui/paintgpu_win.hlsl");
+  const generatedPath = join(root, "src/gpui/paintgpu_shaders_win.cpp");
+  if (!existsSync(sourcePath) || !existsSync(generatedPath)) {
+    fail("missing Windows shader source or bytecode; run bun cmd/update-win-shaders.ts");
+  }
+  const hash = new Bun.CryptoHasher("sha256").update(readFileSync(sourcePath)).digest("hex");
+  const generated = readFileSync(generatedPath, "utf8");
+  if (!generated.includes(`source-sha256: ${hash}`)) {
+    fail("Windows shader bytecode is stale; run bun cmd/update-win-shaders.ts");
+  }
+}
+
 /**
  * Repo-relative directory holding the gpui.h + gpui.cpp a build compiles:
  * the top level in gpui-cpp-dist, gitignored .work/ here. GPUI_AMALGAM_DIR
@@ -234,10 +253,26 @@ export type BuildFlags = {
   clean: boolean;
   /** Compile the library's individual source files instead of gpui.cpp. */
   nonAmalgam: boolean;
+  /** Windows renderer implementations compiled into the executable. */
+  winBackend: WindowsBackend;
+  sawWinBackend: boolean;
 };
 
+export type WindowsBackend = "d2d" | "d3d11" | "d3d12" | "all";
+
 export function defaultBuildFlags(): BuildFlags {
-  return { sawRel: false, sawDbg: false, debug: false, asan: false, clang: false, wasm: false, clean: false, nonAmalgam: false };
+  return {
+    sawRel: false,
+    sawDbg: false,
+    debug: false,
+    asan: false,
+    clang: false,
+    wasm: false,
+    clean: false,
+    nonAmalgam: false,
+    winBackend: "d2d",
+    sawWinBackend: false,
+  };
 }
 
 /**
@@ -245,6 +280,12 @@ export function defaultBuildFlags(): BuildFlags {
  * build flag, which is how cmd/run.ts layers its own on top of these.
  */
 export function takeBuildFlag(arg: string, f: BuildFlags): boolean {
+  const winBackend = arg.match(/^--win-backend=(d2d|d3d11|d3d12|all)$/i);
+  if (winBackend) {
+    f.winBackend = winBackend[1]!.toLowerCase() as WindowsBackend;
+    f.sawWinBackend = true;
+    return true;
+  }
   switch (arg) {
     case "-rel":
       f.sawRel = true;
@@ -293,6 +334,9 @@ export function checkBuildFlags(f: BuildFlags, plat: Platform, fail: (msg: strin
   }
   if (f.clang && plat === "wasm") {
     fail("-clang means nothing with -wasm: emscripten is clang.");
+  }
+  if (f.sawWinBackend && plat !== "win") {
+    fail("--win-backend is only available for native Windows builds.");
   }
 }
 
@@ -391,9 +435,12 @@ function allCppDir(rel: string): string[] {
 
 function sourcesFor(name: string, plat: Platform, nonAmalgam: boolean): string[] | null {
   if (nonAmalgam) {
-    if (name !== "hello_world") return null;
+    if (name !== "hello_world" && name !== "hello_world_no_amalgam") return null;
     const markdown = process.env.GPUI_MARKDOWN ?? "full";
-    return ["examples/hello_world.cpp", ...allCppDir("src").filter((f) => {
+    const example = name === "hello_world_no_amalgam"
+      ? "examples/hello_world_no_amalgam.cpp"
+      : "examples/hello_world.cpp";
+    return [example, ...allCppDir("src").filter((f) => {
       if (!sourcePlatform(f, plat)) return false;
       if (markdown === "full") return !f.startsWith("src/markdown-mini/");
       return !f.startsWith("src/markdown/") || f === "src/markdown/mdast.cpp";
@@ -878,13 +925,7 @@ export function findToolchain(plat: Platform, f: BuildFlags, fail: (msg: string)
 
 // ─── platform link inputs ─────────────────────────────────────────────────
 
-const winLibs = [
-  "d2d1.lib",
-  "d3d11.lib",
-  "d3d12.lib",
-  "dxgi.lib",
-  // src/gpui/paintgpu_win.cpp compiles its HLSL at startup with D3DCompile.
-  "d3dcompiler.lib",
+const winCommonLibs = [
   "dwrite.lib",
   "dwmapi.lib",
   "psapi.lib",
@@ -910,6 +951,19 @@ const winLibs = [
   // Task Manager's GPU column shows.
   "pdh.lib",
 ];
+
+function winLibs(f: BuildFlags): string[] {
+  const backend = f.winBackend;
+  const renderer =
+    backend === "d2d"
+      ? ["d2d1.lib", "d3d11.lib", "dxgi.lib"]
+      : backend === "d3d11"
+        ? ["d3d11.lib", "dxgi.lib"]
+        : backend === "d3d12"
+          ? ["d3d12.lib", "dxgi.lib"]
+          : ["d2d1.lib", "d3d11.lib", "d3d12.lib", "dxgi.lib"];
+  return [...renderer, ...winCommonLibs];
+}
 
 // Cocoa pulls in AppKit, Foundation and CoreGraphics; CoreText shapes the
 // glyphs and IOKit answers the battery question. WebKit is
@@ -960,14 +1014,29 @@ function linuxDeps(fail: (msg: string) => never): LinuxDeps {
 
 function cflagsFor(tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): string[] {
   if (tc.plat === "win") {
+    const backend = f.winBackend;
+    const backendDefine =
+      backend === "all"
+        ? "/DWIN_BACKEND_ALL=1"
+        : backend === "d3d11"
+          ? "/DWIN_BACKEND_D3D11=1"
+          : backend === "d3d12"
+            ? "/DWIN_BACKEND_D3D12=1"
+            : "/DWIN_BACKEND_DIRECT2D=1";
     const flags = [
       "/nologo",
       "/std:c++20",
-      "/EHsc",
+      // The tree does not use C++ exception handling or RTTI. Keep those
+      // runtime features out of every Windows translation unit and executable.
+      "/EHs-c-",
+      "/GR-",
+      // MSVC's STL switch; /EHs-c- disables compiler EH itself.
+      "/D_HAS_EXCEPTIONS=0",
       "/utf-8",
       ...(f.nonAmalgam
-        ? ["/I", "src", "/I", "src/gpui", "/FI", "markdown/markdown.h", "/FI", "base/lib.h", "/FI", "ui/lib.h", "/FI", "gpui/paint.h", "/FI", "gpui/assets.h", "/FI", "gpui/svg.h", "/FI", "gpui/accessibility_win.h"]
+        ? ["/I", "src", "/I", "src/gpui", "/FI", "markdown/markdown.h", "/FI", "base/lib.h", "/FI", "ui/lib.h", "/FI", "gpui/paint.h", "/FI", "gpui/assets.h", "/FI", "gpui/svg.h", "/FI", "gpui/accessibility_win.h", "/FI", "sys/executor.h"]
         : ["/I", amalgamDir()]),
+      backendDefine,
       "/DUNICODE",
       "/D_UNICODE",
       "/W4",
@@ -1016,12 +1085,16 @@ function cflagsFor(tc: Toolchain, f: BuildFlags, fail: (msg: string) => never): 
   const flags = [
     "-std=c++20",
     ...(f.nonAmalgam
-      ? ["-I", "src", "-I", "src/gpui", "-include", "markdown/markdown.h", "-include", "base/lib.h", "-include", "ui/lib.h", "-include", "gpui/paint.h", "-include", "gpui/assets.h", "-include", "gpui/svg.h", "-include", "gpui/accessibility_win.h"]
+      ? ["-I", "src", "-I", "src/gpui", "-include", "markdown/markdown.h", "-include", "base/lib.h", "-include", "ui/lib.h", "-include", "gpui/paint.h", "-include", "gpui/assets.h", "-include", "gpui/svg.h", "-include", "gpui/accessibility_win.h", "-include", "sys/executor.h"]
       : ["-I", amalgamDir()]),
     "-Wall",
     "-Wextra",
     "-Werror",
+    "-fno-exceptions",
     "-fno-rtti",
+    // Clang/GCC's feature macro is absent with -fno-exceptions; define it
+    // explicitly as zero so portable code can test it with #if.
+    "-D__EXCEPTIONS=0",
     ...(f.debug ? ["-O0", "-DDEBUG"] : ["-O2", "-DNDEBUG"]),
   ];
   if (tc.plat === "mac") {
@@ -1398,7 +1471,7 @@ function link(
       "/NODEFAULTLIB:ucrtd.lib",
       "/NODEFAULTLIB:vcruntime.lib",
       "/NODEFAULTLIB:vcruntimed.lib",
-      ...winLibs,
+      ...winLibs(f),
     ];
     if (!f.debug) {
       // /DEBUG implies /OPT:NOREF unless we opt back in.
@@ -1471,6 +1544,7 @@ export type BuildRequest = {
  */
 export async function build(req: BuildRequest): Promise<void> {
   const { names, plat, flags, fail } = req;
+  ensureWinShadersCurrent(fail);
   const tc = findToolchain(plat, flags, fail);
   // Every compile and link below is echoed with a `> `, and what those lines
   // leave out is said once here rather than on every one of them: where they
@@ -1534,7 +1608,8 @@ const amalgamLine = isDist
   : `Always writes .work/gpui.h, .work/gpui.cpp and .work/quickjs/, then compiles examples
 against that source set.`;
 
-const usage = `Usage: bun ${scriptPath("build.ts")} [-rel|-dbg] [-asan] [-clang] [-wasm] [-clean] [-all] [<example>]
+const usage = `Usage: bun ${scriptPath("build.ts")} [-rel|-dbg] [-asan] [-clang] [-wasm] [-clean] [-all]
+                     [--win-backend=d2d|d3d11|d3d12|all] [<example>]
 
   -rel    release (default)
   -dbg    debug
@@ -1544,6 +1619,10 @@ const usage = `Usage: bun ${scriptPath("build.ts")} [-rel|-dbg] [-asan] [-clang]
   -wasm   build a page for the browser with emscripten, from any host
   -clean  delete out/<dir>/ before building
   -all    build every example (amalgamation + compile); print total elapsed
+
+Windows renderer (compile-time, default d2d):
+  --win-backend=d2d|d3d11|d3d12|all
+  "all" retains the __paint process-start selector; fixed builds ignore it.
 
 ${amalgamLine}
 

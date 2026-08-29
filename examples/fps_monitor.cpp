@@ -428,19 +428,19 @@ int GpuiMain(int argc, char** argv) {
     int winH = 600;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-bench") == 0 && i + 1 < argc) {
-            self->benchSecs = atof(argv[++i]);
+            self->benchSecs = StrToFloatUnchecked(Str(argv[++i]));
         } else if (strcmp(argv[i], "-bench-out") == 0 && i + 1 < argc) {
             self->benchOut = argv[++i];
         } else if (strcmp(argv[i], "-curves") == 0 && i + 1 < argc) {
-            self->curves = atoi(argv[++i]);
+            self->curves = StrToIntUnchecked(Str(argv[++i]));
         } else if (strcmp(argv[i], "-size") == 0 && i + 1 < argc) {
             // -size WxH: the load knob the curve count is not. Line drawing
             // costs what it covers, so a number measured at one window size
             // says nothing about another.
             const char* s = argv[++i];
-            int w = atoi(s);
+            int w = StrToIntUnchecked(Str(s));
             const char* x = strchr(s, 'x');
-            int h = x ? atoi(x + 1) : 0;
+            int h = x ? StrToIntUnchecked(Str(x + 1)) : 0;
             if (w > 0 && h > 0) {
                 winW = w;
                 winH = h;

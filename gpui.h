@@ -62,7 +62,13 @@
 
 namespace base {
 
-enum {
+template <typename T, size_t N>
+char (&DimofSizeHelper(T (&array)[N]) noexcept)[N];
+#ifndef dimof
+#define dimof(array) (sizeof(base::DimofSizeHelper(array)))
+#endif
+
+enum : uint16_t {
     kMaxPath = 1024
 };
 
@@ -72,23 +78,25 @@ struct Str {
     char* s;
     int len;
 
-    Str() : s(nullptr), len(0) {}
+    constexpr Str() noexcept : s(nullptr), len(0) {}
 
     explicit Str(const char* s_) : s((char*)s_), len(0) {
         len = s_ ? (int)strlen(s_) : 0;
     }
-    explicit Str(const char* s_, int len_) : s((char*)s_), len(len_) {}
+    constexpr explicit Str(const char* s_, int len_) noexcept : s((char*)s_), len(len_) {}
     explicit Str(char* s_) : s(s_), len(0) { len = s ? (int)strlen(s) : 0; }
-    explicit Str(char* s_, int len_) : s(s_), len(len_) {}
+    constexpr explicit Str(char* s_, int len_) noexcept : s(s_), len(len_) {}
 
     explicit operator bool() const { return len > 0 && s; }
 };
+
+float StrToFloatUnchecked(Str s);
 
 void log(Str s);
 
 using TempStr = Str;
 
-#define StrL(lit) ::base::Str((char*)(lit), (int)(sizeof(lit) - 1))
+#define StrL(lit) ::base::Str{(char*)(lit), (int)dimof(lit) - 1}
 
 Str AllocStrTemp(int size);
 
@@ -409,12 +417,12 @@ GPUI_NOINLINE bool VecRealloc(struct Arena* a, void** els, int len, int* cap,
 
 #if defined(DEBUG)
 int VecDbgBirth(const char* file, int line, const char* func, char kind,
-                int elSize);
-void VecDbgGrow(int id, int len, int oldCap, int needed, int newCap);
+                int elSize) noexcept;
+void VecDbgGrow(int id, int len, int oldCap, int needed, int newCap) noexcept;
 void VecDbgSegment(int id, int len, int want, int lastSegCap, int newSegCap,
-                   int totalCap, bool reused);
-void VecDbgDeath(int id, int len, int cap);
-void VecDbgArenaDeath(int id, int len, int totalCap, int segCount);
+                   int totalCap, bool reused) noexcept;
+void VecDbgDeath(int id, int len, int cap) noexcept;
+void VecDbgArenaDeath(int id, int len, int totalCap, int segCount) noexcept;
 
 #define GPUI_VEC_DBG_ARGS0                                            \
     const char *dbgF = __builtin_FILE(), int dbgL = __builtin_LINE(), \
@@ -551,7 +559,7 @@ struct Vec {
     int dbgId = 0;
 #endif
 
-    explicit Vec(GPUI_VEC_DBG_ARGS0) GPUI_VEC_DBG_INIT('V') {}
+    explicit Vec(GPUI_VEC_DBG_ARGS0) noexcept GPUI_VEC_DBG_INIT('V') {}
 
     Vec(const Vec& other GPUI_VEC_DBG_ARGS) GPUI_VEC_DBG_INIT('V') {
         VecCopyFromNT(VecNT(*this), (int)sizeof(T), other.len,
@@ -859,7 +867,7 @@ struct ArenaVec {
     int dbgTotalCap = 0;
     int dbgSegs = 0;
 
-    ArenaVec(GPUI_VEC_DBG_ARGS0) GPUI_VEC_DBG_INIT('A') {}
+    ArenaVec(GPUI_VEC_DBG_ARGS0) noexcept GPUI_VEC_DBG_INIT('A') {}
 
     ~ArenaVec() { VecDbgArenaDeath(dbgId, len, dbgTotalCap, dbgSegs); }
 #endif
@@ -1235,7 +1243,7 @@ bool StrBuilderAppend(Arena* a, StrBuilder& b, Str s);
 Str StrBuilderTakeStr(Arena* a, StrBuilder& b);
 
 struct FmtArg {
-    enum class Kind {
+    enum class Kind : uint8_t {
         Char,
         Int,
         Ptr,
@@ -3315,6 +3323,10 @@ namespace gpui {
 using namespace base;
 }
 
+namespace base {
+int StrToIntUnchecked(Str s);
+}
+
 namespace gpui {
 
 struct App;
@@ -3680,7 +3692,7 @@ struct ClickEvent {
     int keyboardKey = 0;
 };
 
-enum {
+enum : uint8_t {
     KeyBack = 8,
     KeyTab = 9,
     KeyReturn = 13,
@@ -6490,7 +6502,7 @@ bool ClickFromRelease(bool pending, int pressedId, MouseButton pressedButton,
 bool ClickFromKeyRelease(bool pending, int pendingGen, int focusGen, int key,
                          bool modified);
 
-enum {
+enum : int8_t {
     ClickWinMin = -1,
     ClickWinMax = -2,
     ClickWinClose = -3,
@@ -6522,7 +6534,7 @@ struct FrameTiming {
     float drawSecs = 0;
 };
 
-enum {
+enum : uint16_t {
     kFrameTraceCap = 256
 };
 
@@ -7234,7 +7246,7 @@ bool AssetsExists(Str relPath);
 
 namespace gpui {
 
-enum DrawOp : uint16_t {
+enum DrawOp : uint8_t {
     kOpEnd = 0,
 
     kOpViewBox = 1,
@@ -7264,7 +7276,7 @@ enum DrawOp : uint16_t {
     kOpText = 18,
 };
 
-enum DrawOpTextFlag : uint32_t {
+enum DrawOpTextFlag : uint8_t {
     kTextAnchorMask = 3,
     kTextAnchorStart = 0,
     kTextAnchorMiddle = 1,
@@ -22093,6 +22105,10 @@ void Init(App* app);
 
 #line 1 "src/sys/sysinfo.h"
 
+namespace base {
+int StrToIntUnchecked(Str s);
+}
+
 namespace gpui {
 
 struct ProcessInfo {
@@ -22149,7 +22165,7 @@ void SysStateInit(SysState* s);
 void SysStateFree(SysState* s);
 void SysRefresh(SysState* s);
 
-enum class ProcessSort : int32_t {
+enum class ProcessSort : uint8_t {
     Pid = 0,
     Name = 1,
     Cpu = 2,
@@ -22179,7 +22195,7 @@ const FpsStyle& FpsStyleDark();
 
 Rgba FpsLevelColor(const FpsStyle& style, float frameSecs, float budgetSecs);
 
-enum {
+enum : uint16_t {
 
     kFpsCapacity = 120,
 
@@ -22335,9 +22351,85 @@ void ImageCacheClear();
 
 #line 1 "src/gpui/paint.h"
 
+#include <math.h>
+
+#if GPUI_OS_WINDOWS
+#ifndef WIN_BACKEND_ALL
+#define WIN_BACKEND_ALL 0
+#endif
+#if WIN_BACKEND_ALL
+#undef WIN_BACKEND_DIRECT2D
+#undef WIN_BACKEND_D3D11
+#undef WIN_BACKEND_D3D12
+#define WIN_BACKEND_DIRECT2D 1
+#define WIN_BACKEND_D3D11 1
+#define WIN_BACKEND_D3D12 1
+#else
+#if !defined(WIN_BACKEND_DIRECT2D) && !defined(WIN_BACKEND_D3D11) &&          \
+    !defined(WIN_BACKEND_D3D12)
+#define WIN_BACKEND_DIRECT2D 1
+#endif
+#ifndef WIN_BACKEND_DIRECT2D
+#define WIN_BACKEND_DIRECT2D 0
+#endif
+#ifndef WIN_BACKEND_D3D11
+#define WIN_BACKEND_D3D11 0
+#endif
+#ifndef WIN_BACKEND_D3D12
+#define WIN_BACKEND_D3D12 0
+#endif
+#if WIN_BACKEND_DIRECT2D + WIN_BACKEND_D3D11 + WIN_BACKEND_D3D12 != 1
+#error Define exactly one WIN_BACKEND_DIRECT2D, WIN_BACKEND_D3D11 or WIN_BACKEND_D3D12, or define WIN_BACKEND_ALL
+#endif
+#endif
+#else
+#undef WIN_BACKEND_ALL
+#undef WIN_BACKEND_DIRECT2D
+#undef WIN_BACKEND_D3D11
+#undef WIN_BACKEND_D3D12
+#define WIN_BACKEND_ALL 0
+#define WIN_BACKEND_DIRECT2D 0
+#define WIN_BACKEND_D3D11 0
+#define WIN_BACKEND_D3D12 0
+#endif
+
+#define WIN_BACKEND_GPU (WIN_BACKEND_D3D11 || WIN_BACKEND_D3D12)
+
 namespace gpui {
 
-enum {
+#if GPUI_OS_WINDOWS
+enum class WinPaintBackend : uint8_t {
+    Direct2D,
+    D3D11,
+    D3D12,
+};
+
+enum class WinPaintMsaa : uint8_t {
+    X1 = 1,
+    X2 = 2,
+    X4 = 4,
+    X8 = 8,
+};
+
+enum class WinSceneMode : uint8_t {
+    Off,
+    Replay,
+    Cache,
+    Skip,
+    Damage,
+};
+
+struct WinPaintOptions {
+    WinPaintBackend backend = WinPaintBackend::Direct2D;
+    WinPaintMsaa msaa = WinPaintMsaa::X4;
+    WinSceneMode scene = WinSceneMode::Skip;
+};
+
+const WinPaintOptions& WinPaintOptionsGet();
+bool WinPaintOptionsTakeArg(Str arg);
+#endif
+
+enum : uint8_t {
     kFontWeightMask = 15,
     kFontWeightNormal = 0,
     kFontWeightThin = 1,
@@ -22376,7 +22468,7 @@ inline Rgba PaintFade(const PaintCtx* ctx, Rgba c) {
         return c;
     }
     float a = (float)c.a * (ctx->opacity < 0 ? 0 : ctx->opacity);
-    c.a = (uint8_t)(a <= 0 ? 0 : (a >= 255 ? 255 : a + 0.5f));
+    c.a = (uint8_t)(a <= 0 ? 0 : (a >= 255 ? 255 : lroundf(a)));
     return c;
 }
 
@@ -22647,7 +22739,7 @@ void AppMenuChosen(int id);
 
 namespace gpui {
 
-enum SceneLevel : int {
+enum SceneLevel : uint8_t {
     kSceneOff = 0,
     kSceneReplay = 1,
     kSceneCache = 2,
@@ -25200,7 +25292,7 @@ constexpr int kHttpTimeoutMs = 15000;
 
 bool HttpUrlIsRemote(Str url);
 
-enum class FetchState : int32_t {
+enum class FetchState : uint8_t {
 
     None = 0,
 
@@ -26053,34 +26145,34 @@ struct Rgba {
     uint8_t a = 0;
 };
 
-enum class Theme {
+enum class Theme : uint8_t {
     Dark,
     Light,
     Auto,
 };
 
-enum class PageLoadEvent {
+enum class PageLoadEvent : uint8_t {
     Started,
     Finished,
 };
 
-enum class ScrollBarStyle {
+enum class ScrollBarStyle : uint8_t {
     Default,
     FluentOverlay,
 };
 
-enum class MemoryUsageLevel {
+enum class MemoryUsageLevel : uint8_t {
     Normal,
     Low,
 };
 
-enum class BackgroundThrottlingPolicy {
+enum class BackgroundThrottlingPolicy : uint8_t {
     Disabled,
     Suspend,
     Throttle,
 };
 
-enum class ProxyKind {
+enum class ProxyKind : uint8_t {
     None,
     Http,
     Socks5,
@@ -26132,7 +26224,7 @@ struct CustomProtocol {
 
 struct WebView;
 
-enum class NewWindowResponse {
+enum class NewWindowResponse : uint8_t {
     Allow,
     Create,
     Deny,
@@ -26154,7 +26246,7 @@ using DownloadStartedHandler = bool (*)(void* ctx, Str url, Str* path);
 
 using DownloadCompletedHandler = void (*)(void* ctx, Str url, const Str* path, bool success);
 
-enum class DragDropKind {
+enum class DragDropKind : uint8_t {
     Enter,
     Over,
     Drop,
@@ -26171,7 +26263,7 @@ struct DragDropEvent {
 
 using DragDropHandler = bool (*)(void* ctx, const DragDropEvent* event);
 
-enum class CookieSameSite {
+enum class CookieSameSite : uint8_t {
     None,
     Lax,
     Strict,
