@@ -147414,7 +147414,7 @@ static int ImeStringUtf8(HIMC imc, DWORD which, char* out, int cap) {
         wlen = (int)(sizeof(wbuf) / sizeof(wbuf[0]));
     }
     ImmGetCompositionStringW(imc, which, wbuf,
-                              (DWORD)wlen * (DWORD)sizeof(wchar_t));
+                             (DWORD)wlen * (DWORD)sizeof(wchar_t));
     int n =
         WideCharToMultiByte(CP_UTF8, 0, wbuf, wlen, out, cap, nullptr, nullptr);
     return n;
@@ -148325,7 +148325,6 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
 }
 
 void ClipboardSetText(Window* win, Str text) {
-    HWND hwnd = Hwnd(win);
     if (!text.s || text.len <= 0) {
         return;
     }
@@ -148342,14 +148341,28 @@ void ClipboardSetText(Window* win, Str text) {
     }
     memcpy(dst, w, (size_t)(wn + 1) * sizeof(WCHAR));
     GlobalUnlock(h);
-    if (!OpenClipboard(hwnd)) {
-        GlobalFree(h);
-        return;
-    }
-    EmptyClipboard();
 
-    SetClipboardData(CF_UNICODETEXT, h);
-    CloseClipboard();
+    HWND hwnd = Hwnd(win);
+    bool ok = false;
+    for (int i = 0; i < 16 && !ok; i++) {
+        HWND owner = (i < 8 && hwnd) ? hwnd : nullptr;
+        if (!OpenClipboard(owner)) {
+            Sleep(8);
+            continue;
+        }
+        EmptyClipboard();
+        if (SetClipboardData(CF_UNICODETEXT, h)) {
+            ok = true;
+            h = nullptr;
+        }
+        CloseClipboard();
+        if (!ok) {
+            Sleep(8);
+        }
+    }
+    if (h) {
+        GlobalFree(h);
+    }
 }
 
 void WindowSetTextContentType(Window* win, Str value) {
@@ -148490,9 +148503,9 @@ Window* WindowOpen(App* app, Str title, int dipW, int dipH, WinOpts opts) {
 
     WindowGeomRequested(&x, &y, &pxW, &pxH);
 
-    HWND hwnd =
-        CreateWindowExW(0, kWndClass, ToCWstrTemp(title), style, x, y, pxW, pxH,
-                        nullptr, nullptr, GetModuleHandleW(nullptr), win);
+    HWND hwnd = CreateWindowExW(
+        WS_EX_NOREDIRECTIONBITMAP, kWndClass, ToCWstrTemp(title), style, x, y,
+        pxW, pxH, nullptr, nullptr, GetModuleHandleW(nullptr), win);
     if (!hwnd) {
         delete win->plat;
         win->plat = nullptr;
