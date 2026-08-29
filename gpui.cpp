@@ -620,6 +620,166 @@ GPUI_NOINLINE bool VecRealloc(Arena* a, void** els, int len, int* cap,
     return true;
 }
 
+static int VecNextCap(int cap, int wanted, int elSize) {
+    if (cap == 0) {
+        int floorCap = elSize == 1 ? 8 : elSize <= 1024 ? 4 : 1;
+        return std::max(floorCap, wanted);
+    }
+    return std::max(cap * 2, wanted);
+}
+
+GPUI_NOINLINE bool VecReserveNT(Arena* arena, VecNonTemplated* v, int elSize,
+                                int wantedSize) {
+    int cap = v->cap;
+    int curCap = cap < 0 ? -cap : cap;
+    if (wantedSize <= curCap) {
+        return true;
+    }
+    int newCap = VecNextCap(curCap, wantedSize, elSize);
+    if (cap < 0) {
+        void* borrowed = v->els;
+        v->els = nullptr;
+        v->cap = 0;
+        if (!VecRealloc(arena, &v->els, 0, &v->cap, newCap, elSize)) {
+            v->els = borrowed;
+            v->cap = -curCap;
+            return false;
+        }
+        if (v->len > 0) {
+            memcpy(v->els, borrowed, (size_t)v->len * (size_t)elSize);
+        }
+        return true;
+    }
+    return VecRealloc(arena, &v->els, v->len, &v->cap, newCap, elSize);
+}
+
+GPUI_NOINLINE void* VecInsertSpaceNT(VecNonTemplated* v, int elSize, int idx,
+                                     int count) {
+    int oldLen = v->len;
+    int newLen = std::max(oldLen, idx) + count;
+    if (!VecReserveNT(nullptr, v, elSize, newLen)) {
+        return nullptr;
+    }
+    char* res = (char*)v->els + (size_t)idx * (size_t)elSize;
+    if (oldLen > idx) {
+        char* dst = res + (size_t)count * (size_t)elSize;
+        memmove(dst, res, (size_t)(oldLen - idx) * (size_t)elSize);
+    }
+    v->len = newLen;
+    return res;
+}
+
+GPUI_NOINLINE bool VecResizeNT(VecNonTemplated* v, int elSize, int newSize) {
+    if (newSize < 0) {
+        return false;
+    }
+    int curCap = v->cap < 0 ? -v->cap : v->cap;
+    if (newSize > curCap) {
+        if (!VecReserveNT(nullptr, v, elSize, newSize)) {
+            return false;
+        }
+        curCap = v->cap < 0 ? -v->cap : v->cap;
+    }
+    v->len = newSize;
+    if (v->els && curCap > newSize) {
+        char* tail = (char*)v->els + (size_t)newSize * (size_t)elSize;
+        memset(tail, 0, (size_t)(curCap - newSize) * (size_t)elSize);
+    }
+    return true;
+}
+
+GPUI_NOINLINE void VecRemoveAtNT(VecNonTemplated* v, int elSize, int idx,
+                                 int count) {
+    int oldLen = v->len;
+    char* els = (char*)v->els;
+    if (oldLen > idx + count) {
+        char* dst = els + (size_t)idx * (size_t)elSize;
+        char* src = els + (size_t)(idx + count) * (size_t)elSize;
+        memmove(dst, src, (size_t)(oldLen - idx - count) * (size_t)elSize);
+    }
+    int newLen = oldLen - count;
+    memset(els + (size_t)newLen * (size_t)elSize, 0,
+           (size_t)count * (size_t)elSize);
+    v->len = newLen;
+}
+
+GPUI_NOINLINE void VecRemoveAtFastNT(VecNonTemplated* v, int elSize, int idx) {
+    int oldLen = v->len;
+    if (idx >= oldLen) {
+        return;
+    }
+    char* els = (char*)v->els;
+    char* removed = els + (size_t)idx * (size_t)elSize;
+    char* last = els + (size_t)(oldLen - 1) * (size_t)elSize;
+    if (removed != last) {
+        memcpy(removed, last, (size_t)elSize);
+    }
+    memset(last, 0, (size_t)elSize);
+    v->len = oldLen - 1;
+}
+
+GPUI_NOINLINE void VecFreeElementsNT(VecNonTemplated* v) {
+    v->len = 0;
+    if (!v->els) {
+        v->cap = 0;
+        return;
+    }
+    if (v->cap > 0) {
+        Free(nullptr, v->els);
+    }
+    v->cap = 0;
+    v->els = nullptr;
+}
+
+GPUI_NOINLINE void VecClearNT(VecNonTemplated* v, int elSize) {
+    v->len = 0;
+    int curCap = v->cap < 0 ? -v->cap : v->cap;
+    if (v->els && curCap > 0) {
+        memset(v->els, 0, (size_t)curCap * (size_t)elSize);
+    }
+}
+
+GPUI_NOINLINE void* VecTakeNT(VecNonTemplated* v, int elSize) {
+    void* els = v->els;
+    if (v->cap < 0) {
+        int n = v->len;
+        v->els = nullptr;
+        v->cap = 0;
+        v->len = 0;
+        if (n <= 0) {
+            return nullptr;
+        }
+        if (!VecRealloc(nullptr, &v->els, 0, &v->cap, n, elSize)) {
+            return nullptr;
+        }
+        void* result = v->els;
+        memcpy(result, els, (size_t)n * (size_t)elSize);
+        v->els = nullptr;
+        v->cap = 0;
+        return result;
+    }
+    v->els = nullptr;
+    v->len = 0;
+    v->cap = 0;
+    return els;
+}
+
+GPUI_NOINLINE void VecCopyFromNT(VecNonTemplated* v, int elSize, int srcLen,
+                                 const void* srcEls, bool zeroTail) {
+    VecReserveNT(nullptr, v, elSize, srcLen);
+    v->len = srcLen;
+    if (srcLen > 0 && srcEls && v->els) {
+        memcpy(v->els, srcEls, (size_t)srcLen * (size_t)elSize);
+    }
+    if (zeroTail && v->els) {
+        int curCap = v->cap < 0 ? -v->cap : v->cap;
+        if (curCap > srcLen) {
+            char* tail = (char*)v->els + (size_t)srcLen * (size_t)elSize;
+            memset(tail, 0, (size_t)(curCap - srcLen) * (size_t)elSize);
+        }
+    }
+}
+
 #if defined(DEBUG)
 
 static FILE* gVecDbgFile = nullptr;
@@ -1069,153 +1229,119 @@ static bool IsDigit(char c) {
 
 static constexpr int kPadding = 1;
 
-static bool IsExternalOrEmpty(const StrBuilder* s) {
-    return !s->els || (s->buf.s && s->els == s->buf.s);
+static bool IsNotOurHeapBlock(const StrBuilder& b) {
+    return !b.els || b.cap < 0;
 }
 
-static char* EnsureCap(StrBuilder* s, int needed) {
-
-    if (IsExternalOrEmpty(s) && s->buf.s && needed + kPadding <= s->buf.len) {
-        s->els = s->buf.s;
-        return s->els;
+static void StrBuilderTerminate(StrBuilder& b) {
+    if (b.els) {
+        b.els[b.len] = 0;
     }
+}
 
-    int capacityHint = s->cap;
-
-    if (IsExternalOrEmpty(s)) {
-        s->cap = 0;
-    }
-
-    if (s->els && s->cap >= needed) {
-        return s->els;
-    }
-
-    int newCap = s->cap * 2;
-    newCap = std::max(needed, newCap);
-    newCap = std::max(newCap, capacityHint);
-
-    int newElCount = newCap + kPadding;
-
-    int allocSize = newElCount;
-    char* newEls;
-    if (IsExternalOrEmpty(s)) {
-        newEls = (char*)Alloc(s->a, allocSize);
-        if (newEls && s->els && s->len > 0) {
-            memcpy(newEls, s->els, (size_t)s->len + 1);
-        } else if (newEls) {
-            newEls[0] = 0;
-        }
-    } else {
-        newEls = (char*)Realloc(s->a, s->els, (size_t)allocSize,
-                                (size_t)s->len + kPadding);
-    }
-    if (!newEls) {
+static char* StrBuilderEnsureCap(Arena* a, StrBuilder& b, int needed) {
+    char* els = VecReserve(a, b, needed);
+    if (!els) {
         return nullptr;
     }
-    s->els = newEls;
-    s->cap = newCap;
-    return newEls;
-}
-
-static char* MakeSpaceAt(StrBuilder* s, int idx, int count) {
-    int newLen = std::max(s->len, idx) + count;
-    char* buf = EnsureCap(s, newLen);
-    if (!buf) {
-        return nullptr;
+    if (a && b.cap > 0) {
+        b.cap = -b.cap;
     }
-    buf[newLen] = 0;
-    char* res = &(buf[idx]);
-    if (s->len > idx) {
-
-        char* src = buf + idx;
-        char* dst = buf + idx + count;
-        memmove(dst, src, (size_t)(s->len - idx));
-    }
-    s->len = newLen;
-
-    return res;
-}
-
-static void StrBuilderReset(StrBuilder* s) {
-    s->len = 0;
-
-    if (!s->els || (s->buf.s && s->els == s->buf.s)) {
-        s->els = s->buf.s;
-    }
-    if (s->els) {
-        s->els[0] = 0;
-    }
-}
-
-static void StrBuilderFree(StrBuilder* s) {
-    if (s->els && !(s->buf.s && s->els == s->buf.s)) {
-        Free(s->a, s->els);
-    }
-    s->len = 0;
-    s->cap = 0;
-    s->els = s->buf.s;
-    if (s->els) {
-        s->els[0] = 0;
-    }
+    return els;
 }
 
 void StrBuilder::Reset(Str s) {
-    StrBuilderReset(this);
+
+    len = 0;
+    StrBuilderTerminate(*this);
     Append(s);
 }
 
-StrBuilder::StrBuilder(Str externalBuf) {
-    this->buf = externalBuf;
-    Reset();
+void StrBuilderUseExternalBuffer(StrBuilder& b, Str buf) {
+    if (b.els || b.len != 0) {
+        return;
+    }
+    if (buf.s && buf.len > kPadding) {
+        b.els = buf.s;
+        b.cap = -(buf.len - kPadding);
+        b.els[0] = 0;
+    }
 }
 
-StrBuilder::~StrBuilder() {
-    StrBuilderFree(this);
-}
-
-bool StrBuilder::InsertAt(int idx, char el) {
-    char* p = MakeSpaceAt(this, idx, 1);
-    if (!p) {
+bool StrBuilderReserve(Arena* a, StrBuilder& b, int cap) {
+    if (!StrBuilderEnsureCap(a, b, cap)) {
         return false;
     }
-    p[0] = el;
+    StrBuilderTerminate(b);
+    return true;
+}
+
+bool StrBuilderAppendChar(Arena* a, StrBuilder& b, char c) {
+    if (!StrBuilderEnsureCap(a, b, b.len + 1)) {
+        return false;
+    }
+    b.els[b.len++] = c;
+    StrBuilderTerminate(b);
+    return true;
+}
+
+bool StrBuilderAppend(Arena* a, StrBuilder& b, Str src) {
+    if (StrIsNull(src) || 0 == src.len) {
+        return true;
+    }
+    if (!StrBuilderEnsureCap(a, b, b.len + src.len)) {
+        return false;
+    }
+    memcpy(b.els + b.len, src.s, (size_t)src.len);
+    b.len += src.len;
+    StrBuilderTerminate(b);
     return true;
 }
 
 bool StrBuilder::AppendChar(char c) {
-    return InsertAt(len, c);
+    return StrBuilderAppendChar(nullptr, *this, c);
 }
 
 bool StrBuilder::Append(Str src) {
-    if (StrIsNull(src) || 0 == src.len) {
-        return true;
+    return StrBuilderAppend(nullptr, *this, src);
+}
+
+char StrBuilder::RemoveAt(int idx, int count) {
+    char result = els[idx];
+
+    VecRemoveAtN(*this, idx, count);
+    return result;
+}
+
+char StrBuilder::RemoveLast() {
+    return len == 0 ? 0 : RemoveAt(len - 1);
+}
+
+Str StrBuilderTakeStr(Arena* a, StrBuilder& b) {
+    int n = b.len;
+    char* res = b.els;
+    if (!b.els || n == 0) {
+        b.Reset();
+        return Str{};
     }
-    char* dst = MakeSpaceAt(this, len, src.len);
-    if (!dst) {
-        return false;
+    if (IsNotOurHeapBlock(b)) {
+
+        res = (char*)MemDup(a, b.els, (size_t)n + kPadding);
+    } else {
+
+        b.els = nullptr;
+        b.cap = 0;
     }
-    memcpy(dst, src.s, (size_t)src.len);
-    return true;
+    b.Reset();
+    return Str(res, n);
 }
 
 Str StrBuilder::TakeStr() {
-    int n = len;
-    char* res = els;
-    if (!els || n == 0) {
-        Reset();
-        return Str{};
-    }
-    if (buf.s && els == buf.s) {
+    return StrBuilderTakeStr(nullptr, *this);
+}
 
-        res = (char*)MemDup(this->a, els, (size_t)n + kPadding);
-        els = buf.s;
-    } else {
-
-        els = buf.s;
-    }
-
-    Reset();
-    return Str(res, n);
+char StrBuilder::LastChar() const {
+    return len == 0 ? 0 : els[len - 1];
 }
 
 struct Inst {
@@ -1237,6 +1363,8 @@ struct Inst {
 struct Fmt {
     Fmt() = default;
     ~Fmt() = default;
+
+    Arena* a = nullptr;
 
     bool Eval(const FmtArg** args, int nArgs);
 
@@ -1508,23 +1636,25 @@ static void evalDefault(Fmt& fmt, const FmtArg& arg) {
     Str buf(fmt.buf, (int)dimof(fmt.buf));
     switch (arg.t) {
         case FmtArg::Kind::Char:
-            fmt.res.AppendChar(arg.c);
+            StrBuilderAppendChar(fmt.a, fmt.res, arg.c);
             break;
         case FmtArg::Kind::Int:
-            fmt.res.Append(bufFmt(buf, "%lld", (long long)arg.i));
+            StrBuilderAppend(fmt.a, fmt.res,
+                             bufFmt(buf, "%lld", (long long)arg.i));
             break;
         case FmtArg::Kind::Ptr:
-            fmt.res.Append(bufFmt(buf, "%p", arg.ptr));
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%p", arg.ptr));
             break;
         case FmtArg::Kind::Float:
 
-            fmt.res.Append(bufFmt(buf, "%G", (double)arg.f));
+            StrBuilderAppend(fmt.a, fmt.res,
+                             bufFmt(buf, "%G", (double)arg.f));
             break;
         case FmtArg::Kind::Double:
-            fmt.res.Append(bufFmt(buf, "%G", arg.d));
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", arg.d));
             break;
         case FmtArg::Kind::Str:
-            fmt.res.Append(arg.str);
+            StrBuilderAppend(fmt.a, fmt.res, arg.str);
             break;
         default:
             break;
@@ -1555,13 +1685,13 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
         pad = std::max(pad, 0);
         if (!inst.leftJust) {
             for (int j = 0; j < pad; j++) {
-                fmt.res.AppendChar(' ');
+                StrBuilderAppendChar(fmt.a, fmt.res, ' ');
             }
         }
-        fmt.res.Append(Str(sv.s, slen));
+        StrBuilderAppend(fmt.a, fmt.res, Str(sv.s, slen));
         if (inst.leftJust) {
             for (int j = 0; j < pad; j++) {
-                fmt.res.AppendChar(' ');
+                StrBuilderAppendChar(fmt.a, fmt.res, ' ');
             }
         }
         return;
@@ -1591,7 +1721,7 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
                 fbuf[k] = 0;
                 out = bufFmt(bufS, fbuf, (int)ival);
             }
-            fmt.res.Append(out);
+            StrBuilderAppend(fmt.a, fmt.res, out);
             break;
         case 'u':
         case 'o':
@@ -1609,12 +1739,12 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
                 out =
                     bufFmt(bufS, fbuf, (unsigned int)(unsigned long long)ival);
             }
-            fmt.res.Append(out);
+            StrBuilderAppend(fmt.a, fmt.res, out);
             break;
         case 'c':
             fbuf[k++] = 'c';
             fbuf[k] = 0;
-            fmt.res.Append(bufFmt(bufS, fbuf, (int)ival));
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, fbuf, (int)ival));
             break;
         case 'f':
         case 'F':
@@ -1627,14 +1757,14 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
             fbuf[k++] = conv;
             fbuf[k] = 0;
             double dv = (arg.t == FmtArg::Kind::Double) ? arg.d : (double)arg.f;
-            fmt.res.Append(bufFmt(bufS, fbuf, dv));
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, fbuf, dv));
         } break;
         case 'p': {
 
             const void* pv = (arg.t == FmtArg::Kind::Ptr)
                                  ? arg.ptr
                                  : (const void*)(intptr_t)ival;
-            fmt.res.Append(bufFmt(bufS, "%p", pv));
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, "%p", pv));
         } break;
         default:
             break;
@@ -1651,7 +1781,8 @@ bool Fmt::Eval(const FmtArg** args, int nArgs) {
         auto& inst = instructions[n];
 
         if (inst.t == FmtArg::Kind::RawStr) {
-            res.Append(Str(format.s + inst.rawOff, inst.sLen));
+            StrBuilderAppend(a, res,
+                             Str(format.s + inst.rawOff, inst.sLen));
             continue;
         }
 
@@ -1699,7 +1830,7 @@ static Str FormatArgs(Arena* a, const char* fmt, const FmtArg** args,
 
     Fmt f;
 
-    f.res.a = a;
+    f.a = a;
     bool ok = ParseFormat(f, Str(fmt));
     if (!ok) {
         return {};
@@ -1708,7 +1839,7 @@ static Str FormatArgs(Arena* a, const char* fmt, const FmtArg** args,
     if (!ok) {
         return {};
     }
-    return f.res.TakeStr();
+    return StrBuilderTakeStr(f.a, f.res);
 }
 
 TempStr FormatTempArgs(const char* fmt, const FmtArg** args, int nArgs) {
@@ -4006,13 +4137,13 @@ static bool ReadFileAll(const char* path, Vec<uint8_t>* out) {
         return false;
     }
     rewind(f);
-    out->Reset();
+    VecReset(*out);
     int n = (int)size;
     if (n == 0) {
         fclose(f);
         return true;
     }
-    uint8_t* buf = out->AppendBlanks(n);
+    uint8_t* buf = VecAppendBlanks(*out, n);
     if (!buf) {
         fclose(f);
         return false;
@@ -4020,7 +4151,7 @@ static bool ReadFileAll(const char* path, Vec<uint8_t>* out) {
     size_t got = fread(buf, 1, (size_t)n, f);
     fclose(f);
     if ((int)got != n) {
-        out->Reset();
+        VecReset(*out);
         return false;
     }
     return true;
@@ -4529,14 +4660,14 @@ bool DrawOpsViewBox(const void* data, int dataLen, Size* out) {
 
 void DrawOpsBuilder::Op(DrawOp op) {
     uint16_t v = (uint16_t)op;
-    uint8_t* p = data.AppendBlanks(2);
+    uint8_t* p = VecAppendBlanks(data, 2);
     if (p) {
         memcpy(p, &v, 2);
     }
 }
 
 void DrawOpsBuilder::F2(float a, float b) {
-    uint8_t* p = data.AppendBlanks(8);
+    uint8_t* p = VecAppendBlanks(data, 8);
     if (p) {
         memcpy(p, &a, 4);
         memcpy(p + 4, &b, 4);
@@ -4544,7 +4675,7 @@ void DrawOpsBuilder::F2(float a, float b) {
 }
 
 void DrawOpsBuilder::U32(uint32_t v) {
-    uint8_t* p = data.AppendBlanks(4);
+    uint8_t* p = VecAppendBlanks(data, 4);
     if (p) {
         memcpy(p, &v, 4);
     }
@@ -4561,7 +4692,7 @@ void DrawOpsBuilder::ViewBox(float x, float y, float w, float h) {
 void DrawOpsBuilder::StrokeWidth(float w) {
 
     uint16_t op = kOpStrokeWidth;
-    uint8_t* p = data.AppendBlanks(6);
+    uint8_t* p = VecAppendBlanks(data, 6);
     if (p) {
         memcpy(p, &op, 2);
         memcpy(p + 2, &w, 4);
@@ -4623,7 +4754,7 @@ void DrawOpsBuilder::Text(float x, float y, float size, float textLength,
     F2(size, textLength);
     U32(flags);
     uint16_t len = (uint16_t)n;
-    uint8_t* p = data.AppendBlanks(2 + n);
+    uint8_t* p = VecAppendBlanks(data, 2 + n);
     if (p) {
         memcpy(p, &len, 2);
         memcpy(p + 2, s.s, (size_t)n);
@@ -4673,7 +4804,7 @@ void AppGlobalSetRaw(App* app, const void* key, void* value,
         slot.freeValue = freeValue;
         return;
     }
-    app->globals.Append(AppGlobalSlot{key, value, freeValue});
+    VecAppend(app->globals, AppGlobalSlot{key, value, freeValue});
 }
 
 bool AppGlobalRemoveRaw(App* app, const void* key) {
@@ -4710,7 +4841,7 @@ void AppGlobalClear(App* app) {
             slot.freeValue(slot.value);
         }
     }
-    app->globals.Reset();
+    VecReset(app->globals);
 }
 
 EntityId EntityNewRaw(App* app, void* ptr, RenderFn render, DropFn drop) {
@@ -4724,7 +4855,7 @@ EntityId EntityNewRaw(App* app, void* ptr, RenderFn render, DropFn drop) {
         app->freeSlots.len--;
     } else {
         EntitySlot fresh = {};
-        app->entities.Append(fresh);
+        VecAppend(app->entities, fresh);
         ix = (int32_t)(app->entities.len - 1);
     }
     EntitySlot& s = app->entities[ix];
@@ -4769,7 +4900,7 @@ void EntityDrop(App* app, EntityId id) {
     if (s.gen == 0) {
         s.gen = 1;
     }
-    app->freeSlots.Append(id.index);
+    VecAppend(app->freeSlots, id.index);
 }
 
 void EntityDropAll(App* app) {
@@ -4785,8 +4916,8 @@ void EntityDropAll(App* app) {
         s.render = nullptr;
         s.drop = nullptr;
     }
-    app->entities.Reset();
-    app->freeSlots.Reset();
+    VecReset(app->entities);
+    VecReset(app->freeSlots);
 }
 
 El* EntityRender(App* app, Window* win, Arena* a, EntityId id) {
@@ -4804,7 +4935,7 @@ El* EntityRender(App* app, Window* win, Arena* a, EntityId id) {
     cx.self = id;
 
     if (win) {
-        win->rendered.Append(id);
+        VecAppend(win->rendered, id);
     }
     return s.render(s.ptr, &cx);
 }
@@ -5066,7 +5197,7 @@ static int WindowArmTimer(Window* win, int ms, Listener l, bool repeat) {
     t.dueAt = TimeNow() + (double)ms / 1000.0;
     t.repeat = repeat;
     t.l = l;
-    win->timers.Append(t);
+    VecAppend(win->timers, t);
     PlatSetTimer(win, WindowTimerMs(win));
     return t.id;
 }
@@ -5113,7 +5244,7 @@ void* WindowKeyedState(Window* win, uint32_t key, void* fresh, DropFn drop) {
     s.key = key;
     s.ptr = fresh;
     s.drop = drop;
-    if (!win->keyed.Append(s)) {
+    if (!VecAppend(win->keyed, s)) {
         drop(fresh);
         return nullptr;
     }
@@ -5145,7 +5276,7 @@ EntityId WindowKeyedEntity(Window* win, App* app, uint32_t key, void* fresh,
     KeyedSlot s = {};
     s.key = key;
     s.entity = EntityNewRaw(app, fresh, nullptr, drop);
-    win->keyed.Append(s);
+    VecAppend(win->keyed, s);
     return s.entity;
 }
 
@@ -5163,7 +5294,7 @@ void* WindowMotionState(Window* win, uint32_t key, int size) {
     s.key = key;
     s.frame = win->frameSeq;
     s.ptr = AllocZero(1, size);
-    win->motionSlots.Append(s);
+    VecAppend(win->motionSlots, s);
     return s.ptr;
 }
 
@@ -5189,7 +5320,7 @@ void WindowMotionFree(Window* win) {
     for (int i = 0; i < win->motionSlots.len; i++) {
         Free(nullptr, win->motionSlots[i].ptr);
     }
-    win->motionSlots.Reset();
+    VecReset(win->motionSlots);
 }
 
 void WindowKeyedFree(Window* win) {
@@ -5206,7 +5337,7 @@ void WindowKeyedFree(Window* win) {
             }
         }
     }
-    win->keyed.Reset();
+    VecReset(win->keyed);
 }
 
 static void SubRemoveAt(App* app, int ix) {
@@ -5232,7 +5363,7 @@ Subscription EntityObserveRaw(App* app, EntityId observed, Listener handler) {
     s.id = app->nextSubId++;
     s.emitter = observed;
     s.handler = handler;
-    app->observers.Append(s);
+    VecAppend(app->observers, s);
     sub.id = s.id;
     return sub;
 }
@@ -5275,7 +5406,7 @@ Subscription EntitySubscribeRaw(App* app, EntityId emitter, Listener handler) {
     s.id = app->nextSubId++;
     s.emitter = emitter;
     s.handler = handler;
-    app->subs.Append(s);
+    VecAppend(app->subs, s);
     sub.id = s.id;
     return sub;
 }
@@ -6273,12 +6404,12 @@ static ScrollFade* ScrollFadeFor(int id, float y, float x) {
     f.id = id;
     f.y = y;
     f.x = x;
-    gScrollFades.Append(f);
+    VecAppend(gScrollFades, f);
     return &gScrollFades[gScrollFades.len - 1];
 }
 
 void ScrollFadeClear() {
-    gScrollFades.Reset();
+    VecReset(gScrollFades);
 }
 
 ScrollbarMotion ScrollbarMotionFor(ScrollbarMode mode) {
@@ -6424,7 +6555,7 @@ void StyleOverrideSet(int clickId, uint32_t fields, const Style& style) {
     o.clickId = clickId;
     o.fields = fields;
     o.style = style;
-    gStyleOverrides.Append(o);
+    VecAppend(gStyleOverrides, o);
 }
 
 void StyleOverrideClear(int clickId) {
@@ -6440,7 +6571,7 @@ void StyleOverrideClear(int clickId) {
 }
 
 void StyleOverrideClearAll() {
-    gStyleOverrides.Reset();
+    VecReset(gStyleOverrides);
 }
 
 void StyleApplyFields(Style* into, const Style& over, uint32_t fields) {
@@ -8294,7 +8425,7 @@ static LayoutNode* LayoutNodeTake(LayoutCache* lc, El* e) {
         lc->spare.len--;
     } else {
         n = new LayoutNode();
-        lc->pool.Append(n);
+        VecAppend(lc->pool, n);
     }
     n->el = e;
     n->measKey = 0;
@@ -8307,7 +8438,7 @@ static void LayoutNodeGiveBack(LayoutCache* lc, LayoutNode* n) {
         return;
     }
     n->el = nullptr;
-    lc->spare.Append(n);
+    VecAppend(lc->spare, n);
 }
 
 static uint64_t LayoutMeasureKey(PaintCtx* ctx, El* e) {
@@ -8385,7 +8516,7 @@ static taffy::NodeId LayoutBuild(LayoutSyncCtx* sc, El* e, bool isRoot) {
     for (El* c = e->first; c; c = c->next) {
         if (c->style.fixed) {
 
-            gLayoutFixed.Append(c);
+            VecAppend(gLayoutFixed, c);
             continue;
         }
         lc->tree.AddChild(id, LayoutBuild(sc, c, false));
@@ -8428,7 +8559,7 @@ static taffy::NodeId LayoutSync(LayoutSyncCtx* sc, El* e, taffy::NodeId prev,
     int i = 0;
     for (El* c = e->first; c; c = c->next) {
         if (c->style.fixed) {
-            gLayoutFixed.Append(c);
+            VecAppend(gLayoutFixed, c);
             continue;
         }
         if (i < had) {
@@ -8462,7 +8593,7 @@ static void LayoutCacheReset(LayoutCache* lc) {
     lc->spare.len = 0;
     for (int i = 0; i < lc->pool.len; i++) {
         lc->pool[i]->el = nullptr;
-        lc->spare.Append(lc->pool[i]);
+        VecAppend(lc->spare, lc->pool[i]);
     }
     lc->hasRoot = false;
     lc->root = taffy::NodeId{};
@@ -8877,8 +9008,8 @@ void LayoutCacheFree(LayoutCache* lc) {
     for (int i = 0; i < lc->pool.len; i++) {
         delete lc->pool[i];
     }
-    lc->pool.Reset();
-    lc->spare.Reset();
+    VecReset(lc->pool);
+    VecReset(lc->spare);
     lc->tree.Free();
     delete lc;
 }
@@ -8891,8 +9022,8 @@ void LayoutScratchFree() {
     for (int i = 0; i < gMeasureCache.pool.len; i++) {
         delete gMeasureCache.pool[i];
     }
-    gMeasureCache.pool.Reset();
-    gMeasureCache.spare.Reset();
+    VecReset(gMeasureCache.pool);
+    VecReset(gMeasureCache.spare);
     gMeasureCache.tree.Free();
     gMeasureCache.ready = false;
     gMeasureCache.hasRoot = false;
@@ -9871,7 +10002,7 @@ static void LineClampCollect(El* e, Vec<LineSpan>* spans,
         return;
     }
     if (e->lineSpan && e->lineSpanHeight > 0) {
-        spans->Append(LineSpan{e->y, e->y + e->h, e->lineSpanHeight});
+        VecAppend(*spans, LineSpan{e->y, e->y + e->h, e->lineSpanHeight});
     }
     for (El* c = e->first; c; c = c->next) {
 
@@ -9902,7 +10033,7 @@ static bool ResolveLineClamp(PaintCtx* ctx, El* e, float* clipBottom) {
     bool tighter = clamped &&
                    LineSafeClipBottom(spans.els, spans.len, boxBottom,
                                       contentBottom, clipBottom);
-    spans.Reset();
+    VecReset(spans);
     return tighter;
 }
 
@@ -10102,7 +10233,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
         hr.stopClick = e->stopClick;
         hr.stopMouseDown = e->stopMouseDown;
         hr.suppressTextSelection = e->suppressTextSelection;
-        ctx->hits.Append(hr);
+        VecAppend(ctx->hits, hr);
 
         ctx->hitParent = ctx->hits.len - 1;
     }
@@ -10134,7 +10265,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
         sr.maskHit = e->scrollMaskAxes ? ctx->hitParent : -1;
         sr.onScroll = e->onScroll;
         sr.input = e->input;
-        ctx->scrolls.Append(sr);
+        VecAppend(ctx->scrolls, sr);
     }
 
     bool focused = e->style.focusId && e->style.focusId == ctx->focusId &&
@@ -10249,7 +10380,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
             if (e->style.overflowX == Overflow::Scroll) {
                 e->input->contentW = e->contentW;
             }
-            ctx->inputs.Append(e->input);
+            VecAppend(ctx->inputs, e->input);
         }
     }
 
@@ -10262,7 +10393,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
         th.join = e->selJoin;
         th.atom = true;
         th.scope = e->style.trapId;
-        ctx->texts.Append(th);
+        VecAppend(ctx->texts, th);
         ctx->textDocLen += 1;
     }
     if (e->kind == ElKind::Text) {
@@ -10291,7 +10422,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
             th.join = e->selJoin;
 
             th.scope = e->style.trapId;
-            ctx->texts.Append(th);
+            VecAppend(ctx->texts, th);
             ctx->textDocLen += e->text.len + 1;
             int a = ctx->selA;
             int b = ctx->selB;
@@ -11050,13 +11181,13 @@ static void CollectFocus(El* e, Window* win, int trap, Listener increment,
     if (e->style.keyContext) {
         DispatchNode n;
         n.context = e->style.keyContext;
-        win->dispatch.Append(n);
+        VecAppend(win->dispatch, n);
     }
     for (ActionSlot* slot = e->actions; slot; slot = slot->next) {
         DispatchNode n;
         n.action = slot->action;
         n.fn = slot->fn;
-        win->dispatch.Append(n);
+        VecAppend(win->dispatch, n);
     }
     if (e->style.focusId) {
         e->style.trapId = trap;
@@ -11069,13 +11200,13 @@ static void CollectFocus(El* e, Window* win, int trap, Listener increment,
 
         DispatchNode marker;
         fr.dispatchIx = win->dispatch.len;
-        win->dispatch.Append(marker);
+        VecAppend(win->dispatch, marker);
         fr.bounds = e->Bounds();
         fr.accessibilityIncrement = increment;
         fr.accessibilityDecrement = decrement;
         fr.accessibilityIncrementDirect = incrementDirect;
         fr.accessibilityDecrementDirect = decrementDirect;
-        win->focusEls.Append(fr);
+        VecAppend(win->focusEls, fr);
     }
     for (El* c = e->first; c; c = c->next) {
         CollectFocus(c, win, trap, increment, decrement, incrementDirect,
@@ -11322,11 +11453,11 @@ struct IdSeen {
 static void IdCheckCollect(El* e, Vec<IdSeen>* seen) {
     if (e->clickId > 0) {
         IdSeen s = {e->clickId, e->id};
-        seen->Append(s);
+        VecAppend(*seen, s);
     }
     if (e->style.focusId > 0 && e->style.focusId != e->clickId) {
         IdSeen s = {e->style.focusId, e->id};
-        seen->Append(s);
+        VecAppend(*seen, s);
     }
     for (El* c = e->first; c; c = c->next) {
         IdCheckCollect(c, seen);
@@ -11349,7 +11480,7 @@ static void IdCheck(El* root) {
         }
     }
     logf("id-check: %d ids, %d shared", seen.len, dups);
-    seen.Reset();
+    VecReset(seen);
 }
 
 void IdsCollect(El* root) {
@@ -11595,7 +11726,7 @@ static void AccessibilityCollectNode(El* e, Vec<AccessibilityNode>* out,
             !node.input->readonly) {
             node.actions |= AccessibilityActionSetValue;
         }
-        out->Append(node);
+        VecAppend(*out, node);
         childParent = out->len - 1;
     }
     for (El* child = e->first; child; child = child->next) {
@@ -11607,14 +11738,14 @@ void AccessibilityCollect(El* root, Vec<AccessibilityNode>* out) {
     if (!out) {
         return;
     }
-    out->Clear();
+    VecClear(*out);
     uint32_t nextId = 1;
     AccessibilityCollectNode(root, out, -1, &nextId);
 }
 
 void FocusCollect(Window* win, El* root) {
-    win->focusEls.Clear();
-    win->dispatch.Clear();
+    VecClear(win->focusEls);
+    VecClear(win->dispatch);
     CollectFocus(root, win, 0, {}, {}, {}, {});
 
     for (int i = 1; i < win->focusEls.len; i++) {
@@ -11774,7 +11905,7 @@ static void Base64Decode(Str s, Vec<uint8_t>* out) {
         bits += 6;
         if (bits >= 8) {
             bits -= 8;
-            out->Append((uint8_t)((acc >> bits) & 0xff));
+            VecAppend(*out, (uint8_t)((acc >> bits) & 0xff));
         }
     }
 }
@@ -11798,12 +11929,12 @@ static void PercentDecode(Str s, Vec<uint8_t>* out) {
             int hi = HexValue(s.s[i + 1]);
             int lo = HexValue(s.s[i + 2]);
             if (hi >= 0 && lo >= 0) {
-                out->Append((uint8_t)(hi * 16 + lo));
+                VecAppend(*out, (uint8_t)(hi * 16 + lo));
                 i += 2;
                 continue;
             }
         }
-        out->Append((uint8_t)s.s[i]);
+        VecAppend(*out, (uint8_t)s.s[i]);
     }
 }
 
@@ -11964,7 +12095,7 @@ static SrcBytes BytesForSrc(Str src, Vec<uint8_t>* owned,
     if (asset.s && AssetsLoad(asset, owned) && owned->len > 0) {
         return SrcBytes::Yes;
     }
-    owned->Reset();
+    VecReset(*owned);
     if (!HttpUrlIsRemote(src)) {
         return SrcBytes::No;
     }
@@ -12066,7 +12197,7 @@ static ImageCacheSlot* ImageSlotFor(PaintApp* pa, Str src) {
             img = ImageDecode(pa, bytes, len);
         } else {
 
-            owned.Reset();
+            VecReset(owned);
             return nullptr;
         }
     }
@@ -13079,18 +13210,18 @@ static Prim* gpui_scene_Emit(PaintCtx* ctx, uint8_t kind, Bounds bbox) {
     p.seq = gSeq++;
     p.mask = gClip;
     p.bbox = Intersect(bbox, gClip);
-    gCur.Append(p);
+    VecAppend(gCur, p);
     return &gCur[gCur.len - 1];
 }
 
 void FrameBegin(PaintCtx* ctx) {
     gRecording = true;
     gSkipPresent = false;
-    gCur.Clear();
-    gPaths.Clear();
-    gVerbs.Clear();
-    gPts.Clear();
-    gClipStack.Clear();
+    VecClear(gCur);
+    VecClear(gPaths);
+    VecClear(gVerbs);
+    VecClear(gPts);
+    VecClear(gClipStack);
     gSeq = 0;
     gViewW = ctx ? ctx->viewW : 0;
     gViewH = ctx ? ctx->viewH : 0;
@@ -13181,10 +13312,10 @@ void RecEllipse(PaintCtx* ctx, float cx, float cy, float rx, float ry,
 void RecPushClip(PaintCtx* ctx, float x, float y, float w, float h) {
     (void)ctx;
     gStats.clipPushes++;
-    gClipStack.Append(gClip.x);
-    gClipStack.Append(gClip.y);
-    gClipStack.Append(gClip.w);
-    gClipStack.Append(gClip.h);
+    VecAppend(gClipStack, gClip.x);
+    VecAppend(gClipStack, gClip.y);
+    VecAppend(gClipStack, gClip.w);
+    VecAppend(gClipStack, gClip.h);
     gClip = Intersect(gClip, Bounds{x, y, w, h});
 }
 
@@ -13215,7 +13346,7 @@ Path* RecPathNew(bool winding) {
     pr.winding = winding;
     pr.verbFirst = gVerbs.len;
     pr.ptFirst = gPts.len;
-    gPaths.Append(pr);
+    VecAppend(gPaths, pr);
     return PathHandle(gPaths.len - 1);
 }
 
@@ -13225,14 +13356,14 @@ void RecPathFree(Path* p) {
 }
 
 static void Verb(PathRec* pr, uint8_t v) {
-    gVerbs.Append(v);
+    VecAppend(gVerbs, v);
     pr->verbCount++;
     pr->hashed = false;
 }
 
 static void Pt(PathRec* pr, float x, float y) {
-    gPts.Append(x);
-    gPts.Append(y);
+    VecAppend(gPts, x);
+    VecAppend(gPts, y);
     pr->ptCount += 2;
     if (!pr->any) {
         pr->any = true;
@@ -13283,11 +13414,11 @@ void RecPathArcTo(Path* p, float cx, float cy, float r, float a0, float a1,
     }
     Verb(pr, (uint8_t)(kVArc | (clockwise ? 0x80 : 0)));
 
-    gPts.Append(cx);
-    gPts.Append(cy);
-    gPts.Append(r);
-    gPts.Append(a0);
-    gPts.Append(a1);
+    VecAppend(gPts, cx);
+    VecAppend(gPts, cy);
+    VecAppend(gPts, r);
+    VecAppend(gPts, a0);
+    VecAppend(gPts, a1);
     pr->ptCount += 5;
     pr->hashed = false;
     if (!pr->any) {
@@ -13411,14 +13542,14 @@ static void SortByLayer(Vec<Prim>& v) {
         at += counts[i];
     }
     Vec<Prim> out;
-    out.AppendBlanks(v.len);
+    VecAppendBlanks(out, v.len);
     for (int i = 0; i < v.len; i++) {
         out[start[v[i].layer]++] = v[i];
     }
     for (int i = 0; i < v.len; i++) {
         v[i] = out[i];
     }
-    out.Reset();
+    VecReset(out);
 }
 
 struct CacheEntry {
@@ -13490,7 +13621,7 @@ static void CacheSweep() {
 }
 
 void Invalidate() {
-    gPrev.Clear();
+    VecClear(gPrev);
     gHavePrev = false;
     gPrevFrameHash = 0;
     for (int i = 0; i < kBufferDepth; i++) {
@@ -13599,10 +13730,10 @@ static void BagBuild(HashBag& b, const Vec<Prim>& v) {
         cap *= 2;
     }
     b.mask = cap - 1;
-    b.keys.Clear();
-    b.counts.Clear();
-    b.keys.AppendBlanks(cap);
-    b.counts.AppendBlanks(cap);
+    VecClear(b.keys);
+    VecClear(b.counts);
+    VecAppendBlanks(b.keys, cap);
+    VecAppendBlanks(b.counts, cap);
     for (int i = 0; i < cap; i++) {
         b.keys[i] = 0;
         b.counts[i] = 0;
@@ -13729,9 +13860,9 @@ bool FrameEnd(PaintCtx* ctx, Bounds* damage) {
         gStats.damageFracSum += area > 0 ? (dmg.w * dmg.h) / area : 1.f;
     }
 
-    gPrev.Clear();
+    VecClear(gPrev);
     for (int i = 0; i < gCur.len; i++) {
-        gPrev.Append(gCur[i]);
+        VecAppend(gPrev, gCur[i]);
     }
     gPrevFrameHash = frameHash;
     gHavePrev = true;
@@ -13924,7 +14055,7 @@ struct SvgIcon {
 };
 
 static void AddOp(SvgIcon* ic, SvgOp op) {
-    ic->ops.Append(op);
+    VecAppend(ic->ops, op);
 }
 
 static void AddMove(SvgIcon* ic, float x, float y) {
@@ -14603,7 +14734,7 @@ static void EndShape(SvgIcon* ic, int start, Str tag, const SvgMatrix& m) {
         sh.hasStroke = true;
         ic->hasOwnColors = true;
     }
-    ic->shapes.Append(sh);
+    VecAppend(ic->shapes, sh);
 }
 
 static bool IsGroupTag(const char* name, const char* end) {
@@ -14748,15 +14879,15 @@ static void AddTextRun(SvgIcon* ic, const SvgCtx& cur, const char* p,
     sh.textFlags = cur.anchor | (cur.bold ? (uint32_t)kTextBold : 0u);
     sh.hasFill = cur.hasFill;
     sh.fill = cur.fill;
-    ic->shapes.Append(sh);
+    VecAppend(ic->shapes, sh);
     ic->hasText = true;
 
     ic->hasOwnColors = true;
 }
 
 static void ParseSvg(Str xml, SvgIcon* ic) {
-    ic->ops.Reset();
-    ic->shapes.Reset();
+    VecReset(ic->ops);
+    VecReset(ic->shapes);
 
     VecReserve(ic->ops, 32);
     VecReserve(ic->shapes, 16);
@@ -14770,7 +14901,7 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
     ic->stroked = false;
     ic->hasOwnColors = false;
     ic->hasText = false;
-    ic->gradients.Reset();
+    VecReset(ic->gradients);
     if (!xml.s || xml.len <= 0) {
         return;
     }
@@ -14841,7 +14972,7 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
                                "radialGradient")) {
                     SvgGradient g;
                     if (GetAttrStr(tag, "id", &g.id)) {
-                        ic->gradients.Append(g);
+                        VecAppend(ic->gradients, g);
                         gradIx = ic->gradients.len - 1;
                     }
                 }
@@ -15539,10 +15670,10 @@ static void FrameBenchTick(Window* win, float secs) {
         warm++;
         return;
     }
-    samples.Append(secs * 1000.f);
-    build.Append((float)(gFrameBuildSecs * 1000.0));
-    layout.Append((float)(gFrameLayoutSecs * 1000.0));
-    paint.Append((float)(gFramePaintSecs * 1000.0));
+    VecAppend(samples, secs * 1000.f);
+    VecAppend(build, (float)(gFrameBuildSecs * 1000.0));
+    VecAppend(layout, (float)(gFrameLayoutSecs * 1000.0));
+    VecAppend(paint, (float)(gFramePaintSecs * 1000.0));
     if (++seen < want) {
         return;
     }
@@ -15751,7 +15882,7 @@ void WindowDrawFrame(Window* win, void* native, int pxW, int pxH, float dipW,
         return;
     }
 
-    win->accessibility.Clear();
+    VecClear(win->accessibility);
     if (win->frameArena) {
         win->frameArena->Reset();
     } else {
@@ -15760,10 +15891,10 @@ void WindowDrawFrame(Window* win, void* native, int pxW, int pxH, float dipW,
     ResetTempArena();
 
     win->paint.opacity = 1.f;
-    win->paint.hits.Clear();
-    win->paint.scrolls.Clear();
-    win->paint.texts.Clear();
-    win->paint.inputs.Clear();
+    VecClear(win->paint.hits);
+    VecClear(win->paint.scrolls);
+    VecClear(win->paint.texts);
+    VecClear(win->paint.inputs);
     win->paint.textDocLen = 0;
     win->paint.selA = -1;
     win->paint.selB = -1;
@@ -16788,7 +16919,7 @@ void WindowStopPropagation(Ctx* cx) {
 }
 
 static void HitChain(Window* win, float x, float y, Vec<int>* out) {
-    out->Clear();
+    VecClear(*out);
     int leaf = -1;
     for (int i = win->paint.hits.len - 1; i >= 0; i--) {
         if (win->paint.hits[i].bounds.Contains({x, y})) {
@@ -16797,7 +16928,7 @@ static void HitChain(Window* win, float x, float y, Vec<int>* out) {
         }
     }
     for (int i = leaf; i >= 0; i = win->paint.hits[i].parent) {
-        out->Append(i);
+        VecAppend(*out, i);
     }
 }
 
@@ -16861,7 +16992,7 @@ static void DispatchMouseDown(Window* win, const MouseDownEvent& in) {
             win, chain, &ev, [](const HitRect& hr, DispatchPhase phase) {
                 return hr.mouseDownPhase == phase ? hr.onMouseDown : Listener{};
             }, true);
-        chain.Reset();
+        VecReset(chain);
         DispatchMouseDownOut(win, in);
         ClearPendingClick(win);
         AppInvalidate(win);
@@ -16912,7 +17043,7 @@ static void DispatchMouseDown(Window* win, const MouseDownEvent& in) {
                 break;
             }
         }
-        chain.Reset();
+        VecReset(chain);
     }
     if (focusTarget) {
         WindowSetFocusId(win, focusTarget);
@@ -16927,7 +17058,7 @@ static void DispatchMouseDown(Window* win, const MouseDownEvent& in) {
             win, chain, &ev, [](const HitRect& hr, DispatchPhase phase) {
                 return hr.mouseDownPhase == phase ? hr.onMouseDown : Listener{};
             }, true);
-        chain.Reset();
+        VecReset(chain);
     }
     DispatchMouseDownOut(win, in);
 
@@ -16940,7 +17071,7 @@ static void DispatchMouseDown(Window* win, const MouseDownEvent& in) {
                 break;
             }
         }
-        chain.Reset();
+        VecReset(chain);
     }
     if (hit && hit->slider) {
         BaseSuppressTextSelection(win->app);
@@ -16989,7 +17120,7 @@ static void DispatchMouseUp(Window* win, const MouseUpEvent& in) {
             win, chain, &ev, [](const HitRect& hr, DispatchPhase phase) {
                 return hr.mouseUpPhase == phase ? hr.onMouseUp : Listener{};
             });
-        chain.Reset();
+        VecReset(chain);
     }
 
     for (int i = 0; i < win->paint.hits.len; i++) {
@@ -17046,7 +17177,7 @@ static void DispatchMouseUp(Window* win, const MouseUpEvent& in) {
                     break;
                 }
             }
-            chain.Reset();
+            VecReset(chain);
         }
         if (!handled && win->onClick.IsValid() && !(hit && hit->slider)) {
 
@@ -17526,7 +17657,7 @@ Window* WindowAlloc(App* app, WinOpts opts) {
     win->anim = opts.anim;
 
     win->paint.pa = app->paint;
-    app->windows.Append(win);
+    VecAppend(app->windows, win);
     return win;
 }
 
@@ -17621,12 +17752,12 @@ void AppFree(App* app) {
         w->layout = nullptr;
         WindowSelectionFree(w);
         PaintTargetFree(&w->paint);
-        w->timers.Reset();
+        VecReset(w->timers);
         WindowKeyedFree(w);
         WindowMotionFree(w);
         delete w;
     }
-    app->windows.Reset();
+    VecReset(app->windows);
 
     ImageCacheClear();
     LayoutScratchFree();
@@ -17811,7 +17942,7 @@ void AppQuitAll(App* app) {
 
     Vec<Window*> windows;
     for (int i = 0; i < app->windows.len; i++) {
-        windows.Append(app->windows[i]);
+        VecAppend(windows, app->windows[i]);
     }
     for (int i = 0; i < windows.len; i++) {
         Window* win = windows[i];
@@ -17823,7 +17954,7 @@ void AppQuitAll(App* app) {
             AppQuit(win);
         }
     }
-    windows.FreeEls();
+    VecReset(windows);
 }
 
 bool AppIsMaximized(Window* win) {
@@ -17840,7 +17971,7 @@ struct AppMenuState {
     Vec<AppMenuBinding> rows;
 
     ~AppMenuState() {
-        rows.Reset();
+        VecReset(rows);
         if (arena) {
             ArenaDelete(arena);
         }
@@ -17875,7 +18006,7 @@ static PlatMenuItem* AppMenuToPlat(AppMenuState* state, Arena* a,
         if (r.disabled) {
             continue;
         }
-        state->rows.Append(AppMenuBinding{r.action, r.arg});
+        VecAppend(state->rows, AppMenuBinding{r.action, r.arg});
         p.id = state->rows.len;
 
         KeyChord chord = {};
@@ -17912,7 +18043,7 @@ void AppSetMenus(App* app, const MenuDef* menus, int n) {
         return;
     }
     gAppMenuApp = app;
-    state->rows.Reset();
+    VecReset(state->rows);
     state->arena->Reset();
     if (!menus || n <= 0) {
         PlatSetAppMenu(app, nullptr, 0);
@@ -18137,7 +18268,7 @@ void CancelInitKeys(const char* context) {
         return;
     }
     CancelBound bound = {id, gen};
-    gCancelBound.Append(bound);
+    VecAppend(gCancelBound, bound);
     KeyBinding b = {"escape", action::Cancel(), context};
     KeymapBind(&b, 1);
 }
@@ -19829,7 +19960,7 @@ static void ColorPickerInitKeys(const char* context) {
         KeymapBind(bindings, 2);
         return;
     }
-    gColorPickerBoundKeys.Append({id, generation});
+    VecAppend(gColorPickerBoundKeys, {id, generation});
     KeyBinding bindings[] = {{"enter", action::Confirm(), context},
                              {"escape", action::Cancel(), context}};
     KeymapBind(bindings, 2);
@@ -20000,19 +20131,19 @@ static void TableEmit(TableState* s, Ctx* cx, TableEventKind kind, int row,
 
 void TableEnsureCols(TableState* s, int n) {
     while (s->colWidth.len < n) {
-        s->colWidth.Append(0.f);
+        VecAppend(s->colWidth, 0.f);
     }
     while (s->colMinWidths.len < n) {
-        s->colMinWidths.Append(s->colMinWidth);
+        VecAppend(s->colMinWidths, s->colMinWidth);
     }
     while (s->colMaxWidths.len < n) {
-        s->colMaxWidths.Append(s->colMaxWidth);
+        VecAppend(s->colMaxWidths, s->colMaxWidth);
     }
     while (s->colOrder.len < n) {
-        s->colOrder.Append(s->colOrder.len);
+        VecAppend(s->colOrder, s->colOrder.len);
     }
     while (s->colBounds.len < n) {
-        s->colBounds.Append(Bounds{});
+        VecAppend(s->colBounds, Bounds{});
     }
 }
 
@@ -20566,11 +20697,11 @@ void TableScrollToCol(TableState* s, int col, ScrollStrategy strategy) {
     Vec<float> w;
     for (int i = s->fixedCols; i < s->colCount; i++) {
         int c = TableColAt(s, i);
-        w.Append(c < s->colWidth.len ? s->colWidth[c] : 0);
+        VecAppend(w, c < s->colWidth.len ? s->colWidth[c] : 0);
     }
     s->scrollX =
         VirtualListScrollToItem(w.els, n, d, s->scrollX, viewport, strategy);
-    w.Reset();
+    VecReset(w);
 }
 
 void TableRefreshCols(TableState* s) {
@@ -21721,11 +21852,11 @@ PaneNode::~PaneNode() {
     for (int i = 0; i < children.len; i++) {
         delete children[i];
     }
-    children.Reset();
-    sizes.Reset();
-    sizeKnown.Reset();
-    panels.Reset();
-    tiles.Reset();
+    VecReset(children);
+    VecReset(sizes);
+    VecReset(sizeKnown);
+    VecReset(panels);
+    VecReset(tiles);
 }
 
 InsertTarget InsertTarget::Tabs(NodeId node, int ix, bool activate) {
@@ -21840,7 +21971,7 @@ bool PaneTree::ContainsPanel(PanelId panel) const {
 }
 
 static void CollectNodeIds(Vec<NodeId>* out, const PaneNode* node) {
-    out->Append(node->nodeId);
+    VecAppend(*out, node->nodeId);
 }
 
 void PaneTree::NodeIds(Vec<NodeId>* out) const {
@@ -21852,11 +21983,11 @@ void PaneTree::NodeIds(Vec<NodeId>* out) const {
 static void CollectPanelsRec(const PaneNode* node, Vec<PanelId>* out) {
     if (node->paneKind == PaneKind::Tabs) {
         for (int i = 0; i < node->panels.len; i++) {
-            out->Append(node->panels[i]);
+            VecAppend(*out, node->panels[i]);
         }
     } else if (node->paneKind == PaneKind::Tiles) {
         for (int i = 0; i < node->tiles.len; i++) {
-            out->Append(node->tiles[i].panel);
+            VecAppend(*out, node->tiles[i].panel);
         }
     } else {
         for (int i = 0; i < node->children.len; i++) {
@@ -21885,7 +22016,7 @@ NodeId PaneTree::SetRootSplit(Axis axis) {
 NodeId PaneTree::SetRootTabs(const PanelId* values, int count, int active) {
     PaneNode* node = PaneNode::Tabs(AllocateNodeId());
     for (int i = 0; values && i < count; i++) {
-        node->panels.Append(values[i]);
+        VecAppend(node->panels, values[i]);
     }
     node->activeIx = active;
     SetRoot(this, node);
@@ -21895,7 +22026,7 @@ NodeId PaneTree::SetRootTabs(const PanelId* values, int count, int active) {
 NodeId PaneTree::SetRootTiles(const TilePanel* values, int count) {
     PaneNode* node = PaneNode::Tiles(AllocateNodeId());
     for (int i = 0; values && i < count; i++) {
-        node->tiles.Append(values[i]);
+        VecAppend(node->tiles, values[i]);
     }
     SetRoot(this, node);
     return node->nodeId;
@@ -21906,9 +22037,9 @@ static bool AppendChild(PaneNode* parent, PaneNode* child,
     if (!parent || parent->paneKind != PaneKind::Split || !child) {
         return false;
     }
-    parent->children.Append(child);
-    parent->sizes.Append(size ? *size : 0);
-    parent->sizeKnown.Append(size ? 1 : 0);
+    VecAppend(parent->children, child);
+    VecAppend(parent->sizes, size ? *size : 0);
+    VecAppend(parent->sizeKnown, size ? 1 : 0);
     return true;
 }
 
@@ -21925,7 +22056,7 @@ NodeId PaneTree::AddTabs(NodeId parent, const PanelId* values, int count,
                          const float* size) {
     PaneNode* child = PaneNode::Tabs(AllocateNodeId());
     for (int i = 0; values && i < count; i++) {
-        child->panels.Append(values[i]);
+        VecAppend(child->panels, values[i]);
     }
     if (!AppendChild(FindNode(parent), child, size)) {
         delete child;
@@ -22004,7 +22135,7 @@ bool PaneTree::DetachPanel(PanelId panel) {
 
 int PaneTree::MaxZIndex() const {
     Vec<const PaneNode*> stack;
-    stack.Append(root);
+    VecAppend(stack, root);
     int top = 0;
     while (stack.len > 0) {
         const PaneNode* node = stack[--stack.len];
@@ -22014,7 +22145,7 @@ int PaneTree::MaxZIndex() const {
             }
         } else if (node->paneKind == PaneKind::Split) {
             for (int i = 0; i < node->children.len; i++) {
-                stack.Append(node->children[i]);
+                VecAppend(stack, node->children[i]);
             }
         }
     }
@@ -22032,7 +22163,7 @@ bool PaneTree::ApplyInsert(PanelId panel, InsertTarget target) {
         }
         int at = target.ix < 0 ? node->panels.len
                                : std::min(target.ix, node->panels.len);
-        if (!node->panels.InsertAt(at, panel)) {
+        if (!VecInsertAt(node->panels, at, panel)) {
             return false;
         }
         if (target.activate) {
@@ -22046,8 +22177,8 @@ bool PaneTree::ApplyInsert(PanelId panel, InsertTarget target) {
         if (node->paneKind != PaneKind::Tiles) {
             return false;
         }
-        node->tiles.Append(TilePanel::New(panel, target.bounds)
-                               .WithZIndex(MaxZIndex() + 1));
+        VecAppend(node->tiles, TilePanel::New(panel, target.bounds)
+                                   .WithZIndex(MaxZIndex() + 1));
         return true;
     }
     const float* size = target.hasSize ? &target.size : nullptr;
@@ -22061,7 +22192,7 @@ bool PaneTree::InsertBeside(NodeId at, PanelId panel, Placement placement,
         return false;
     }
     PaneNode* group = PaneNode::Tabs(AllocateNodeId());
-    group->panels.Append(panel);
+    VecAppend(group->panels, panel);
     bool before = placement == Placement::Left ||
                   placement == Placement::Top;
     Axis axis = PlacementAxis(placement);
@@ -22076,9 +22207,9 @@ bool PaneTree::InsertBeside(NodeId at, PanelId panel, Placement placement,
             parent->sizes[ix] = newSize;
             known = 1;
         }
-        parent->children.InsertAt(insertAt, group);
-        parent->sizes.InsertAt(insertAt, newSize);
-        parent->sizeKnown.InsertAt(insertAt, known);
+        VecInsertAt(parent->children, insertAt, group);
+        VecInsertAt(parent->sizes, insertAt, newSize);
+        VecInsertAt(parent->sizeKnown, insertAt, known);
         return true;
     }
 
@@ -22163,9 +22294,9 @@ static bool NormalizeNode(PaneNode* node) {
             PaneNode* child = node->children[i];
             if (child->paneKind != PaneKind::Split ||
                 child->axis != node->axis) {
-                children.Append(child);
-                sizes.Append(node->sizes[i]);
-                known.Append(node->sizeKnown[i]);
+                VecAppend(children, child);
+                VecAppend(sizes, node->sizes[i]);
+                VecAppend(known, node->sizeKnown[i]);
                 continue;
             }
             float total = 0;
@@ -22177,9 +22308,9 @@ static bool NormalizeNode(PaneNode* node) {
             bool scale = node->sizeKnown[i] && allKnown && total > 0;
             float ratio = scale ? node->sizes[i] / total : 1.f;
             for (int k = 0; k < child->children.len; k++) {
-                children.Append(child->children[k]);
-                sizes.Append(child->sizes[k] * ratio);
-                known.Append(child->sizeKnown[k]);
+                VecAppend(children, child->children[k]);
+                VecAppend(sizes, child->sizes[k] * ratio);
+                VecAppend(known, child->sizeKnown[k]);
             }
             child->children.len = 0;
             delete child;
@@ -22378,26 +22509,26 @@ DockLayout* DockLayout::Tiles() {
 
 DockLayout* DockLayout::Child(DockLayout* child, const float* size) {
     if (kind == PaneKind::Split && child) {
-        children.Append(child);
-        sizes.Append(size ? *size : 0);
-        sizeKnown.Append(size ? 1 : 0);
+        VecAppend(children, child);
+        VecAppend(sizes, size ? *size : 0);
+        VecAppend(sizeKnown, size ? 1 : 0);
     }
     return this;
 }
 
 DockLayout* DockLayout::Panel(PanelId id, DockPanelDef view) {
     if (kind == PaneKind::Tabs) {
-        panelIds.Append(id);
-        panelViews.Append(view);
+        VecAppend(panelIds, id);
+        VecAppend(panelViews, view);
     }
     return this;
 }
 
 DockLayout* DockLayout::Tile(PanelId id, Bounds bounds, DockPanelDef view) {
     if (kind == PaneKind::Tiles) {
-        panelIds.Append(id);
-        panelViews.Append(view);
-        tileBounds.Append(bounds);
+        VecAppend(panelIds, id);
+        VecAppend(panelViews, view);
+        VecAppend(tileBounds, bounds);
     }
     return this;
 }
@@ -22413,12 +22544,12 @@ DockLayout::~DockLayout() {
     for (int i = 0; i < children.len; i++) {
         delete children[i];
     }
-    children.Reset();
-    sizes.Reset();
-    sizeKnown.Reset();
-    panelIds.Reset();
-    panelViews.Reset();
-    tileBounds.Reset();
+    VecReset(children);
+    VecReset(sizes);
+    VecReset(sizeKnown);
+    VecReset(panelIds);
+    VecReset(panelViews);
+    VecReset(tileBounds);
 }
 
 static PaneNode* BuildLayoutNode(PaneTree* tree, const DockLayout* layout,
@@ -22439,9 +22570,9 @@ static PaneNode* BuildLayoutNode(PaneTree* tree, const DockLayout* layout,
         PaneNode* node = PaneNode::Tabs(id);
         node->activeIx = layout->activeIx;
         for (int i = 0; i < layout->panelIds.len; i++) {
-            node->panels.Append(layout->panelIds[i]);
+            VecAppend(node->panels, layout->panelIds[i]);
             if (collected && i < layout->panelViews.len) {
-                collected->Append(layout->panelViews[i]);
+                VecAppend(*collected, layout->panelViews[i]);
             }
         }
         return node;
@@ -22450,10 +22581,10 @@ static PaneNode* BuildLayoutNode(PaneTree* tree, const DockLayout* layout,
     for (int i = 0; i < layout->panelIds.len; i++) {
         Bounds bounds = i < layout->tileBounds.len ? layout->tileBounds[i]
                                                    : Bounds{};
-        node->tiles.Append(TilePanel::New(layout->panelIds[i], bounds)
-                               .WithZIndex(i));
+        VecAppend(node->tiles, TilePanel::New(layout->panelIds[i], bounds)
+                                   .WithZIndex(i));
         if (collected && i < layout->panelViews.len) {
-            collected->Append(layout->panelViews[i]);
+            VecAppend(*collected, layout->panelViews[i]);
         }
     }
     return node;
@@ -22488,7 +22619,7 @@ PanelRegistry::PanelRegistry() {
 }
 
 PanelRegistry::~PanelRegistry() {
-    items.Reset();
+    VecReset(items);
     if (arena) {
         ArenaDelete(arena);
     }
@@ -22510,7 +22641,7 @@ void PanelRegistry::Register(Str panelName, PanelRegistryBuild build,
     entry.name = StrDup(arena, panelName);
     entry.build = build;
     entry.data = data;
-    items.Append(entry);
+    VecAppend(items, entry);
 }
 
 bool PanelRegistry::BuildPanel(Str panelName,
@@ -22552,11 +22683,11 @@ namespace gpui {
 
 void DockAreaState::Clear() {
     for (int i = 0; i < nodes.len; i++) {
-        nodes[i].children.Reset();
-        nodes[i].sizes.Reset();
-        nodes[i].metas.Reset();
+        VecReset(nodes[i].children);
+        VecReset(nodes[i].sizes);
+        VecReset(nodes[i].metas);
     }
-    nodes.Clear();
+    VecClear(nodes);
     hasVersion = false;
     version = 0;
     center = -1;
@@ -22568,7 +22699,7 @@ void DockAreaState::Clear() {
 int DockAreaState::NewNode(Str panelName) {
     PanelStateNode node;
     node.panelName = panelName;
-    nodes.Append(node);
+    VecAppend(nodes, node);
     return nodes.len - 1;
 }
 
@@ -22611,15 +22742,15 @@ static int ParseNode(Arena* a, const JsonValue* v, DockAreaState* out) {
          c = c->next) {
         int child = ParseNode(a, c, out);
         if (child >= 0) {
-            childIx.Append(child);
+            VecAppend(childIx, child);
         }
     }
 
     PanelStateNode& node = out->nodes[ix];
     for (int i = 0; i < childIx.len; i++) {
-        node.children.Append(childIx[i]);
+        VecAppend(node.children, childIx[i]);
     }
-    childIx.Reset();
+    VecReset(childIx);
 
     const JsonValue* info = JsonGet(v, "info");
     const JsonValue* stack = JsonGet(info, "stack");
@@ -22630,7 +22761,7 @@ static int ParseNode(Arena* a, const JsonValue* v, DockAreaState* out) {
         const JsonValue* sizes = JsonGet(stack, "sizes");
         for (const JsonValue* s = sizes ? sizes->first : nullptr; s;
              s = s->next) {
-            node.sizes.Append((float)JsonNumber(s));
+            VecAppend(node.sizes, (float)JsonNumber(s));
         }
 
         node.axis = (int)JsonNumber(JsonGet(stack, "axis")) == 0
@@ -22647,7 +22778,7 @@ static int ParseNode(Arena* a, const JsonValue* v, DockAreaState* out) {
             TileMeta meta;
             meta.bounds = ParseBounds(JsonGet(m, "bounds"));
             meta.zIndex = (int)JsonNumber(JsonGet(m, "z_index"));
-            node.metas.Append(meta);
+            VecAppend(node.metas, meta);
         }
     } else {
         node.kind = PanelInfoKind::Panel;
@@ -22830,8 +22961,8 @@ static int DumpNode(const DockState* s, DockAreaState* out, int node) {
         for (int i = 0; i < n.child.len; i++) {
             int child = DumpNode(s, out, n.child[i]);
             if (child >= 0) {
-                children.Append(child);
-                sizes.Append(n.size[i]);
+                VecAppend(children, child);
+                VecAppend(sizes, n.size[i]);
             }
         }
 
@@ -22839,11 +22970,11 @@ static int DumpNode(const DockState* s, DockAreaState* out, int node) {
         sn.kind = PanelInfoKind::Stack;
         sn.axis = n.axis;
         for (int i = 0; i < children.len; i++) {
-            sn.children.Append(children[i]);
-            sn.sizes.Append(sizes[i]);
+            VecAppend(sn.children, children[i]);
+            VecAppend(sn.sizes, sizes[i]);
         }
-        children.Reset();
-        sizes.Reset();
+        VecReset(children);
+        VecReset(sizes);
         return ix;
     }
     int ix = out->NewNode(StrL("TabPanel"));
@@ -22866,15 +22997,15 @@ static int DumpNode(const DockState* s, DockAreaState* out, int node) {
             s->panels[panelIx].dump(s->panels[panelIx].data,
                                     &out->nodes[leaf]);
         }
-        children.Append(leaf);
+        VecAppend(children, leaf);
     }
     PanelStateNode& sn = out->nodes[ix];
     sn.kind = PanelInfoKind::Tabs;
     sn.activeIndex = n.activeIx < children.len ? n.activeIx : 0;
     for (int i = 0; i < children.len; i++) {
-        sn.children.Append(children[i]);
+        VecAppend(sn.children, children[i]);
     }
-    children.Reset();
+    VecReset(children);
     return ix;
 }
 
@@ -23057,7 +23188,7 @@ void TilesFromMetas(TilesState* s, const TileMeta* metas, const int* panels,
     Vec<TileItem> rebuilt;
     int count = 0;
     for (int i = 0; i < n; i++) {
-        rebuilt.Append(TileItem{});
+        VecAppend(rebuilt, TileItem{});
         int panel = panels ? panels[i] : i;
 
         int at = TilesIndexOfPanel(s, panel);
@@ -23077,15 +23208,15 @@ void TilesFromMetas(TilesState* s, const TileMeta* metas, const int* panels,
             }
         }
         if (!saved) {
-            rebuilt.Append(s->items[i]);
+            VecAppend(rebuilt, s->items[i]);
             count++;
         }
     }
-    s->items.Clear();
+    VecClear(s->items);
     for (int i = 0; i < count; i++) {
-        s->items.Append(rebuilt[i]);
+        VecAppend(s->items, rebuilt[i]);
     }
-    rebuilt.Reset();
+    VecReset(rebuilt);
     s->dragging = -1;
     s->resizing = -1;
     s->side = TileSide::None;
@@ -23287,7 +23418,7 @@ int DockAddPanelDef(DockState* s, DockPanelDef def) {
         if (def.id.value == 0)
             def.id = PanelId::FromU64(gNextDockPanelId++);
     }
-    s->panels.Append(def);
+    VecAppend(s->panels, def);
     return s->panels.len - 1;
 }
 
@@ -23295,9 +23426,9 @@ static int DockNewNode(DockState* s) {
     for (int i = 0; i < s->nodes.len; i++) {
         if (!s->nodes[i].used) {
             DockNode& n = s->nodes[i];
-            n.child.Clear();
-            n.size.Clear();
-            n.panel.Clear();
+            VecClear(n.child);
+            VecClear(n.size);
+            VecClear(n.panel);
             n.split = false;
             n.axis = Axis::Horizontal;
             n.parent = -1;
@@ -23312,7 +23443,7 @@ static int DockNewNode(DockState* s) {
             return i;
         }
     }
-    s->nodes.Append(DockNode{});
+    VecAppend(s->nodes, DockNode{});
     s->nodes[s->nodes.len - 1].used = true;
     return s->nodes.len - 1;
 }
@@ -23338,7 +23469,7 @@ void DockTabsAdd(DockState* s, int node, int panelIx) {
     if (n.split) {
         return;
     }
-    n.panel.Append(panelIx);
+    VecAppend(n.panel, panelIx);
 }
 
 void DockTabsInsert(DockState* s, int node, int panelIx, int at) {
@@ -23352,7 +23483,7 @@ void DockTabsInsert(DockState* s, int node, int panelIx, int at) {
     if (at < 0 || at > n.panel.len) {
         at = n.panel.len;
     }
-    n.panel.InsertAt(at, panelIx);
+    VecInsertAt(n.panel, at, panelIx);
 
     n.activeIx = at;
     n.pendingScrollIx = at;
@@ -23366,8 +23497,8 @@ void DockSplitAdd(DockState* s, int node, int childNode, float size) {
     if (!n.split) {
         return;
     }
-    n.size.Append(size);
-    n.child.Append(childNode);
+    VecAppend(n.size, size);
+    VecAppend(n.child, childNode);
     s->nodes[childNode].parent = node;
 }
 
@@ -23502,14 +23633,15 @@ static void DockSpliceChild(DockState* s, int node, int at) {
     Vec<float> size;
     for (int i = 0; i < n.child.len; i++) {
         if (i != at) {
-            child.Append(n.child[i]);
-            size.Append(n.size[i]);
+            VecAppend(child, n.child[i]);
+            VecAppend(size, n.size[i]);
             continue;
         }
         const DockNode& cn = s->nodes[childNode];
         for (int j = 0; j < cn.child.len; j++) {
-            child.Append(cn.child[j]);
-            size.Append(total > 0 ? cn.size[j] * (slot / total) : cn.size[j]);
+            VecAppend(child, cn.child[j]);
+            VecAppend(size,
+                      total > 0 ? cn.size[j] * (slot / total) : cn.size[j]);
         }
     }
     for (int j = 0; j < s->nodes[childNode].child.len; j++) {
@@ -23518,8 +23650,8 @@ static void DockSpliceChild(DockState* s, int node, int at) {
     s->nodes[childNode] = DockNode{};
     n.child = child;
     n.size = size;
-    child.Reset();
-    size.Reset();
+    VecReset(child);
+    VecReset(size);
 }
 
 static bool DockNormalizePass(DockState* s) {
@@ -23733,8 +23865,8 @@ bool DockMovePanelTo(DockState* s, int panelIx, int to, DockDrop drop,
         }
         int insert = before ? ix : ix + 1;
         float half = p.size[ix] * 0.5f;
-        p.child.Append(0);
-        p.size.Append(0);
+        VecAppend(p.child, 0);
+        VecAppend(p.size, 0);
         for (int i = p.child.len - 1; i > insert; i--) {
             p.child[i] = p.child[i - 1];
             p.size[i] = p.size[i - 1];
@@ -24343,7 +24475,7 @@ void BaseSetAppMenus(App* app, const MenuDef* menus, int count) {
     if (!state->appMenuArena) {
         state->appMenuArena = ArenaNew();
     }
-    state->appMenus.Clear();
+    VecClear(state->appMenus);
     state->appMenuArena->Reset();
     if (menus && count > 0) {
         VecReserve(state->appMenus, count);
@@ -24352,7 +24484,7 @@ void BaseSetAppMenus(App* app, const MenuDef* menus, int count) {
             copy.name = StrDup(state->appMenuArena, menus[i].name);
             copy.items = CopyMenuRows(state->appMenuArena, menus[i].items,
                                       menus[i].n);
-            state->appMenus.Append(copy);
+            VecAppend(state->appMenus, copy);
         }
     }
     AppSetMenus(app, state->appMenus.els, state->appMenus.len);
@@ -24371,7 +24503,7 @@ void BaseDeferredPopoverSet(App* app, EntityId popover, bool open) {
         }
     }
     if (open && found < 0) {
-        state->deferredPopovers.Append(popover);
+        VecAppend(state->deferredPopovers, popover);
     } else if (!open && found >= 0) {
         for (int i = found; i < state->deferredPopovers.len - 1; i++) {
             state->deferredPopovers[i] = state->deferredPopovers[i + 1];
@@ -24725,7 +24857,7 @@ NativeMenu::NativeMenu() {
 }
 
 NativeMenu::~NativeMenu() {
-    items.Reset();
+    VecReset(items);
     if (arena) {
         ArenaDelete(arena);
     }
@@ -24742,14 +24874,14 @@ NativeMenu& NativeMenu::MenuWithDisabled(Str label, bool disabled,
     item.label = arena ? StrDup(arena, label) : label;
     item.disabled = disabled;
     item.action = action;
-    items.Append(item);
+    VecAppend(items, item);
     return *this;
 }
 
 NativeMenu& NativeMenu::Separator() {
     if (items.len > 0 &&
         items[items.len - 1].kind != NativeMenuItemKind::Separator) {
-        items.Append(NativeMenuItem{});
+        VecAppend(items, NativeMenuItem{});
     }
     return *this;
 }
@@ -24935,7 +25067,7 @@ bool TextDecorationCollection::Set(const TextDecoration* decorations, int n) {
     if (!entry) {
         return false;
     }
-    entry->decorations.Clear();
+    VecClear(entry->decorations);
     return Append(decorations, n);
 }
 
@@ -24949,7 +25081,7 @@ bool TextDecorationCollection::Append(const TextDecoration* decorations,
     for (int i = 0; decorations && i < n; i++) {
         TextDecoration normalized;
         if (NormalizeDecoration(text, decorations[i], &normalized)) {
-            entry->decorations.Append(normalized);
+            VecAppend(entry->decorations, normalized);
         }
     }
     return true;
@@ -24995,7 +25127,7 @@ TextDecorationCollection DecorationCollections::Create(
     }
     DecorationCollectionEntry* entry = new DecorationCollectionEntry();
     entry->id = state->nextId++;
-    state->entries.Append(entry);
+    VecAppend(state->entries, entry);
     result.state = state;
     result.id = entry->id;
     DecorationsRetain(state);
@@ -25051,7 +25183,7 @@ void DecorationCollections::Clear() {
         return;
     }
     for (int i = 0; i < state->entries.len; i++) {
-        state->entries[i]->decorations.Clear();
+        VecClear(state->entries[i]->decorations);
     }
 }
 
@@ -25068,7 +25200,7 @@ int DecorationCollections::BuildSpans(TextSpan* out, int cap) const {
         const Vec<TextDecoration>& ds = state->entries[i]->decorations;
         for (int j = 0; j < ds.len; j++) {
             Vec<Selection> pieces;
-            pieces.Append(ds[j].range);
+            VecAppend(pieces, ds[j].range);
             for (int k = 0; k < accepted.len && pieces.len > 0; k++) {
                 Selection occupied = {accepted[k].lo, accepted[k].hi};
                 for (int p = pieces.len - 1; p >= 0; p--) {
@@ -25079,12 +25211,13 @@ int DecorationCollections::BuildSpans(TextSpan* out, int cap) const {
                     pieces[p] = pieces[pieces.len - 1];
                     pieces.len--;
                     if (piece.start < occupied.start) {
-                        pieces.Append({piece.start,
-                                       std::min(piece.end, occupied.start)});
+                        VecAppend(
+                            pieces,
+                            {piece.start, std::min(piece.end, occupied.start)});
                     }
                     if (piece.end > occupied.end) {
-                        pieces.Append({std::max(piece.start, occupied.end),
-                                       piece.end});
+                        VecAppend(pieces, {std::max(piece.start, occupied.end),
+                                           piece.end});
                     }
                 }
             }
@@ -25092,7 +25225,7 @@ int DecorationCollections::BuildSpans(TextSpan* out, int cap) const {
                 TextSpan span = ds[j].style;
                 span.lo = pieces[p].start;
                 span.hi = pieces[p].end;
-                accepted.Append(span);
+                VecAppend(accepted, span);
             }
         }
     }
@@ -25151,7 +25284,7 @@ DiagnosticSet::~DiagnosticSet() {
 }
 
 void DiagnosticSet::Reset(Str value) {
-    diagnostics.Clear();
+    VecClear(diagnostics);
     ArenaDelete(arena);
     arena = ArenaNew();
     text = StrDup(arena, value);
@@ -25171,7 +25304,7 @@ void DiagnosticSet::Push(const Diagnostic& diagnostic) {
            diagnostics[at].range.start <= entry.range.start) {
         at++;
     }
-    diagnostics.InsertAt(at, entry);
+    VecInsertAt(diagnostics, at, entry);
 }
 
 void DiagnosticSet::Extend(const Diagnostic* values, int n) {
@@ -25182,7 +25315,7 @@ void DiagnosticSet::Extend(const Diagnostic* values, int n) {
 
 void DiagnosticSet::Clear() {
 
-    diagnostics.Clear();
+    VecClear(diagnostics);
 }
 
 DiagnosticSummary DiagnosticSet::Summary() const {
@@ -25470,7 +25603,7 @@ void DisplayMap::AdjustFoldsForEdit(Str oldText, Selection editedRange,
 }
 
 void DisplayMap::Rebuild() {
-    rows.Clear();
+    VecClear(rows);
     int lineCount = BufferLineCount();
     FoldMapRebuild(&foldMap, lineCount);
     for (int line = 0; line < lineCount; line++) {
@@ -25479,7 +25612,7 @@ void DisplayMap::Rebuild() {
         }
         Str value = RopeSliceLine(text, line);
         if (wrapColumns <= 0 || value.len == 0) {
-            rows.Append({line, 0, value.len});
+            VecAppend(rows, {line, 0, value.len});
             continue;
         }
         int leadingEnd = 0;
@@ -25497,7 +25630,7 @@ void DisplayMap::Rebuild() {
             int columns = row == 0 ? wrapColumns : continuation;
             int end =
                 DisplayAdvanceColumns(value, start, columns, tab.tabSize);
-            rows.Append({line, start, end});
+            VecAppend(rows, {line, start, end});
             start = end;
             row++;
         }
@@ -26021,7 +26154,7 @@ Lsp& Lsp::Completion(const CompletionProvider& provider) {
 
 Lsp& Lsp::AddCodeAction(const CodeActionProvider& provider) {
     if (provider.IsValid()) {
-        codeActionProviders.Append(provider);
+        VecAppend(codeActionProviders, provider);
     }
     return *this;
 }
@@ -26063,7 +26196,7 @@ void Lsp::Install(InputState* input) {
         return;
     }
 
-    state->codeActionProviders.Clear();
+    VecClear(state->codeActionProviders);
     state->codeActionProvider = nullptr;
     state->codeActionData = nullptr;
     completionProvider.Install(state, completionMenu);
@@ -26116,8 +26249,8 @@ int Lsp::SemanticTokensForRange(
         return 0;
     }
     int n = gpui::SemanticTokensForRange(
-        state->semanticTokens.els, state->semanticTokens.len,
-        InputValue(state), visible, ranges.els, ranges.Cap());
+        state->semanticTokens.els, state->semanticTokens.len, InputValue(state),
+        visible, ranges.els, ranges.cap);
     int total = 0;
     for (int i = 0; i < n; i++) {
         TextSpan span;
@@ -26549,7 +26682,7 @@ static El* FoldChevron(Arena* a, InputState* state,
     if (state->foldIcons.len < state->foldIcons.cap) {
         FoldIconBox slot;
         slot.line = row;
-        state->foldIcons.Append(slot);
+        VecAppend(state->foldIcons, slot);
         cell->BoundsOut(&state->foldIcons[state->foldIcons.len - 1].bounds);
     }
 
@@ -26594,7 +26727,7 @@ El* Textarea::New(Ctx* cx, InputState* state,
         col->BoundsOut(&state->contentBox);
     }
     if (text.len == 0) {
-        state->rowBoxes.Clear();
+        VecClear(state->rowBoxes);
         if (caret) {
             col->Caret(0, style.caret);
         }
@@ -26620,10 +26753,10 @@ El* Textarea::New(Ctx* cx, InputState* state,
     }
 
     if (!wrap) {
-        state->rowBoxes.Clear();
+        VecClear(state->rowBoxes);
     } else if (state->rowBoxes.len != rows) {
-        state->rowBoxes.Clear();
-        if (Bounds* slots = state->rowBoxes.AppendBlanks(rows)) {
+        VecClear(state->rowBoxes);
+        if (Bounds* slots = VecAppendBlanks(state->rowBoxes, rows)) {
             for (int i = 0; i < rows; i++) {
                 slots[i] = Bounds{};
             }
@@ -26641,7 +26774,7 @@ El* Textarea::New(Ctx* cx, InputState* state,
     }
 
     bool gutterHover = folding && GutterHovered(state, cx->win, numW + foldW);
-    state->foldIcons.Clear();
+    VecClear(state->foldIcons);
     if (folding) {
         VecReserve(state->foldIcons, state->folds.candidates.len);
     }
@@ -27292,10 +27425,10 @@ void FoldMapSetCandidates(FoldMap* m, const FoldRange* ranges, int n) {
     if (!m) {
         return;
     }
-    m->candidates.Clear();
+    VecClear(m->candidates);
     for (int i = 0; i < n; i++) {
         if (ranges[i].startLine <= ranges[i].endLine) {
-            m->candidates.Append(ranges[i]);
+            VecAppend(m->candidates, ranges[i]);
         }
     }
     FoldSort(&m->candidates);
@@ -27318,7 +27451,7 @@ void FoldMapSetFolded(FoldMap* m, int startLine, bool folded) {
         if (ix < 0 || FoldFindAt(m->folded, startLine) >= 0) {
             return;
         }
-        m->folded.Append(m->candidates[ix]);
+        VecAppend(m->folded, m->candidates[ix]);
         FoldSort(&m->folded);
         m->needsRebuild = true;
         return;
@@ -27344,7 +27477,7 @@ bool FoldMapIsCandidate(const FoldMap* m, int startLine) {
 
 void FoldMapClearFolds(FoldMap* m) {
     if (m && m->folded.len > 0) {
-        m->folded.Clear();
+        VecClear(m->folded);
         m->needsRebuild = true;
     }
 }
@@ -27397,13 +27530,13 @@ void FoldMapRebuild(FoldMap* m, int lineCount) {
     }
     m->cachedLineCount = lineCount;
     m->needsRebuild = false;
-    m->visibleLines.Clear();
-    m->lineToDisplayRow.Clear();
+    VecClear(m->visibleLines);
+    VecClear(m->lineToDisplayRow);
 
     if (m->folded.len == 0) {
         return;
     }
-    if (int* rows = m->lineToDisplayRow.AppendBlanks(lineCount)) {
+    if (int* rows = VecAppendBlanks(m->lineToDisplayRow, lineCount)) {
         for (int i = 0; i < lineCount; i++) {
             rows[i] = -1;
         }
@@ -27422,7 +27555,7 @@ void FoldMapRebuild(FoldMap* m, int lineCount) {
             continue;
         }
         m->lineToDisplayRow[line] = m->visibleLines.len;
-        m->visibleLines.Append(line);
+        VecAppend(m->visibleLines, line);
     }
 }
 
@@ -28322,7 +28455,7 @@ Str InputCompletionDocumentation(InputState* s) {
 }
 
 CompletionSession::~CompletionSession() {
-    items.Reset();
+    VecReset(items);
     StrFree(query);
     if (arena) {
         ArenaDelete(arena);
@@ -28340,7 +28473,7 @@ void InputDismissCompletion(InputState* s) {
     s->completion.open = false;
     s->completion.triggerStart = -1;
     s->completion.selected = 0;
-    s->completion.items.Clear();
+    VecClear(s->completion.items);
     StrFree(s->completion.query);
     s->completion.query = {};
     s->completion.revision++;
@@ -28378,9 +28511,9 @@ void InputRequestCompletion(InputState* s, App* app, Window* win, bool force) {
             return;
         }
     }
-    s->completion.items.Clear();
+    VecClear(s->completion.items);
     for (int i = 0; i < n; i++) {
-        s->completion.items.Append(items.els[i]);
+        VecAppend(s->completion.items, items.els[i]);
     }
     s->completion.open = n > 0;
     Str queryCopy = query.len > 0 ? StrDup(query) : Str{};
@@ -28424,11 +28557,11 @@ void InputAcceptCompletion(InputState* s, App* app, Window* win) {
     TextEditItem primary = {};
     primary.range = range;
     primary.newText = StrDup(GetTempArena(), text);
-    edits.Append(primary);
+    VecAppend(edits, primary);
     for (int i = 0; i < item.nAdditionalEdits; i++) {
         TextEditItem edit = item.additionalEdits[i];
         edit.newText = StrDup(GetTempArena(), edit.newText);
-        edits.Append(edit);
+        VecAppend(edits, edit);
     }
     InputDismissCompletion(s);
     s->silentReplace = true;
@@ -28446,9 +28579,9 @@ void InputPresentCompletionItems(InputState* s, int triggerStart, Str query,
     if (!s) {
         return;
     }
-    s->completion.items.Clear();
+    VecClear(s->completion.items);
     for (int i = 0; i < n; i++) {
-        s->completion.items.Append(items[i]);
+        VecAppend(s->completion.items, items[i]);
     }
     s->completion.triggerStart = triggerStart;
     s->completion.offset = InputCursor(s);
@@ -28465,9 +28598,9 @@ void InputPresentCodeActions(InputState* s, const CodeActionItem* items,
     if (!s) {
         return;
     }
-    s->codeActions.items.Reset();
+    VecReset(s->codeActions.items);
     for (int i = 0; i < n; i++) {
-        s->codeActions.items.Append(items[i]);
+        VecAppend(s->codeActions.items, items[i]);
     }
     s->codeActions.selected = 0;
     s->codeActions.open = n > 0;
@@ -28552,11 +28685,11 @@ void InputInsertCompletion(InputState* s, App* app, Window* win,
     TextEditItem primary = {};
     primary.range = range;
     primary.newText = StrDup(GetTempArena(), text);
-    edits.Append(primary);
+    VecAppend(edits, primary);
     for (int i = 0; i < item->nAdditionalEdits; i++) {
         TextEditItem edit = item->additionalEdits[i];
         edit.newText = StrDup(GetTempArena(), edit.newText);
-        edits.Append(edit);
+        VecAppend(edits, edit);
     }
 
     s->silentReplace = true;
@@ -28642,9 +28775,9 @@ void InputUpdateDocumentColors(InputState* s) {
     }
 
     qsort(buf.els, (size_t)n, sizeof(DocumentColor), DocumentColorCompare);
-    s->documentColors.Clear();
+    VecClear(s->documentColors);
     for (int i = 0; i < n; i++) {
-        s->documentColors.Append(buf[i]);
+        VecAppend(s->documentColors, buf[i]);
     }
 }
 
@@ -28826,9 +28959,9 @@ void InputLspReset(InputState* s) {
     if (!s) {
         return;
     }
-    s->documentColors.Clear();
+    VecClear(s->documentColors);
     s->documentColorsDirty = true;
-    s->semanticTokens.Clear();
+    VecClear(s->semanticTokens);
     s->semanticTokensDirty = true;
     InputClearInlineCompletion(s);
     InputDismissLspOverlays(s);
@@ -28867,15 +29000,15 @@ void InputUpdateSemanticTokens(InputState* s) {
     }
     int m = SemanticTokensDecode(buf.els, n, s->semanticLegend,
                                  s->nSemanticLegend, decoded.els, n);
-    s->semanticTokens.Clear();
+    VecClear(s->semanticTokens);
     for (int i = 0; i < m; i++) {
-        s->semanticTokens.Append(decoded[i]);
+        VecAppend(s->semanticTokens, decoded[i]);
     }
 }
 
 HoverDefinition::~HoverDefinition() {
-    locations.Reset();
-    lastLocations.Reset();
+    VecReset(locations);
+    VecReset(lastLocations);
     if (arena) {
         ArenaDelete(arena);
     }
@@ -28891,12 +29024,12 @@ void InputClearHoverDefinition(InputState* s) {
     }
 
     s->hoverDef.lastRange = s->hoverDef.symbolRange;
-    s->hoverDef.lastLocations.Reset();
+    VecReset(s->hoverDef.lastLocations);
     for (int i = 0; i < s->hoverDef.locations.len; i++) {
-        s->hoverDef.lastLocations.Append(s->hoverDef.locations[i]);
+        VecAppend(s->hoverDef.lastLocations, s->hoverDef.locations[i]);
     }
     s->hoverDef.symbolRange = Selection{};
-    s->hoverDef.locations.Reset();
+    VecReset(s->hoverDef.locations);
     s->hoverDef.bounds = Bounds{};
 }
 
@@ -28956,7 +29089,7 @@ void InputHoverDefinition(InputState* s, int offset) {
     }
     s->hoverDef.symbolRange = symbol;
     for (int i = 0; i < n; i++) {
-        s->hoverDef.locations.Append(buf[i]);
+        VecAppend(s->hoverDef.locations, buf[i]);
     }
 }
 
@@ -29015,7 +29148,7 @@ void InputGoToDefinition(InputState* s, App* app, Window* win) {
 }
 
 CodeActionSession::~CodeActionSession() {
-    items.Reset();
+    VecReset(items);
     if (arena) {
         ArenaDelete(arena);
     }
@@ -29026,7 +29159,7 @@ void InputDismissCodeActions(InputState* s) {
         return;
     }
     s->codeActions.open = false;
-    s->codeActions.items.Reset();
+    VecReset(s->codeActions.items);
     s->codeActions.selected = 0;
     s->codeActions.revision++;
 }
@@ -29039,15 +29172,15 @@ void InputAddCodeActionProvider(InputState* s, CodeActionFn fn, void* data,
     bool hadDirectProvider = s->codeActionProvider != nullptr;
     if (s->codeActionProviders.len == 0 && hadDirectProvider) {
 
-        s->codeActionProviders.Append(
-            {s->codeActionProvider, s->codeActionData, nullptr});
+        VecAppend(s->codeActionProviders,
+                  {s->codeActionProvider, s->codeActionData, nullptr});
     }
     if (!hadDirectProvider) {
 
         s->codeActionProvider = fn;
         s->codeActionData = data;
     }
-    s->codeActionProviders.Append({fn, data, perform});
+    VecAppend(s->codeActionProviders, {fn, data, perform});
 }
 
 static int CodeActionProviderCount(const InputState* s) {
@@ -29084,7 +29217,7 @@ void InputToggleCodeActions(InputState* s, App* app, Window* win) {
         ArenaDelete(s->codeActions.arena);
         s->codeActions.arena = ArenaNew();
     }
-    s->codeActions.items.Reset();
+    VecReset(s->codeActions.items);
 
     int nProviders = CodeActionProviderCount(s);
     for (int p = 0; p < nProviders; p++) {
@@ -29116,7 +29249,7 @@ void InputToggleCodeActions(InputState* s, App* app, Window* win) {
         }
         for (int i = 0; i < n; i++) {
             buf[i].provider = p;
-            s->codeActions.items.Append(buf[i]);
+            VecAppend(s->codeActions.items, buf[i]);
         }
     }
     int n = s->codeActions.items.len;
@@ -29171,7 +29304,7 @@ void InputPerformCodeAction(InputState* s, App* app, Window* win) {
         for (int i = 0; i < item.nEdits; i++) {
             TextEditItem edit = item.edits[i];
             edit.newText = StrDup(GetTempArena(), edit.newText);
-            edits.Append(edit);
+            VecAppend(edits, edit);
         }
     } else {
         if (!VecReserve(edits, 1)) {
@@ -29180,7 +29313,7 @@ void InputPerformCodeAction(InputState* s, App* app, Window* win) {
         TextEditItem edit = {};
         edit.range = item.range;
         edit.newText = StrDup(GetTempArena(), item.newText);
-        edits.Append(edit);
+        VecAppend(edits, edit);
     }
 
     CodeActionPerformFn perform = nullptr;
@@ -30270,7 +30403,7 @@ static Str MatcherText(const SearchMatcher* m) {
 }
 
 static void MatcherUpdateMatches(SearchMatcher* m) {
-    m->ranges.Clear();
+    VecClear(m->ranges);
     m->ranges.len = 0;
     if (m->query.len > 0) {
         Str hay = MatcherText(m);
@@ -30280,7 +30413,7 @@ static void MatcherUpdateMatches(SearchMatcher* m) {
             if (lo < 0) {
                 break;
             }
-            m->ranges.Append(Selection{lo, lo + m->query.len});
+            VecAppend(m->ranges, Selection{lo, lo + m->query.len});
             at = lo + m->query.len;
         }
     }
@@ -30309,7 +30442,7 @@ void SearchMatcherUpdate(SearchMatcher* m, Str text) {
     }
     m->text.len = 0;
     if (text.len > 0) {
-        char* dst = m->text.AppendBlanks(text.len);
+        char* dst = VecAppendBlanks(m->text, text.len);
         if (dst) {
             memcpy(dst, text.s, (size_t)text.len);
         }
@@ -31075,7 +31208,7 @@ static void PushTransaction(UndoManager* m, Change change, EditIntent intent) {
     UndoTransaction t = {};
     t.intent = intent;
     TransactionPush(&t, change);
-    m->undos.Append(t);
+    VecAppend(m->undos, t);
     m->coalescingBoundary = intent == EditIntent::Atomic;
 }
 
@@ -31172,7 +31305,7 @@ const UndoTransaction* UndoPopUndo(UndoManager* m) {
     }
     UndoTransaction t = m->undos[m->undos.len - 1];
     m->undos.len--;
-    m->redos.Append(t);
+    VecAppend(m->redos, t);
     m->coalescingBoundary = true;
 
     return &m->redos[m->redos.len - 1];
@@ -31185,7 +31318,7 @@ const UndoTransaction* UndoPopRedo(UndoManager* m) {
     }
     UndoTransaction t = m->redos[m->redos.len - 1];
     m->redos.len--;
-    m->undos.Append(t);
+    VecAppend(m->undos, t);
     m->coalescingBoundary = true;
     return &m->undos[m->undos.len - 1];
 }
@@ -31832,11 +31965,11 @@ int ListPrevIndex(const ListState* s) {
 
 void ListSetSections(ListState* s, const int* counts, int n, bool headers,
                      bool footers) {
-    s->sectionCounts.Clear();
+    VecClear(s->sectionCounts);
     s->count = 0;
     for (int i = 0; i < n; i++) {
         int c = counts[i] < 0 ? 0 : counts[i];
-        s->sectionCounts.Append(c);
+        VecAppend(s->sectionCounts, c);
         s->count += c;
     }
     s->sectionHeaders = headers;
@@ -31920,7 +32053,7 @@ void ListPrepareRowHeights(ListState* s, float itemH, float headerH,
         float h = row.kind == ListRowKind::SectionHeader   ? headerH
                   : row.kind == ListRowKind::SectionFooter ? footerH
                                                            : itemH;
-        s->rowHeights.Append(h);
+        VecAppend(s->rowHeights, h);
     }
 }
 
@@ -33463,13 +33596,13 @@ void PopupMenuPerform(PopupMenuState* s, Ctx* cx, PopupMenuAction act,
 
 void PopupMenuBeginRows(PopupMenuState* s) {
     if (s) {
-        s->rows.Clear();
+        VecClear(s->rows);
     }
 }
 
 void PopupMenuAddRow(PopupMenuState* s, const PopupMenuRow& row) {
     if (s) {
-        s->rows.Append(row);
+        VecAppend(s->rows, row);
     }
 }
 
@@ -34115,12 +34248,12 @@ bool ResizableState::InsertPanel(Ctx* cx, float size, int ix) {
     if (container < 1.f) container = 1.f;
     float left = container > size ? container - size : 1.f;
     for (int i = 0; i < n; i++) sizes[i] = left * sizes[i] / container;
-    sizes.InsertAt(ix, size);
-    mins.InsertAt(ix, PANEL_MIN_SIZE);
-    maxs.InsertAt(ix, 1e9f);
-    grows.InsertAt(ix, false);
-    shown.InsertAt(ix, true);
-    laid.InsertAt(ix, Bounds{});
+    VecInsertAt(sizes, ix, size);
+    VecInsertAt(mins, ix, PANEL_MIN_SIZE);
+    VecInsertAt(maxs, ix, 1e9f);
+    VecInsertAt(grows, ix, false);
+    VecInsertAt(shown, ix, true);
+    VecInsertAt(laid, ix, Bounds{});
     Notify(cx);
     return true;
 }
@@ -34153,12 +34286,12 @@ bool ResizableState::ResetPanel(Ctx* cx, int ix) {
 }
 
 void ResizableState::Clear() {
-    sizes.Clear();
-    mins.Clear();
-    maxs.Clear();
-    grows.Clear();
-    shown.Clear();
-    laid.Clear();
+    VecClear(sizes);
+    VecClear(mins);
+    VecClear(maxs);
+    VecClear(grows);
+    VecClear(shown);
+    VecClear(laid);
     dragging = -1;
     lastContainer = 0;
 }
@@ -34409,15 +34542,15 @@ El* ResizablePanelGroup::IntoEl() {
     }
 
     if (s->sizes.len != panels.len) {
-        s->sizes.Clear();
-        s->mins.Clear();
-        s->maxs.Clear();
+        VecClear(s->sizes);
+        VecClear(s->mins);
+        VecClear(s->maxs);
         for (int i = 0; i < panels.len; i++) {
 
-            s->sizes.Append(grows[i] ? 0 : sizes[i]);
-            s->mins.Append(mins[i]);
+            VecAppend(s->sizes, grows[i] ? 0 : sizes[i]);
+            VecAppend(s->mins, mins[i]);
 
-            s->maxs.Append(maxs[i] > 0 ? maxs[i] : 1e9f);
+            VecAppend(s->maxs, maxs[i] > 0 ? maxs[i] : 1e9f);
         }
         s->lastContainer = 0;
     } else {
@@ -34426,14 +34559,14 @@ El* ResizablePanelGroup::IntoEl() {
             s->maxs[i] = maxs[i] > 0 ? maxs[i] : 1e9f;
         }
     }
-    s->grows.Clear();
-    s->shown.Clear();
+    VecClear(s->grows);
+    VecClear(s->shown);
     for (int i = 0; i < panels.len; i++) {
-        s->grows.Append(grows[i]);
-        s->shown.Append(shown[i]);
+        VecAppend(s->grows, grows[i]);
+        VecAppend(s->shown, shown[i]);
     }
     while (s->laid.len < panels.len) {
-        s->laid.Append(Bounds{});
+        VecAppend(s->laid, Bounds{});
     }
 
     float container = horiz ? s->bounds.w : s->bounds.h;
@@ -34678,11 +34811,11 @@ static void ReorderNodeLinks(SankeyGraph* g, int index) {
 static void ComputeNodeLinks(SankeyGraph* g) {
     int n = g->nodes.len;
     int m = g->links.len;
-    g->srcLinks.Reset();
-    g->tgtLinks.Reset();
+    VecReset(g->srcLinks);
+    VecReset(g->tgtLinks);
     if (m > 0) {
-        g->srcLinks.AppendBlanks(m);
-        g->tgtLinks.AppendBlanks(m);
+        VecAppendBlanks(g->srcLinks, m);
+        VecAppendBlanks(g->tgtLinks, m);
     }
 
     for (int i = 0; i < n; i++) {
@@ -34737,16 +34870,16 @@ static SankeyError ComputeNodeRanks(SankeyGraph* g) {
     Vec<int> depths;
     Vec<int> heights;
     if (n > 0) {
-        incoming.AppendBlanks(n);
-        depths.AppendBlanks(n);
-        heights.AppendBlanks(n);
+        VecAppendBlanks(incoming, n);
+        VecAppendBlanks(depths, n);
+        VecAppendBlanks(heights, n);
     }
     for (int i = 0; i < n; i++) {
         incoming[i] = g->nodes[i].tgtCount;
         depths[i] = 0;
         heights[i] = 0;
         if (incoming[i] == 0) {
-            order.Append(i);
+            VecAppend(order, i);
         }
     }
 
@@ -34763,7 +34896,7 @@ static SankeyError ComputeNodeRanks(SankeyGraph* g) {
             }
             incoming[target]--;
             if (incoming[target] == 0) {
-                order.Append(target);
+                VecAppend(order, target);
             }
         }
     }
@@ -35117,16 +35250,16 @@ static void CenterColumns(const Sankey* s, SankeyGraph* g) {
     Vec<float> lo;
     Vec<float> hi;
     Vec<float> offsets;
-    lo.AppendBlanks(layers);
-    hi.AppendBlanks(layers);
-    offsets.AppendBlanks(layers);
+    VecAppendBlanks(lo, layers);
+    VecAppendBlanks(hi, layers);
+    VecAppendBlanks(offsets, layers);
     for (int l = 0; l < layers; l++) {
         lo[l] = 0;
         hi[l] = 0;
         offsets[l] = 0;
     }
     Vec<bool> seen;
-    seen.AppendBlanks(layers);
+    VecAppendBlanks(seen, layers);
     for (int l = 0; l < layers; l++) {
         seen[l] = false;
     }
@@ -35162,10 +35295,10 @@ static void StaggerFlatColumns(const Sankey* s, SankeyGraph* g) {
     Vec<int> single;
     Vec<float> heights;
     Vec<float> offsets;
-    count.AppendBlanks(layers);
-    single.AppendBlanks(layers);
-    heights.AppendBlanks(layers);
-    offsets.AppendBlanks(layers);
+    VecAppendBlanks(count, layers);
+    VecAppendBlanks(single, layers);
+    VecAppendBlanks(heights, layers);
+    VecAppendBlanks(offsets, layers);
     for (int l = 0; l < layers; l++) {
         count[l] = 0;
         single[l] = -1;
@@ -35255,14 +35388,14 @@ SankeyError SankeyTopology(const Sankey* s, int nodeCount,
     }
 
     if (nodeCount > 0) {
-        out->nodes.AppendBlanks(nodeCount);
+        VecAppendBlanks(out->nodes, nodeCount);
         for (int i = 0; i < nodeCount; i++) {
             out->nodes[i] = SankeyNodeLayout{};
             out->nodes[i].index = i;
         }
     }
     if (nLinks > 0) {
-        out->links.AppendBlanks(nLinks);
+        VecAppendBlanks(out->links, nLinks);
         for (int i = 0; i < nLinks; i++) {
             SankeyLinkLayout& l = out->links[i];
             l = SankeyLinkLayout{};
@@ -35297,9 +35430,9 @@ void SankeyLayoutFrom(const Sankey* s, SankeyGraph* g) {
     Vec<int> colStart;
     Vec<int> colCount;
     Vec<int> colItems;
-    colStart.AppendBlanks(layers);
-    colCount.AppendBlanks(layers);
-    colItems.AppendBlanks(g->nodes.len);
+    VecAppendBlanks(colStart, layers);
+    VecAppendBlanks(colCount, layers);
+    VecAppendBlanks(colItems, g->nodes.len);
     for (int l = 0; l < layers; l++) {
         colStart[l] = 0;
         colCount[l] = 0;
@@ -36655,8 +36788,8 @@ struct TextSelectionParticipantState {
         for (int i = 0; i < runs.len; i++) {
             if (runs[i].layout) TextLayoutRelease(runs[i].layout);
         }
-        runs.Reset();
-        textBounds.Reset();
+        VecReset(runs);
+        VecReset(textBounds);
         StrFree(fallbackCopyText);
         StrFree(projectedCopyText);
     }
@@ -36982,7 +37115,7 @@ static void WindowSelectionPublish(Window* window) {
     selection->publishing = true;
     Vec<EntityId> participants;
     for (int i = 0; i < selection->participants.len; i++) {
-        participants.Append(selection->participants[i]);
+        VecAppend(participants, selection->participants[i]);
     }
     for (int i = 0; i < participants.len; i++) {
         EntityId id = participants[i];
@@ -37006,7 +37139,7 @@ static void WindowSelectionPublish(Window* window) {
         if (!state || state->window != window) continue;
         ParticipantSetSnapshot(state, window->app, has, snapshot);
     }
-    participants.Reset();
+    VecReset(participants);
     selection->publishing = false;
 }
 
@@ -37078,9 +37211,9 @@ void TextSelectionHandle::Register(TextSelectionRegistration value,
     participant->window = window;
     participant->registered = true;
     participant->registration = value;
-    participant->textBounds.Reset();
+    VecReset(participant->textBounds);
     for (int i = 0; i < value.textBoundsCount; i++) {
-        participant->textBounds.Append(value.textBounds[i]);
+        VecAppend(participant->textBounds, value.textBounds[i]);
     }
     participant->registration.textBounds = participant->textBounds.els;
     participant->registration.textBoundsCount = participant->textBounds.len;
@@ -37093,7 +37226,7 @@ void TextSelectionHandle::Register(TextSelectionRegistration value,
             break;
         }
     }
-    if (!found) selection->participants.Append(state.id);
+    if (!found) VecAppend(selection->participants, state.id);
     WindowSelectionPublish(window);
 }
 
@@ -37177,16 +37310,16 @@ TextSelectionProjection TextSelectionHandle::UpdateRuns(
             TextLayoutRelease(participant->runs[i].layout);
         }
     }
-    participant->runs.Reset();
+    VecReset(participant->runs);
     for (int i = 0; i < count; i++) {
-        participant->runs.Append(values[i]);
+        VecAppend(participant->runs, values[i]);
         if (values[i].layout) TextLayoutAddRef(values[i].layout);
     }
     out.active = participant->hasSnapshot;
     for (int i = 0; i < count; i++) {
-        out.ranges.Append(participant->hasSnapshot
-                              ? ProjectRun(values[i], participant->snapshot)
-                              : TextSelectionRange{});
+        VecAppend(out.ranges, participant->hasSnapshot
+                                  ? ProjectRun(values[i], participant->snapshot)
+                                  : TextSelectionRange{});
     }
 
     Vec<int> order;
@@ -37198,7 +37331,7 @@ TextSelectionProjection TextSelectionHandle::UpdateRuns(
                    values[i].documentOrder) {
             insert--;
         }
-        order.Append(0);
+        VecAppend(order, 0);
         for (int j = order.len - 1; j > insert; j--) {
             order[j] = order[j - 1];
         }
@@ -37211,7 +37344,7 @@ TextSelectionProjection TextSelectionHandle::UpdateRuns(
         selected.Append(Str(values[ix].text.s + range.start,
                             range.end - range.start));
     }
-    order.Reset();
+    VecReset(order);
     StrFree(participant->projectedCopyText);
     participant->projectedCopyText = selected.TakeStr();
     participant->hasProjectedCopyText = true;
@@ -37314,7 +37447,7 @@ WindowSelection* WindowSelectionOf(Window* win) {
 void WindowSelectionFree(Window* win) {
     if (win && win->sel) {
         WindowSelectionClear(win);
-        win->sel->participants.Reset();
+        VecReset(win->sel->participants);
         delete win->sel;
         win->sel = nullptr;
     }
@@ -37335,7 +37468,7 @@ void WindowSelectionClear(Window* win) {
     if (win->app) {
         Vec<EntityId> participants;
         for (int i = 0; i < s->participants.len; i++) {
-            participants.Append(s->participants[i]);
+            VecAppend(participants, s->participants[i]);
         }
         for (int i = 0; i < participants.len; i++) {
             TextSelectionParticipantState* participant =
@@ -37358,7 +37491,7 @@ void WindowSelectionClear(Window* win) {
                        &selectionChanged);
             if (clear) clear(clearUser, win->app);
         }
-        participants.Reset();
+        VecReset(participants);
     }
     s->clearing = false;
 }
@@ -37622,7 +37755,7 @@ int TextSelection::SelectedText(Window* window, App* app, char* out, int cap) {
                active[insert - 1].documentOrder > item.documentOrder) {
             insert--;
         }
-        active.Append({});
+        VecAppend(active, {});
         for (int j = active.len - 1; j > insert; j--) {
             active[j] = active[j - 1];
         }
@@ -37647,7 +37780,7 @@ int TextSelection::SelectedText(Window* window, App* app, char* out, int cap) {
         emitted = true;
     }
     for (int i = 0; i < active.len; i++) StrFree(active[i].text);
-    active.Reset();
+    VecReset(active);
     out[written] = 0;
     if (written > 0) return written;
     return WindowSelectionText(window, out, cap);
@@ -37735,7 +37868,7 @@ void WindowSelectionFinishFrame(Window* win) {
 
     Vec<EntityId> participants;
     for (int i = 0; i < selection->participants.len; i++) {
-        participants.Append(selection->participants[i]);
+        VecAppend(participants, selection->participants[i]);
     }
     for (int i = 0; i < participants.len; i++) {
         EntityId id = participants[i];
@@ -37774,7 +37907,7 @@ void WindowSelectionFinishFrame(Window* win) {
             if (clear) clear(clearUser, win->app);
         }
     }
-    participants.Reset();
+    VecReset(participants);
     selection->frameGeneration++;
     WindowSelectionPublish(win);
 }
@@ -37786,9 +37919,9 @@ namespace gpui {
 
 ShadowTokens ShadowTokens::Elevations(Rgba color) {
     ShadowTokens out;
-    out.sm.Append(BoxShadow{0, 1, 2, 0, color, false});
-    out.md.Append(BoxShadow{0, 4, 8, -2, color, false});
-    out.lg.Append(BoxShadow{0, 12, 24, -4, color, false});
+    VecAppend(out.sm, BoxShadow{0, 1, 2, 0, color, false});
+    VecAppend(out.md, BoxShadow{0, 4, 8, -2, color, false});
+    VecAppend(out.lg, BoxShadow{0, 12, 24, -4, color, false});
     return out;
 }
 
@@ -37887,7 +38020,7 @@ int TilesAdd(TilesState* s, int panel, Bounds bounds) {
     TileItem it;
     it.panel = panel;
     it.bounds = bounds;
-    s->items.Append(it);
+    VecAppend(s->items, it);
     return s->items.len - 1;
 }
 
@@ -38559,7 +38692,7 @@ bool ToastPush(ToastStackState* s, int id, int timeoutMs) {
     e.hasTimeout = timeoutMs > 0;
     e.timeoutRemainingMs = timeoutMs;
     e.elapsedMs = 0;
-    return s->entries.Append(e);
+    return VecAppend(s->entries, e);
 }
 
 static void ToastEraseAt(ToastStackState* s, int i) {
@@ -38688,7 +38821,7 @@ static ToastMeasurement* ToastStackMeasurement(ToastStackState* state,
     }
     ToastMeasurement measurement;
     measurement.id = id;
-    if (!state->heights.Append(measurement)) {
+    if (!VecAppend(state->heights, measurement)) {
         return nullptr;
     }
     return &state->heights[state->heights.len - 1];
@@ -39363,12 +39496,12 @@ int TreeAddItem(TreeState* s, Str id, Str label, int parent) {
 
         s->items[parent].folder = true;
     }
-    s->items.Append(it);
+    VecAppend(s->items, it);
     return ix;
 }
 
 static void TreeAddEntry(TreeState* s, int item) {
-    s->entries.Append(item);
+    VecAppend(s->entries, item);
     if (!s->items[item].expanded) {
         return;
     }
@@ -39419,7 +39552,7 @@ void TreeSetItems(TreeState* s, Ctx* cx, const TreeItem* items, int count) {
     s->items.len = 0;
     if (items && count > 0) {
         for (int i = 0; i < count; i++) {
-            s->items.Append(items[i]);
+            VecAppend(s->items, items[i]);
         }
     }
     s->selected = -1;
@@ -39503,7 +39636,7 @@ static void TreeExpandAncestors(TreeState* s, Ctx* cx, int item) {
 
     Vec<int> ancestors;
     for (int p = s->items[item].parent; p >= 0; p = s->items[p].parent) {
-        ancestors.Append(p);
+        VecAppend(ancestors, p);
     }
     for (int i = ancestors.len - 1; i >= 0; i--) {
         TreeItem& ancestor = s->items[ancestors[i]];
@@ -39514,7 +39647,7 @@ static void TreeExpandAncestors(TreeState* s, Ctx* cx, int item) {
             }
         }
     }
-    ancestors.Reset();
+    VecReset(ancestors);
 }
 
 int TreeRevealItem(TreeState* s, Ctx* cx, Str id,
@@ -39962,8 +40095,8 @@ void ItemSizeLayoutBuild(ItemSizeLayout* layout, Axis axis,
     for (int i = 0; i < count; i++) {
         float item = itemSizes ? itemSizes[i] : uniformItemSize;
         float extent = item + (i + 1 < count ? gap : 0.f);
-        layout->origins.Append(origin);
-        layout->sizes.Append(extent);
+        VecAppend(layout->origins, origin);
+        VecAppend(layout->sizes, extent);
         origin += extent;
     }
     if (axis == Axis::Horizontal) {
@@ -41905,7 +42038,7 @@ struct ToggleGroupState {
     Vec<bool> checked;
     Listener onClick = {};
 
-    ~ToggleGroupState() { checked.Reset(); }
+    ~ToggleGroupState() { VecReset(checked); }
 
     static void OnChildClick(ToggleGroupState* self, Ctx* cx,
                              const ClickEvent*, intptr_t ix) {
@@ -41924,8 +42057,9 @@ El* ToggleGroup::IntoEl() {
             cx, id, StrL("gpui::component::ToggleGroupState"));
         stored = state.Get(cx);
         if (stored) {
-            stored->checked.Clear();
-            for (Toggle* item : items) stored->checked.Append(item->checked);
+            VecClear(stored->checked);
+            for (Toggle* item : items)
+                VecAppend(stored->checked, item->checked);
             stored->onClick = onClick;
         }
     }
@@ -42240,11 +42374,11 @@ struct ButtonGroupState {
                 }
                 next.len--;
             } else {
-                next.Append((int)childIndex);
+                VecAppend(next, (int)childIndex);
             }
         } else {
-            next.Clear();
-            next.Append((int)childIndex);
+            VecClear(next);
+            VecAppend(next, (int)childIndex);
         }
 
         ButtonGroupEvent ev{next.els, next.len};
@@ -42260,10 +42394,10 @@ El* ButtonGroup::IntoEl() {
             cx, id, StrL("gpui::component::ButtonGroupState"));
         stateValue = state.Get(cx->app);
         if (stateValue) {
-            stateValue->selected.Clear();
+            VecClear(stateValue->selected);
             for (int i = 0; i < children.len; i++) {
                 if (children[i]->selected) {
-                    stateValue->selected.Append(i);
+                    VecAppend(stateValue->selected, i);
                 }
             }
             stateValue->multiple = multiple;
@@ -44145,9 +44279,9 @@ Str ComboboxState::SelectedValue() const {
 }
 
 void ComboboxState::SyncSnapshot() {
-    selectionSnapshot.Clear();
+    VecClear(selectionSnapshot);
     for (int i = 0; i < state.selected.len; i++) {
-        selectionSnapshot.Append(state.selected[i]);
+        VecAppend(selectionSnapshot, state.selected[i]);
     }
 }
 
@@ -44155,7 +44289,7 @@ void ComboboxState::SetSelectedValues(const Str* values, int nValues,
                                       Ctx* cx) {
     InputSetValue(&queryInput, Str{});
     SearchableListSearch(&state, state.items, state.nItems, Str{});
-    state.selected.Clear();
+    VecClear(state.selected);
     for (int v = 0; v < nValues; v++) {
         int found = -1;
         IndexPath path;
@@ -44186,7 +44320,7 @@ void ComboboxState::SetSelectedValues(const Str* values, int nValues,
             seen = seen || state.selected[i] == found;
         }
         if (!seen) {
-            state.selected.Append(found);
+            VecAppend(state.selected, found);
         }
     }
     SyncSnapshot();
@@ -44234,11 +44368,11 @@ void ComboboxState::Emit(Ctx* cx, ComboboxEventKind kind) {
     SelectedValues(&values);
     ComboboxEvent event = {kind, values.els, values.len};
     EntityEmit(cx->app, cx->win, self, &event);
-    values.Reset();
+    VecReset(values);
 }
 
 void ComboboxState::ClearSelection(Ctx* cx) {
-    state.selected.Clear();
+    VecClear(state.selected);
     SyncSnapshot();
     Emit(cx, ComboboxEventKind::Change);
     if (cx) {
@@ -44684,7 +44818,7 @@ static bool SameQuery(Str a, Str b) {
 static void SetApplied(CommandState* s, Str q) {
     s->applied.len = 0;
     for (int i = 0; i < q.len; i++) {
-        s->applied.Append(q.s[i]);
+        VecAppend(s->applied, q.s[i]);
     }
 }
 
@@ -44761,7 +44895,7 @@ static void UpdateMatches(CommandState* s, Str query) {
             if (pendingSeparator) {
                 CommandRow sep;
                 sep.kind = CommandRowKind::Separator;
-                s->rows.Append(sep);
+                VecAppend(s->rows, sep);
                 pendingSeparator = false;
             }
             CommandMatch m;
@@ -44771,11 +44905,11 @@ static void UpdateMatches(CommandState* s, Str query) {
             m.row = s->rows.len;
             m.disabled = e.item.disabled;
             m.data = e.item.data;
-            s->matched.Append(m);
+            VecAppend(s->matched, m);
             CommandRow row;
             row.kind = CommandRowKind::Item;
             row.match = s->matched.len - 1;
-            s->rows.Append(row);
+            VecAppend(s->rows, row);
             continue;
         }
 
@@ -44794,7 +44928,7 @@ static void UpdateMatches(CommandState* s, Str query) {
         if (pendingSeparator) {
             CommandRow sep;
             sep.kind = CommandRowKind::Separator;
-            s->rows.Append(sep);
+            VecAppend(s->rows, sep);
             pendingSeparator = false;
         }
 
@@ -44802,7 +44936,7 @@ static void UpdateMatches(CommandState* s, Str query) {
             CommandRow heading;
             heading.kind = CommandRowKind::Heading;
             heading.heading = e.group.heading;
-            s->rows.Append(heading);
+            VecAppend(s->rows, heading);
         }
         for (int i = 0; i < e.group.nItems; i++) {
             const CommandItem& it = e.group.items[i];
@@ -44816,16 +44950,16 @@ static void UpdateMatches(CommandState* s, Str query) {
             m.row = s->rows.len;
             m.disabled = it.disabled;
             m.data = it.data;
-            s->matched.Append(m);
+            VecAppend(s->matched, m);
             CommandRow row;
             row.kind = CommandRowKind::Item;
             row.match = s->matched.len - 1;
-            s->rows.Append(row);
+            VecAppend(s->rows, row);
         }
     }
 
     for (int i = 0; i < s->rows.len; i++) {
-        s->rowSizes.Append(RowHeight(s, s->rows[i]));
+        VecAppend(s->rowSizes, RowHeight(s, s->rows[i]));
     }
     if (s->selected >= s->matched.len) {
         s->selected = -1;
@@ -47156,7 +47290,7 @@ uint64_t UiSelectionNextDocumentOrder(App* app) {
 
 void UiTextViewStatePush(App* app, EntityId view) {
     if (UiGlobalState* state = UiGlobalStateOf(app)) {
-        state->textViewStateStack.Append(view);
+        VecAppend(state->textViewStateStack, view);
     }
 }
 
@@ -48057,9 +48191,9 @@ El* Highlighter::IntoEl() {
     style.diagnostics.hint = th.cyan;
     if (state) {
 
-        state->diagnostics.Clear();
+        VecClear(state->diagnostics);
         for (int i = 0; i < nDiagnostics; i++) {
-            state->diagnostics.Append(diagnostics[i]);
+            VecAppend(state->diagnostics, diagnostics[i]);
         }
     }
     if (state) {
@@ -51990,14 +52124,14 @@ El* List::IntoEl() {
                 sections = 1;
             }
             if (delegate.itemsCount) {
-                s->sectionCounts.Clear();
+                VecClear(s->sectionCounts);
                 s->count = 0;
                 for (int section = 0; section < sections; section++) {
                     int n = delegate.itemsCount(cx, delegate.data, section);
                     if (n < 0) {
                         n = 0;
                     }
-                    s->sectionCounts.Append(n);
+                    VecAppend(s->sectionCounts, n);
                     s->count += n;
                 }
                 s->sectionHeaders = delegate.renderSectionHeader != nullptr;
@@ -53445,7 +53579,7 @@ struct NotificationSystemState {
     Vec<NotificationSystemEntry> entries;
 
     ~NotificationSystemState() {
-        entries.Reset();
+        VecReset(entries);
         if (gSysApp == app) {
             gSysApp = nullptr;
         }
@@ -53504,7 +53638,7 @@ void NotificationSystemInsert(const NotificationSystemEntry& e) {
     if (state->entries.len >= kNotificationSystemMax) {
         SysEntryRemoveAt(state, 0);
     }
-    state->entries.Append(e);
+    VecAppend(state->entries, e);
 }
 
 const NotificationSystemEntry* NotificationSystemFind(int id, Window* win) {
@@ -53728,7 +53862,7 @@ NotificationListState::~NotificationListState() {
     for (int i = 0; i < items.len; i++) {
         NotificationFreeOwned(&items[i]);
     }
-    items.Reset();
+    VecReset(items);
 }
 
 bool NotificationListState::IsExpanded() const {
@@ -53813,7 +53947,7 @@ int NotificationPush(NotificationListState* s, Ctx* cx, Notification item,
     }
 
     Notification owned = NotificationOwnedCopy(item);
-    if (!s->items.Append(owned)) {
+    if (!VecAppend(s->items, owned)) {
         NotificationFreeOwned(&owned);
         return item.id;
     }
@@ -54824,7 +54958,7 @@ Str TruncateTextToWidth(PaintCtx* ctx, Arena* arena, Str text, float fontSize,
         }
         at += n;
         if (at < text.len) {
-            cuts.Append(at);
+            VecAppend(cuts, at);
         }
     }
     int best = -1;
@@ -55212,7 +55346,7 @@ static Vec<Point> ResolveLinePoints(const Line& line, Bounds bounds) {
         float x = 0, y = 0;
         if (PlotValue(line.x, line.items, i, line.xUser, &x) &&
             PlotValue(line.y, line.items, i, line.yUser, &y)) {
-            points.Append(OriginPoint(x, y, {bounds.x, bounds.y}));
+            VecAppend(points, OriginPoint(x, y, {bounds.x, bounds.y}));
         }
     }
     return points;
@@ -55303,7 +55437,7 @@ void Area::Paint(PaintCtx* ctx, Bounds bounds) const {
         }
         float py = 0;
         if (hasPx && PlotValue(y1, items, i, y1User, &py)) {
-            points.Append(OriginPoint(px, py, {bounds.x, bounds.y}));
+            VecAppend(points, OriginPoint(px, py, {bounds.x, bounds.y}));
         }
     }
     if (points.len <= 0) {
@@ -55725,8 +55859,8 @@ void RadialLine::Paint(PaintCtx* ctx, Bounds bounds) const {
         if (PlotValue(angle, items, i, angleUser, &a) &&
             PlotValue(radius, items, i, radiusUser, &r)) {
             a -= kPi * .5f;
-            points.Append({bounds.x + bounds.w * .5f + r * cosf(a),
-                           bounds.y + bounds.h * .5f + r * sinf(a)});
+            VecAppend(points, {bounds.x + bounds.w * .5f + r * cosf(a),
+                               bounds.y + bounds.h * .5f + r * sinf(a)});
         }
     }
     if (hasFill && points.len >= 3) {
@@ -55786,7 +55920,7 @@ void Stack::Series(Arena* arena, ArenaVec<StackSeries>* out) const {
     }
     Vec<float> baseline;
     for (int i = 0; i < items.count; i++) {
-        baseline.Append(0);
+        VecAppend(baseline, 0);
     }
     for (int keyIndex = 0; keyIndex < keyCount; keyIndex++) {
         StackSeries series = {};
@@ -57163,14 +57297,14 @@ SearchableGroup* SearchableGroup::New(Str value) {
 }
 
 SearchableGroup* SearchableGroup::Item(const SearchableListItem& value) {
-    items.Append(value);
+    VecAppend(items, value);
     return this;
 }
 
 SearchableGroup* SearchableGroup::Items(const SearchableListItem* values,
                                         int count) {
     for (int i = 0; i < count; i++) {
-        items.Append(values[i]);
+        VecAppend(items, values[i]);
     }
     return this;
 }
@@ -57191,23 +57325,23 @@ SearchableVec* SearchableVec::New(const SearchableListItem* values,
                                   int count) {
     SearchableVec* out = new SearchableVec();
     for (int i = 0; i < count; i++) {
-        out->items.Append(values[i]);
-        out->matchedItems.Append(values[i]);
+        VecAppend(out->items, values[i]);
+        VecAppend(out->matchedItems, values[i]);
     }
     return out;
 }
 
 SearchableVec* SearchableVec::Push(const SearchableListItem& value) {
-    items.Append(value);
-    matchedItems.Append(value);
+    VecAppend(items, value);
+    VecAppend(matchedItems, value);
     return this;
 }
 
 void SearchableVec::PerformSearch(Str query) {
-    matchedItems.Clear();
+    VecClear(matchedItems);
     for (int i = 0; i < items.len; i++) {
         if (SearchableItemMatches(&items[i], query)) {
-            matchedItems.Append(items[i]);
+            VecAppend(matchedItems, items[i]);
         }
     }
 }
@@ -57367,11 +57501,11 @@ void SearchableListState::SelectedValues(Vec<Str>* out) const {
     if (!out) {
         return;
     }
-    out->Clear();
+    VecClear(*out);
     for (int i = 0; i < selected.len; i++) {
         int ix = selected[i];
         if (items && ix >= 0 && ix < nItems) {
-            out->Append(items[ix].value);
+            VecAppend(*out, items[ix].value);
         }
     }
 }
@@ -57386,7 +57520,7 @@ bool SearchableListState::AddSelectedIndex(IndexPath index) {
             return false;
         }
     }
-    selected.Append(flat);
+    VecAppend(selected, flat);
     return true;
 }
 
@@ -57406,7 +57540,7 @@ bool SearchableListState::RemoveSelectedIndex(IndexPath index) {
 }
 
 void SearchableListState::SetSelectedIndices(const IndexPath* indices, int n) {
-    selected.Clear();
+    VecClear(selected);
     for (int i = 0; i < n; i++) {
         AddSelectedIndex(indices[i]);
     }
@@ -57424,11 +57558,11 @@ void SearchableListSearch(SearchableListState* s, const SearchableItem* items,
 
     s->items = items;
     s->nItems = nItems;
-    s->matches.Clear();
+    VecClear(s->matches);
     for (int i = 0; i < nItems; i++) {
         if (s->hasDelegate ? s->delegate.Matches(&items[i], query)
                            : SearchableItemMatches(&items[i], query)) {
-            s->matches.Append(i);
+            VecAppend(s->matches, i);
         }
     }
     s->list.count = s->matches.len;
@@ -57438,9 +57572,9 @@ void SearchableListSelectOnly(SearchableListState* s, int index) {
     if (!s) {
         return;
     }
-    s->selected.Clear();
+    VecClear(s->selected);
     if (index >= 0) {
-        s->selected.Append(index);
+        VecAppend(s->selected, index);
     }
 }
 
@@ -57495,20 +57629,21 @@ bool SearchableListIsEnabled(const SearchableListState* s,
 void SearchableListChangesFor(const SearchableListState* s,
                               const SearchableItem* items, int nItems,
                               int index, Vec<SearchableListChange>* out) {
-    out->Clear();
+    VecClear(*out);
     if (s->mode == SearchableListMode::Single) {
 
         for (int i = 0; i < s->selected.len; i++) {
-            out->Append({SearchableListChangeKind::Deselect, s->selected[i]});
+            VecAppend(*out,
+                      {SearchableListChangeKind::Deselect, s->selected[i]});
         }
-        out->Append({SearchableListChangeKind::Select, index});
+        VecAppend(*out, {SearchableListChangeKind::Select, index});
         return;
     }
 
     bool selected = SearchableListIsChecked(s, items, nItems, index);
-    out->Append({selected ? SearchableListChangeKind::Deselect
-                          : SearchableListChangeKind::Select,
-                 index});
+    VecAppend(*out, {selected ? SearchableListChangeKind::Deselect
+                              : SearchableListChangeKind::Select,
+                     index});
 }
 
 static void SelectionRemoveAt(SearchableListState* s, int at) {
@@ -57535,7 +57670,7 @@ void SearchableListApply(SearchableListState* s, const SearchableItem* items,
             }
 
             if (at < 0) {
-                s->selected.Append(ch.index);
+                VecAppend(s->selected, ch.index);
             }
             continue;
         }
@@ -57561,7 +57696,7 @@ bool SearchableListClick(SearchableListState* s, int index) {
     } else {
         SearchableListApply(s, s->items, s->nItems, changes.els, changes.len);
     }
-    changes.Reset();
+    VecReset(changes);
     return s->mode == SearchableListMode::Single && s->closeOnSelect;
 }
 
@@ -58302,7 +58437,7 @@ void SelectClear(SearchableListState* s, Ctx* cx) {
     if (!s) {
         return;
     }
-    s->selected.Clear();
+    VecClear(s->selected);
     Notify(cx);
 }
 
@@ -59096,7 +59231,7 @@ static FieldEl RenderField(Ctx* cx, Settings* s, const SettingItem& it, Str id,
     b.list = it.list;
     b.defIndex = it.defIndex;
     intptr_t ix = (intptr_t)st->fields.len;
-    st->fields.Append(b);
+    VecAppend(st->fields, b);
 
     Listener click = ListenTo(s->state, &SettingsState::OnFieldClick, ix);
 
@@ -59235,7 +59370,7 @@ El* Settings::IntoEl() {
             st->page = defaultSelectedIndex.pageIx;
             st->group = defaultSelectedIndex.groupIx;
         }
-        st->fields.Clear();
+        VecClear(st->fields);
     }
 
     IdScope scope(cx, id);
@@ -63082,7 +63217,7 @@ void DataTable::Headers(Vec<Str>* heads) {
         return;
     }
     for (int c = 0; c < nColumns; c++) {
-        heads->Append(TableColumnLabel(columns[c]));
+        VecAppend(*heads, TableColumnLabel(columns[c]));
     }
 }
 
@@ -63105,7 +63240,7 @@ void DataTable::DumpRange(int lo, int hi, Vec<Str>* heads, Vec<Str>* cells) {
     }
     for (int r = lo; r < hi; r++) {
         for (int c = 0; c < nColumns; c++) {
-            cells->Append(cellText ? cellText(cx, data, r, c) : Str());
+            VecAppend(*cells, cellText ? cellText(cx, data, r, c) : Str());
         }
     }
 }
@@ -68626,8 +68761,8 @@ void ThemeConfigResolve(Theme* out, const ThemeConfig* cfg, const Theme& base) {
 }
 
 ThemeRegistry::~ThemeRegistry() {
-    themes.Reset();
-    loadedDirs.Reset();
+    VecReset(themes);
+    VecReset(loadedDirs);
     if (arena) {
         ArenaDelete(arena);
         arena = nullptr;
@@ -68666,7 +68801,7 @@ static void InsertSorted(ThemeRegistry* state, const ThemeConfig& cfg) {
             break;
         }
     }
-    state->themes.InsertAt(at, cfg);
+    VecInsertAt(state->themes, at, cfg);
 }
 
 static float JsonFloatOr(const JsonValue* v, const char* key, float fallback) {
@@ -68807,14 +68942,14 @@ static void ApplyShadowLevel(const JsonValue* obj, const char* key,
     *any = true;
     if (v->kind == JsonKind::Array) {
 
-        level->Clear();
+        VecClear(*level);
     } else if (level->len == 0) {
-        level->Append(BoxShadow{});
+        VecAppend(*level, BoxShadow{});
     }
     const JsonValue* item = v->kind == JsonKind::Array ? v->first : v;
     for (; item; item = v->kind == JsonKind::Array ? item->next : nullptr) {
         if (item->kind != JsonKind::Object) continue;
-        if (v->kind == JsonKind::Array) level->Append(BoxShadow{});
+        if (v->kind == JsonKind::Array) VecAppend(*level, BoxShadow{});
         BoxShadow* out = v->kind == JsonKind::Array
                              ? &(*level)[level->len - 1]
                              : &(*level)[0];
@@ -69136,7 +69271,7 @@ int ThemeRegistryLoadDir(App* app, Str dir) {
             return 0;
         }
     }
-    state->loadedDirs.Append(StrDup(state->arena, dirKey));
+    VecAppend(state->loadedDirs, StrDup(state->arena, dirKey));
 
     const int kMaxEntries = 128;
     DirEntry* entries = AllocArray<DirEntry>(kMaxEntries);
@@ -69842,32 +69977,33 @@ static Date PresetDate(const DateRangePreset& preset) {
     return preset.value.IntoDate();
 }
 
-static void AppendDateNumber(StrBuilder* out, int value, int digits) {
+static void AppendDateNumber(Arena* a, StrBuilder* out, int value, int digits) {
     if (digits == 2) {
-        out->Append(fmt("%02d", value));
+        StrBuilderAppend(a, *out, fmt("%02d", value));
     } else if (digits == 3) {
-        out->Append(fmt("%03d", value));
+        StrBuilderAppend(a, *out, fmt("%03d", value));
     } else if (digits == 4) {
-        out->Append(fmt("%04d", value));
+        StrBuilderAppend(a, *out, fmt("%04d", value));
     } else {
-        out->Append(fmt("%d", value));
+        StrBuilderAppend(a, *out, fmt("%d", value));
     }
 }
 
-static void AppendDateNumeric(StrBuilder* out, int value, int digits,
+static void AppendDateNumeric(Arena* a, StrBuilder* out, int value, int digits,
                               char defaultPad, char modifier) {
     char pad = modifier == '-' ? 0 : modifier == '_' ? ' '
                                : modifier == '0'     ? '0'
                                                      : defaultPad;
     if (!pad || digits <= 1) {
-        AppendDateNumber(out, value, 1);
+        AppendDateNumber(a, out, value, 1);
         return;
     }
     char buf[32];
     int len = pad == '0' ? snprintf(buf, sizeof(buf), "%0*d", digits, value)
                          : snprintf(buf, sizeof(buf), "%*d", digits, value);
     if (len > 0) {
-        out->Append(Str(buf, std::min(len, (int)sizeof(buf) - 1)));
+        StrBuilderAppend(a, *out,
+                         Str(buf, std::min(len, (int)sizeof(buf) - 1)));
     }
 }
 
@@ -69906,7 +70042,6 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
                                      "Wednesday", "Thursday", "Friday",
                                      "Saturday"};
     StrBuilder out;
-    out.a = a;
     int weekday = CalendarWeekday(date.year, date.month, date.day);
     int yearDay = DateYearDay(date);
     int isoYear = 0, isoWeek = 0;
@@ -69914,7 +70049,7 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
     for (int i = 0; i < pattern.len; i++) {
         char ch = pattern.s[i];
         if (ch != '%' || i + 1 >= pattern.len) {
-            out.AppendChar(ch);
+            StrBuilderAppendChar(a, out, ch);
             continue;
         }
         char directive = pattern.s[++i];
@@ -69925,90 +70060,99 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
             directive = pattern.s[++i];
         }
         switch (directive) {
-            case '%': out.AppendChar('%'); break;
+            case '%': StrBuilderAppendChar(a, out, '%'); break;
             case 'Y':
-                AppendDateNumeric(&out, date.year, 4, '0', modifier);
+                AppendDateNumeric(a, &out, date.year, 4, '0', modifier);
                 break;
             case 'y':
-                AppendDateNumeric(&out, date.year % 100, 2, '0', modifier);
+                AppendDateNumeric(a, &out, date.year % 100, 2, '0', modifier);
                 break;
             case 'C':
-                AppendDateNumeric(&out, date.year / 100, 2, '0', modifier);
+                AppendDateNumeric(a, &out, date.year / 100, 2, '0', modifier);
                 break;
             case 'q':
-                AppendDateNumeric(&out, (date.month - 1) / 3 + 1, 1, 0,
+                AppendDateNumeric(a, &out, (date.month - 1) / 3 + 1, 1, 0,
                                   modifier);
                 break;
             case 'm':
-                AppendDateNumeric(&out, date.month, 2, '0', modifier);
+                AppendDateNumeric(a, &out, date.month, 2, '0', modifier);
                 break;
             case 'b':
-            case 'h': out.Append(Str(shortMonths[date.month])); break;
-            case 'B': out.Append(Str(longMonths[date.month])); break;
+            case 'h':
+                StrBuilderAppend(a, out, Str(shortMonths[date.month]));
+                break;
+            case 'B':
+                StrBuilderAppend(a, out, Str(longMonths[date.month]));
+                break;
             case 'd':
-                AppendDateNumeric(&out, date.day, 2, '0', modifier);
+                AppendDateNumeric(a, &out, date.day, 2, '0', modifier);
                 break;
             case 'e':
-                AppendDateNumeric(&out, date.day, 2, ' ', modifier);
+                AppendDateNumeric(a, &out, date.day, 2, ' ', modifier);
                 break;
             case 'j':
-                AppendDateNumeric(&out, yearDay, 3, '0', modifier);
+                AppendDateNumeric(a, &out, yearDay, 3, '0', modifier);
                 break;
-            case 'a': out.Append(Str(shortDays[weekday])); break;
-            case 'A': out.Append(Str(longDays[weekday])); break;
+            case 'a':
+                StrBuilderAppend(a, out, Str(shortDays[weekday]));
+                break;
+            case 'A': StrBuilderAppend(a, out, Str(longDays[weekday])); break;
             case 'w':
-                AppendDateNumeric(&out, weekday, 1, 0, modifier);
+                AppendDateNumeric(a, &out, weekday, 1, 0, modifier);
                 break;
             case 'u':
-                AppendDateNumeric(&out, weekday ? weekday : 7, 1, 0,
+                AppendDateNumeric(a, &out, weekday ? weekday : 7, 1, 0,
                                   modifier);
                 break;
             case 'U':
-                AppendDateNumeric(&out, (yearDay - 1 + 7 - weekday) / 7, 2,
-                                  '0', modifier);
+                AppendDateNumeric(a, &out,
+                                  (yearDay - 1 + 7 - weekday) / 7, 2, '0',
+                                  modifier);
                 break;
             case 'W': {
                 int mondayWeekday = (weekday + 6) % 7;
-                AppendDateNumeric(
-                    &out, (yearDay - 1 + 7 - mondayWeekday) / 7, 2, '0',
-                    modifier);
+                AppendDateNumeric(a, &out,
+                                  (yearDay - 1 + 7 - mondayWeekday) / 7, 2,
+                                  '0', modifier);
                 break;
             }
             case 'G':
-                AppendDateNumeric(&out, isoYear, 4, '0', modifier);
+                AppendDateNumeric(a, &out, isoYear, 4, '0', modifier);
                 break;
             case 'g':
-                AppendDateNumeric(&out, isoYear % 100, 2, '0', modifier);
+                AppendDateNumeric(a, &out, isoYear % 100, 2, '0', modifier);
                 break;
             case 'V':
-                AppendDateNumeric(&out, isoWeek, 2, '0', modifier);
+                AppendDateNumeric(a, &out, isoWeek, 2, '0', modifier);
                 break;
             case 'F':
-                out.Append(fmt("%04d-%02d-%02d", date.year, date.month,
-                               date.day));
+                StrBuilderAppend(a, out,
+                                 fmt("%04d-%02d-%02d", date.year, date.month,
+                                     date.day));
                 break;
             case 'D':
             case 'x':
-                out.Append(fmt("%02d/%02d/%02d", date.month, date.day,
-                               date.year % 100));
+                StrBuilderAppend(a, out,
+                                 fmt("%02d/%02d/%02d", date.month, date.day,
+                                     date.year % 100));
                 break;
             case 'v':
-                AppendDateNumeric(&out, date.day, 2, ' ', modifier);
-                out.AppendChar('-');
-                out.Append(Str(shortMonths[date.month]));
-                out.AppendChar('-');
-                AppendDateNumeric(&out, date.year, 4, '0', modifier);
+                AppendDateNumeric(a, &out, date.day, 2, ' ', modifier);
+                StrBuilderAppendChar(a, out, '-');
+                StrBuilderAppend(a, out, Str(shortMonths[date.month]));
+                StrBuilderAppendChar(a, out, '-');
+                AppendDateNumeric(a, &out, date.year, 4, '0', modifier);
                 break;
-            case 't': out.AppendChar('\t'); break;
-            case 'n': out.AppendChar('\n'); break;
+            case 't': StrBuilderAppendChar(a, out, '\t'); break;
+            case 'n': StrBuilderAppendChar(a, out, '\n'); break;
             default:
 
-                out.AppendChar('%');
-                out.AppendChar(directive);
+                StrBuilderAppendChar(a, out, '%');
+                StrBuilderAppendChar(a, out, directive);
                 break;
         }
     }
-    return out.TakeStr();
+    return StrBuilderTakeStr(a, out);
 }
 
 Str DatePickerFormatValue(Arena* a, Str pattern, Date date) {
@@ -71186,7 +71330,7 @@ WindowLayers::~WindowLayers() {
         }
         component::NotificationSystemDismissAll(win);
     }
-    dialogs.Reset();
+    VecReset(dialogs);
 }
 
 WindowLayers* WindowLayersOf(Window* win) {
@@ -71223,7 +71367,7 @@ void WindowOpenDialog(Ctx* cx, EntityId view, bool overlay) {
     WindowLayer layer;
     layer.view = view;
     layer.overlay = overlay;
-    l->dialogs.Append(layer);
+    VecAppend(l->dialogs, layer);
     Notify(cx);
 }
 
@@ -71473,7 +71617,7 @@ void ExecPost(Func0 f) {
         gMainLock.Unlock();
         return;
     }
-    gMainQueue.Append(t);
+    VecAppend(gMainQueue, t);
     Func0 wake = gWake;
     gMainLock.Unlock();
 
@@ -71518,7 +71662,7 @@ int ExecDrain() {
         batch[i].f.Call();
     }
     int n = batch.len;
-    batch.Reset();
+    VecReset(batch);
     return n;
 }
 
@@ -71617,7 +71761,7 @@ TaskId ExecSpawn(Func0 work, Func0 done) {
     job.id = gNextTaskId++;
     job.work = work;
     job.done = done;
-    if (!gJobs.Append(job)) {
+    if (!VecAppend(gJobs, job)) {
         gPoolLock.Unlock();
         return 0;
     }
@@ -71710,7 +71854,7 @@ void ExecShutdown() {
 
     gPoolLock.Lock();
     gPoolStop = true;
-    gJobs.Reset();
+    VecReset(gJobs);
     gPoolLock.Unlock();
     gPoolWake.WakeAll();
 
@@ -71721,7 +71865,7 @@ void ExecShutdown() {
 
     gMainLock.Lock();
     gStopping = true;
-    gMainQueue.Reset();
+    VecReset(gMainQueue);
     gWake = Func0{};
     gMainThreadId = 0;
     gMainLock.Unlock();
@@ -71737,7 +71881,7 @@ void HttpRspFree(HttpRsp* r) {
     if (!r) {
         return;
     }
-    r->body.Reset();
+    VecReset(r->body);
     if (r->contentType.s) {
         StrFree(r->contentType);
         r->contentType = {};
@@ -72182,6 +72326,8 @@ bool ResourceProbeSample(ResourceProbe* probe, ResourceSample* out) {
     probe->prevAt = now;
     probe->primed = true;
     if (!primed || elapsed <= 0) {
+
+        (void)GpuAvailable();
         return false;
     }
 
@@ -72263,21 +72409,89 @@ static void UpdateAxis(FpsMonitor* self) {
                         : self->axisMax + (target - self->axisMax) * kAxisDecay;
 }
 
-static void UpdateResources(FpsMonitor* self) {
-    if (!self->showResources) {
-        return;
-    }
-    double now = TimeNow();
-    if (self->resourcesAt >= 0 &&
-        now - self->resourcesAt < (double)self->resourceInterval) {
-        return;
-    }
-    self->resourcesAt = now;
+struct FpsResourceJob {
+    App* app = nullptr;
+    EntityId monitor = {};
+    ResourceProbe probe;
     ResourceSample sample;
-    if (ResourceProbeSample(&self->probe, &sample)) {
-        self->resources = sample;
-        self->hasResources = true;
+    bool ok = false;
+};
+
+static void FpsResourceWork(FpsResourceJob* job) {
+    job->ok = ResourceProbeSample(&job->probe, &job->sample);
+}
+
+static void FpsResourceDone(FpsResourceJob* job) {
+    FpsMonitor* self =
+        job && job->app
+            ? (FpsMonitor*)EntityGet(job->app, job->monitor)
+            : nullptr;
+
+    if (!self || self->resourceJob != job) {
+        delete job;
+        return;
     }
+    self->resourceJob = nullptr;
+    self->resourceTask = 0;
+    self->probe = job->probe;
+    if (job->ok) {
+        self->resources = job->sample;
+        self->hasResources = true;
+        NotifyEntity(job->app, job->monitor, nullptr);
+    }
+    delete job;
+}
+
+void FpsMonitor::OnResourceTick(FpsMonitor* self, Ctx* cx,
+                                const TickEvent*) {
+    if (!self || !cx || self->resourceTask || self->resourceJob) {
+        return;
+    }
+    FpsResourceJob* job = new FpsResourceJob();
+    job->app = cx->app;
+    job->monitor = cx->self;
+    job->probe = self->probe;
+    int task = ExecSpawn(MkFunc0(FpsResourceWork, job),
+                         MkFunc0(FpsResourceDone, job));
+    if (!task) {
+        delete job;
+        return;
+    }
+    self->resourceJob = job;
+    self->resourceTask = task;
+}
+
+static void StartResourceSampling(FpsMonitor* self, Ctx* cx) {
+    if (!self->showResources || self->resourceTimer || !cx->win) {
+        return;
+    }
+    int ms = (int)(self->resourceInterval * 1000.f + 0.5f);
+
+    if (ms < 200) {
+        ms = 200;
+    }
+    self->resourceWindow = cx->win;
+    self->resourceTimer = WindowSetInterval(
+        cx->win, ms, Listen(cx, &FpsMonitor::OnResourceTick));
+    if (!self->resourceTimer) {
+        self->resourceWindow = nullptr;
+        return;
+    }
+
+    FpsMonitor::OnResourceTick(self, cx, nullptr);
+}
+
+FpsMonitor::~FpsMonitor() {
+    if (resourceWindow && resourceTimer) {
+        WindowCancelTimer(resourceWindow, resourceTimer);
+    }
+    if (resourceTask && ExecCancel(resourceTask)) {
+        delete resourceJob;
+    }
+    resourceWindow = nullptr;
+    resourceTimer = 0;
+    resourceTask = 0;
+    resourceJob = nullptr;
 }
 
 static bool SameRgba(Rgba a, Rgba b) {
@@ -72398,7 +72612,7 @@ El* FpsMonitor::Render(FpsMonitor* self, Ctx* cx) {
     FrameSamplerTick(&self->sampler, cx->win);
     UpdateReadout(self);
     UpdateAxis(self);
-    UpdateResources(self);
+    StartResourceSampling(self, cx);
 
     if (self->continuous && cx->win && !cx->win->anim) {
         AppRequestAnim(cx->win, true);
@@ -79051,7 +79265,7 @@ State DocumentContainerNewBefore(Tokenizer* t) {
     int32_t tail = t->tokenizeState.documentContainerStack.len;
     ContainerState fresh;
     fresh.kind = Container::BlockQuote;
-    t->tokenizeState.documentContainerStack.Append(fresh);
+    VecAppend(t->tokenizeState.documentContainerStack, fresh);
     ContainerState swap =
         t->tokenizeState
             .documentContainerStack[t->tokenizeState.documentContinued];
@@ -79112,7 +79326,7 @@ State DocumentContainerNewAfter(Tokenizer* t) {
     }
 
     t->tokenizeState.documentChild->pierce = true;
-    t->tokenizeState.documentContainerStack.Append(container);
+    VecAppend(t->tokenizeState.documentContainerStack, container);
     t->tokenizeState.documentContinued += 1;
     t->interrupt = false;
     return StateRetry(StateName::DocumentContainerNewBefore);
@@ -79162,7 +79376,7 @@ State DocumentFlowEnd(Tokenizer* t) {
     t->tokenizeState.documentChildStateSome = false;
 
     ArenaVec<Event> emptyExits {};
-    t->tokenizeState.documentExits.Append(emptyExits);
+    VecAppend(t->tokenizeState.documentExits, emptyExits);
 
     state = Push(child, child->point.index, child->point.vs, t->point.index,
                  t->point.vs, state);
@@ -79220,7 +79434,7 @@ static void ExitContainers(Tokenizer* t, Phase phase) {
     Vec<ContainerState> stackClose;
     for (int32_t i = t->tokenizeState.documentContinued;
          i < t->tokenizeState.documentContainerStack.len; i++) {
-        stackClose.Append(t->tokenizeState.documentContainerStack[i]);
+        VecAppend(stackClose, t->tokenizeState.documentContainerStack[i]);
     }
     t->tokenizeState.documentContainerStack.len =
         t->tokenizeState.documentContinued;
@@ -79325,17 +79539,18 @@ static void DocumentResolve(Tokenizer* t) {
             t->tokenizeState.documentExits[line] = ArenaVec<Event>{};
             for (Event& exit : exits) {
                 exit.point = t->point;
-                t->events.Append(exit);
+                VecAppend(t->events, exit);
             }
         }
     }
 
     for (int32_t i = 0; i < child->resolvers.len; i++) {
-        t->resolvers.Append(child->resolvers[i]);
+        VecAppend(t->resolvers, child->resolvers[i]);
     }
     child->resolvers.len = 0;
     for (int32_t i = 0; i < child->tokenizeState.definitions.len; i++) {
-        t->tokenizeState.definitions.Append(child->tokenizeState.definitions[i]);
+        VecAppend(t->tokenizeState.definitions, child->tokenizeState
+                                                    .definitions[i]);
     }
     child->tokenizeState.definitions.len = 0;
 }
@@ -80187,7 +80402,7 @@ bool ListItemResolve(Tokenizer* t, Subresult*) {
                         before == current.start) {
                         listsWip[listIndex].end = current.end;
                         for (int32_t i = listIndex + 1; i < listsWip.len; i++) {
-                            lists.Append(listsWip[i]);
+                            VecAppend(lists, listsWip[i]);
                         }
                         listsWip.len = listIndex + 1;
                         matched = true;
@@ -80208,11 +80423,11 @@ bool ListItemResolve(Tokenizer* t, Subresult*) {
                     }
                     if (exit != -1) {
                         for (int32_t j = exit; j < listsWip.len; j++) {
-                            lists.Append(listsWip[j]);
+                            VecAppend(lists, listsWip[j]);
                         }
                         listsWip.len = exit;
                     }
-                    listsWip.Append(current);
+                    VecAppend(listsWip, current);
                 }
 
                 balance += 1;
@@ -80224,7 +80439,7 @@ bool ListItemResolve(Tokenizer* t, Subresult*) {
     }
 
     for (int32_t i = 0; i < listsWip.len; i++) {
-        lists.Append(listsWip[i]);
+        VecAppend(lists, listsWip[i]);
     }
 
     for (int32_t i = 0; i < lists.len; i++) {
@@ -80359,8 +80574,8 @@ State DefinitionAfterWhitespace(Tokenizer* t) {
             PositionFromExitEvent(t->events, t->tokenizeState.end);
         Slice slice = SliceFromPosition(t->parseState->bytes, position);
 
-        t->tokenizeState.definitions.Append(
-            NormalizeIdentifier(t->parseState->scratch, slice.bytes));
+        VecAppend(t->tokenizeState.definitions,
+                  NormalizeIdentifier(t->parseState->scratch, slice.bytes));
         t->tokenizeState.end = 0;
 
         t->interrupt = true;
@@ -80554,7 +80769,7 @@ State GfmLabelStartFootnoteOpen(Tokenizer* t) {
         mark.kind = LabelKind::GfmFootnote;
         mark.startA = t->events.len - 6;
         mark.startB = t->events.len - 1;
-        t->tokenizeState.labelStarts.Append(mark);
+        VecAppend(t->tokenizeState.labelStarts, mark);
         RegisterResolverBefore(t, ResolveName::Label);
         return StateOk();
     }
@@ -80707,8 +80922,8 @@ State GfmFootnoteDefinitionLabelAfter(Tokenizer* t) {
         int32_t end = SkipToBack(t->events, t->events.len - 1, &labelString, 1);
         Position position = PositionFromExitEvent(t->events, end);
         Slice slice = SliceFromPosition(t->parseState->bytes, position);
-        t->tokenizeState.gfmFootnoteDefinitions.Append(
-            NormalizeIdentifier(t->parseState->scratch, slice.bytes));
+        VecAppend(t->tokenizeState.gfmFootnoteDefinitions,
+                  NormalizeIdentifier(t->parseState->scratch, slice.bytes));
         Enter(t, Name::DefinitionMarker);
         Consume(t);
         Exit(t, Name::DefinitionMarker);
@@ -82555,7 +82770,7 @@ State LabelEndOk(Tokenizer* t) {
     label.startB = labelStart.startB;
     label.endA = t->tokenizeState.end;
     label.endB = t->events.len - 1;
-    t->tokenizeState.labels.Append(label);
+    VecAppend(t->tokenizeState.labels, label);
     t->tokenizeState.end = 0;
     RegisterResolverBefore(t, ResolveName::Label);
     return StateOk();
@@ -82564,7 +82779,7 @@ State LabelEndOk(Tokenizer* t) {
 State LabelEndNok(Tokenizer* t) {
     LabelStartMark start =
         t->tokenizeState.labelStarts[--t->tokenizeState.labelStarts.len];
-    t->tokenizeState.labelStartsLoose.Append(start);
+    VecAppend(t->tokenizeState.labelStartsLoose, start);
     t->tokenizeState.end = 0;
     return StateNok();
 }
@@ -82798,21 +83013,21 @@ bool LabelEndResolve(Tokenizer* t, Subresult*) {
 
     Vec<Label> labels;
     for (int32_t i = 0; i < t->tokenizeState.labels.len; i++) {
-        labels.Append(t->tokenizeState.labels[i]);
+        VecAppend(labels, t->tokenizeState.labels[i]);
     }
     t->tokenizeState.labels.len = 0;
     InjectLabels(t, labels);
 
     Vec<LabelStartMark> starts;
     for (int32_t i = 0; i < t->tokenizeState.labelStarts.len; i++) {
-        starts.Append(t->tokenizeState.labelStarts[i]);
+        VecAppend(starts, t->tokenizeState.labelStarts[i]);
     }
     t->tokenizeState.labelStarts.len = 0;
     MarkAsData(t, starts);
 
     starts.len = 0;
     for (int32_t i = 0; i < t->tokenizeState.labelStartsLoose.len; i++) {
-        starts.Append(t->tokenizeState.labelStartsLoose[i]);
+        VecAppend(starts, t->tokenizeState.labelStartsLoose[i]);
     }
     t->tokenizeState.labelStartsLoose.len = 0;
     MarkAsData(t, starts);
@@ -84152,7 +84367,7 @@ State LabelStartImageAfter(Tokenizer* t) {
     start.kind = LabelKind::Image;
     start.startA = t->events.len - 6;
     start.startB = t->events.len - 1;
-    t->tokenizeState.labelStarts.Append(start);
+    VecAppend(t->tokenizeState.labelStarts, start);
     RegisterResolverBefore(t, ResolveName::Label);
     return StateOk();
 }
@@ -84170,7 +84385,7 @@ State LabelStartLinkStart(Tokenizer* t) {
         mark.kind = LabelKind::Link;
         mark.startA = start;
         mark.startB = t->events.len - 1;
-        t->tokenizeState.labelStarts.Append(mark);
+        VecAppend(t->tokenizeState.labelStarts, mark);
         RegisterResolverBefore(t, ResolveName::Label);
         return StateOk();
     }
@@ -84402,7 +84617,7 @@ static void GetSequences(Tokenizer* t, Vec<Sequence>& sequences) {
                                      ? (close && (after != CharKind::Other || !open))
                                      : close;
                 sequence.marker = marker;
-                sequences.Append(sequence);
+                VecAppend(sequences, sequence);
             }
         } else if (enter.kind == Kind::Enter) {
             stack.Append(a, index);
@@ -85037,7 +85252,7 @@ void DivideEvents(EditMap& map, const Vec<Event>& events, int32_t linkIndex,
         if (current.index > end.index ||
             (current.index == end.index && current.vs > end.vs)) {
             DivideSlice slice = {linkIndex, sliceStart};
-            slices.Append(slice);
+            VecAppend(slices, slice);
             sliceStart = childIndex;
             linkIndex = events[linkIndex].link.next;
         }
@@ -85067,7 +85282,7 @@ void DivideEvents(EditMap& map, const Vec<Event>& events, int32_t linkIndex,
 
     if (childEvents.len > 0) {
         DivideSlice slice = {linkIndex, sliceStart};
-        slices.Append(slice);
+        VecAppend(slices, slice);
     }
 
     int32_t index = slices.len;
@@ -85171,11 +85386,11 @@ Vec<Event> Parse(ParseState* parseState) {
 
     for (;;) {
         for (int32_t i = 0; i < result.gfmFootnoteDefinitions.len; i++) {
-            parseState->gfmFootnoteDefinitions.Append(
-                result.gfmFootnoteDefinitions[i]);
+            VecAppend(parseState->gfmFootnoteDefinitions,
+                      result.gfmFootnoteDefinitions[i]);
         }
         for (int32_t i = 0; i < result.definitions.len; i++) {
-            parseState->definitions.Append(result.definitions[i]);
+            VecAppend(parseState->definitions, result.definitions[i]);
         }
         result.gfmFootnoteDefinitions.len = 0;
         result.definitions.len = 0;
@@ -85934,7 +86149,7 @@ static Node* TailPenultimateMut(CompileContext* c) {
 static void Buffer(CompileContext* c) {
     TreeFrame frame;
     frame.tree = NodeNew(c->a, NodeKind::Paragraph);
-    c->trees.Append(frame);
+    VecAppend(c->trees, frame);
 }
 
 static Node* Resume(CompileContext* c) {
@@ -86006,7 +86221,7 @@ static void OnEnterListItem(CompileContext* c) {
 static void OnEnterMedia(CompileContext* c, NodeKind kind) {
     TailPush(c, NodeNew(c->a, kind));
     Reference reference;
-    c->mediaReferenceStack.Append(reference);
+    VecAppend(c->mediaReferenceStack, reference);
 }
 
 static void Enter(CompileContext* c) {
@@ -86632,7 +86847,7 @@ Node* ToMdastCompile(const Vec<Event>& events, ParseState* parseState) {
 
     TreeFrame frame;
     frame.tree = NodeNew(context.a, NodeKind::Root);
-    context.trees.Append(frame);
+    VecAppend(context.trees, frame);
 
     int32_t index = 0;
     while (index < events.len) {
@@ -86777,10 +86992,10 @@ bool IsVoidEvent(Name name) {
 
 void SubresultAppend(Subresult& dst, Subresult& src) {
     for (int32_t i = 0; i < src.gfmFootnoteDefinitions.len; i++) {
-        dst.gfmFootnoteDefinitions.Append(src.gfmFootnoteDefinitions[i]);
+        VecAppend(dst.gfmFootnoteDefinitions, src.gfmFootnoteDefinitions[i]);
     }
     for (int32_t i = 0; i < src.definitions.len; i++) {
-        dst.definitions.Append(src.definitions[i]);
+        VecAppend(dst.definitions, src.definitions[i]);
     }
     src.gfmFootnoteDefinitions.len = 0;
     src.definitions.len = 0;
@@ -86810,7 +87025,7 @@ void RegisterResolver(Tokenizer* t, ResolveName name) {
             return;
         }
     }
-    t->resolvers.Append(name);
+    VecAppend(t->resolvers, name);
 }
 
 void RegisterResolverBefore(Tokenizer* t, ResolveName name) {
@@ -86819,7 +87034,7 @@ void RegisterResolverBefore(Tokenizer* t, ResolveName name) {
             return;
         }
     }
-    t->resolvers.InsertAt(0, name);
+    VecInsertAt(t->resolvers, 0, name);
 }
 
 static void MoveOne(Tokenizer* t);
@@ -86854,7 +87069,7 @@ void DefineSkip(Tokenizer* t, Point point) {
     IndexVs info = {point.index, point.vs};
     int32_t at = point.line - t->firstLine;
     if (at >= t->columnStart.len) {
-        t->columnStart.Append(info);
+        VecAppend(t->columnStart, info);
     } else {
         t->columnStart[at] = info;
     }
@@ -86881,7 +87096,7 @@ static void MoveOne(Tokenizer* t) {
         t->point.column = 1;
         if (t->point.line - t->firstLine + 1 > t->columnStart.len) {
             IndexVs info = {t->point.index, t->point.vs};
-            t->columnStart.Append(info);
+            VecAppend(t->columnStart, info);
         }
         t->lineStart = t->point;
         AccountForPotentialSkip(t);
@@ -86905,14 +87120,14 @@ void Consume(Tokenizer* t) {
 static void EnterImpl(Tokenizer* t, Name name, bool hasLink, Link link) {
     Point point = t->point;
     MovePointBack(t, &point);
-    t->stack.Append(name);
+    VecAppend(t->stack, name);
     Event event;
     event.kind = Kind::Enter;
     event.name = name;
     event.point = point;
     event.hasLink = hasLink;
     event.link = link;
-    t->events.Append(event);
+    VecAppend(t->events, event);
 }
 
 void Enter(Tokenizer* t, Name name) {
@@ -86935,7 +87150,7 @@ void Exit(Tokenizer* t, Name name) {
     event.kind = Kind::Exit;
     event.name = name;
     event.point = point;
-    t->events.Append(event);
+    VecAppend(t->events, event);
 }
 
 static Progress Capture(Tokenizer* t) {
@@ -86963,7 +87178,7 @@ void TokenizerCheck(Tokenizer* t, State ok, State nok) {
     attempt.progress = Capture(t);
     attempt.ok = ok;
     attempt.nok = nok;
-    t->attempts.Append(attempt);
+    VecAppend(t->attempts, attempt);
 }
 
 void TokenizerAttempt(Tokenizer* t, State ok, State nok) {
@@ -86975,7 +87190,7 @@ void TokenizerAttempt(Tokenizer* t, State ok, State nok) {
     }
     attempt.ok = ok;
     attempt.nok = nok;
-    t->attempts.Append(attempt);
+    VecAppend(t->attempts, attempt);
 }
 
 static State PushImpl(Tokenizer* t, int32_t fromIndex, int32_t fromVs,
@@ -87035,11 +87250,11 @@ Subresult Flush(Tokenizer* t, State state, bool resolve) {
     Subresult value;
     value.done = false;
     for (int32_t i = 0; i < t->tokenizeState.gfmFootnoteDefinitions.len; i++) {
-        value.gfmFootnoteDefinitions.Append(
-            t->tokenizeState.gfmFootnoteDefinitions[i]);
+        VecAppend(value.gfmFootnoteDefinitions, t->tokenizeState
+                                                    .gfmFootnoteDefinitions[i]);
     }
     for (int32_t i = 0; i < t->tokenizeState.definitions.len; i++) {
-        value.definitions.Append(t->tokenizeState.definitions[i]);
+        VecAppend(value.definitions, t->tokenizeState.definitions[i]);
     }
     t->tokenizeState.gfmFootnoteDefinitions.len = 0;
     t->tokenizeState.definitions.len = 0;
@@ -87047,7 +87262,7 @@ Subresult Flush(Tokenizer* t, State state, bool resolve) {
     if (resolve) {
         Vec<ResolveName> resolvers;
         for (int32_t i = 0; i < t->resolvers.len; i++) {
-            resolvers.Append(t->resolvers[i]);
+            VecAppend(resolvers, t->resolvers[i]);
         }
         t->resolvers.len = 0;
         for (int32_t index = 0; index < resolvers.len; index++) {
@@ -87441,7 +87656,7 @@ static int32_t BucketFor(const Vec<int32_t>& buckets,
 }
 
 static void RehashBuckets(EditMap& map, int32_t wanted) {
-    map.buckets.Reset();
+    VecReset(map.buckets);
     VecReserve(map.buckets, wanted);
     map.buckets.len = wanted;
     memset((void*)map.buckets.els, 0, (size_t)wanted * sizeof(int32_t));
@@ -87480,7 +87695,7 @@ static void AddImpl(EditMap& map, int32_t at, int32_t remove, const Event* add,
     e.at = at;
     e.remove = remove;
     e.add.AppendMany(map.a, add, addLen);
-    map.map.Append(e);
+    VecAppend(map.map, e);
     map.buckets[bucket] = map.map.len;
 }
 
@@ -87543,7 +87758,7 @@ void EditMapConsume(EditMap& map, Vec<Event>& events) {
         removeAcc += map.map[index].remove;
         addAcc += map.map[index].add.len;
         Jump j = {map.map[index].at, removeAcc, addAcc};
-        jumps.Append(j);
+        VecAppend(jumps, j);
     }
 
     ShiftLinks(events, jumps);
@@ -87554,18 +87769,18 @@ void EditMapConsume(EditMap& map, Vec<Event>& events) {
     for (int32_t i = 0; i < map.map.len; i++) {
         const EditMap::Entry& e = map.map[i];
         for (int32_t j = index; j < e.at; j++) {
-            out.Append(events[j]);
+            VecAppend(out, events[j]);
         }
         for (const Event& ev : e.add) {
-            out.Append(ev);
+            VecAppend(out, ev);
         }
         index = e.at + e.remove;
     }
     for (int32_t j = index; j < events.len; j++) {
-        out.Append(events[j]);
+        VecAppend(out, events[j]);
     }
 
-    events.Reset();
+    VecReset(events);
     events.els = out.els;
     events.len = out.len;
     events.cap = out.cap;
@@ -87999,7 +88214,7 @@ AppAssets::AppAssets(Str value) : root(StrDup(value)) {}
 AppAssets::~AppAssets() {
     Uninstall();
     for (int i = 0; i < missing.len; i++) StrFree(missing[i]);
-    missing.Reset();
+    VecReset(missing);
     StrFree(root);
 }
 
@@ -88051,7 +88266,7 @@ static int CompareAssetNames(const void* a, const void* b) {
 
 bool AppAssets::Load(Str path, Vec<uint8_t>* out, Str* error) {
     if (!out) return false;
-    out->Reset();
+    VecReset(*out);
     Str relative;
     if (!Resolve(path, &relative, error)) return false;
     shell::FsResult result;
@@ -88068,7 +88283,7 @@ bool AppAssets::Load(Str path, Vec<uint8_t>* out, Str* error) {
                     missing[i - 1] = missing[i];
                 missing.len--;
             }
-            missing.Append(StrDup(path));
+            VecAppend(missing, StrDup(path));
             log(fmt("asset `%s` was not found under `%s`; asset paths resolve against the application directory", path, root));
         }
         if (error) *error = failure;
@@ -88085,7 +88300,7 @@ bool AppAssets::Load(Str path, Vec<uint8_t>* out, Str* error) {
         return false;
     }
     if (result.bytes.len > 0) {
-        uint8_t* bytes = out->AppendBlanks(result.bytes.len);
+        uint8_t* bytes = VecAppendBlanks(*out, result.bytes.len);
         if (!bytes) {
             if (error) *error = StrDup(StrL("asset allocation failed"));
             result.Free();
@@ -88111,7 +88326,7 @@ bool AppAssets::Exists(Str path) {
 bool AppAssets::List(Str path, Vec<Str>* out, Str* error) {
     if (!out) return false;
     for (int i = 0; i < out->len; i++) StrFree((*out)[i]);
-    out->Reset();
+    VecReset(*out);
     Str relative;
     if (!Resolve(path, &relative, error)) return false;
     shell::FsResult result;
@@ -88121,7 +88336,7 @@ bool AppAssets::List(Str path, Vec<Str>* out, Str* error) {
         return false;
     }
     for (int i = 0; i < result.entries.len; i++)
-        out->Append(StrDup(result.entries[i].name));
+        VecAppend(*out, StrDup(result.entries[i].name));
     if (out->len > 1)
         qsort(out->els, (size_t)out->len, sizeof(Str), CompareAssetNames);
     result.Free();
@@ -88138,12 +88353,12 @@ static void FreeStrings(Vec<Str>* values) {
     for (int i = 0; i < values->len; i++) {
         StrFree((*values)[i]);
     }
-    values->Reset();
+    VecReset(*values);
 }
 
 static void CopyStrings(Vec<Str>* into, const Vec<Str>& values) {
     for (int i = 0; i < values.len; i++) {
-        into->Append(StrDup(values[i]));
+        VecAppend(*into, StrDup(values[i]));
     }
 }
 
@@ -88190,7 +88405,7 @@ ExecuteGrant ExecuteGrant::Allowed(const Str* names, int count) {
     ExecuteGrant out;
     out.kind = ExecuteGrantKind::Allowed;
     for (int i = 0; names && i < count; i++)
-        out.commands.Append(StrDup(names[i]));
+        VecAppend(out.commands, StrDup(names[i]));
     return out;
 }
 
@@ -88262,17 +88477,17 @@ HttpRequestGrant& HttpRequestGrant::Port(uint16_t value) {
 }
 
 HttpRequestGrant& HttpRequestGrant::AddMethod(Str value) {
-    methods.Append(Upper(value));
+    VecAppend(methods, Upper(value));
     return *this;
 }
 
 HttpRequestGrant& HttpRequestGrant::AddPath(Str value) {
-    paths.Append(StrDup(value));
+    VecAppend(paths, StrDup(value));
     return *this;
 }
 
 HttpRequestGrant& HttpRequestGrant::AddPathPrefix(Str value) {
-    pathPrefixes.Append(StrDup(value));
+    VecAppend(pathPrefixes, StrDup(value));
     return *this;
 }
 
@@ -88374,7 +88589,7 @@ void Capabilities::Clear() {
     FreeStrings(&writeRoots);
     FreeStrings(&networkHosts);
     for (int i = 0; i < httpRequests.len; i++) delete httpRequests[i];
-    httpRequests.Reset();
+    VecReset(httpRequests);
     execute = ExecuteGrant::Denied();
 }
 
@@ -88384,7 +88599,7 @@ void Capabilities::CopyFrom(const Capabilities& other) {
     execute = other.execute;
     CopyStrings(&networkHosts, other.networkHosts);
     for (int i = 0; i < other.httpRequests.len; i++) {
-        httpRequests.Append(new HttpRequestGrant(*other.httpRequests[i]));
+        VecAppend(httpRequests, new HttpRequestGrant(*other.httpRequests[i]));
     }
     storage = other.storage;
     clipboardRead = other.clipboardRead;
@@ -88393,11 +88608,11 @@ void Capabilities::CopyFrom(const Capabilities& other) {
 }
 
 Capabilities& Capabilities::AddReadRoot(Str root) {
-    readRoots.Append(StrDup(root));
+    VecAppend(readRoots, StrDup(root));
     return *this;
 }
 Capabilities& Capabilities::AddWriteRoot(Str root) {
-    writeRoots.Append(StrDup(root));
+    VecAppend(writeRoots, StrDup(root));
     return *this;
 }
 Capabilities& Capabilities::SetExecute(const ExecuteGrant& grant) {
@@ -88405,11 +88620,11 @@ Capabilities& Capabilities::SetExecute(const ExecuteGrant& grant) {
     return *this;
 }
 Capabilities& Capabilities::AddNetworkHost(Str host) {
-    networkHosts.Append(Lower(host));
+    VecAppend(networkHosts, Lower(host));
     return *this;
 }
 Capabilities& Capabilities::AddHttpRequest(const HttpRequestGrant& grant) {
-    httpRequests.Append(new HttpRequestGrant(grant));
+    VecAppend(httpRequests, new HttpRequestGrant(grant));
     return *this;
 }
 Capabilities& Capabilities::Storage(bool allowed) {
@@ -88487,19 +88702,18 @@ static bool IsAbsolute(Str path) {
 static Str NormalizePath(Arena* arena, Str path, bool* escaped) {
     if (escaped) *escaped = false;
     StrBuilder out;
-    out.a = arena;
     int prefix = 0;
 #if GPUI_OS_WINDOWS
     if (path.len >= 2 && path.s[1] == ':') {
         char drive = path.s[0];
         if (drive >= 'a' && drive <= 'z') drive = (char)(drive - 'a' + 'A');
-        out.AppendChar(drive);
-        out.AppendChar(':');
+        StrBuilderAppendChar(arena, out, drive);
+        StrBuilderAppendChar(arena, out, ':');
         prefix = 2;
     }
 #endif
     if (prefix < path.len && IsSeparator(path.s[prefix])) {
-        out.AppendChar('/');
+        StrBuilderAppendChar(arena, out, '/');
         while (prefix < path.len && IsSeparator(path.s[prefix])) prefix++;
     }
     Vec<Str> parts;
@@ -88516,7 +88730,7 @@ static Str NormalizePath(Arena* arena, Str path, bool* escaped) {
                 parts.len--;
             }
         } else {
-            parts.Append(part);
+            VecAppend(parts, part);
         }
         at = end + 1;
     }
@@ -88524,10 +88738,10 @@ static Str NormalizePath(Arena* arena, Str path, bool* escaped) {
     for (int i = 0; i < parts.len; i++) {
         if (out.len > 0 && !(rootSlash && out.len == 1) &&
             out.els[out.len - 1] != '/')
-            out.AppendChar('/');
-        out.Append(parts[i]);
+            StrBuilderAppendChar(arena, out, '/');
+        StrBuilderAppend(arena, out, parts[i]);
     }
-    Str result = out.TakeStr();
+    Str result = StrBuilderTakeStr(arena, out);
     return result.len == 0 ? StrDup(arena, StrL(".")) : result;
 }
 
@@ -88632,8 +88846,8 @@ struct ScriptPanelManager {
                 registration->script.release(registration->script.data);
             delete registration;
         }
-        panels.Reset();
-        registrations.Reset();
+        VecReset(panels);
+        VecReset(registrations);
     }
 };
 
@@ -88643,7 +88857,7 @@ struct PanelNameTable {
     Vec<Str> names;
 
     ~PanelNameTable() {
-        names.Reset();
+        VecReset(names);
         ArenaDelete(arena);
     }
 };
@@ -88664,7 +88878,7 @@ static Str InternPanelName(Str name) {
         }
     }
     Str interned = StrDup(table.arena, name);
-    table.names.Append(interned);
+    VecAppend(table.names, interned);
     table.mutex.Unlock();
     return interned;
 }
@@ -88706,7 +88920,7 @@ static ScriptPanelData* NewPanelData(App* app,
     panel->registration = registration;
     panel->view = view;
     panel->focus = FocusHandleNew(app);
-    manager->panels.Append(panel);
+    VecAppend(manager->panels, panel);
     return panel;
 }
 
@@ -88779,7 +88993,7 @@ DockPanelDef ScriptPanelNew(App* app, Str name, Entity<ScriptView> view,
         delete registration;
         return {};
     }
-    manager->registrations.Append(registration);
+    VecAppend(manager->registrations, registration);
     return PanelDef(NewPanelData(app, registration, view));
 }
 
@@ -88823,7 +89037,7 @@ Str ShellRegisterPanel(App* app, Str application, Str panel,
     auto* registration = new ScriptPanelRegistration();
     registration->name = name;
     registration->script = script;
-    manager->registrations.Append(registration);
+    VecAppend(manager->registrations, registration);
     register_panel(app, name, BuildRegisteredPanel, registration);
     return name;
 }
@@ -89272,7 +89486,7 @@ void FsResult::Free() {
     StrFree(bytes);
     bytes = {};
     for (int i = 0; i < entries.len; i++) StrFree(entries[i].name);
-    entries.Reset();
+    VecReset(entries);
     exists = false;
 }
 
@@ -89307,7 +89521,7 @@ void HostValue::Free() {
             delete array[i];
         }
     }
-    array.Reset();
+    VecReset(array);
     for (int i = 0; i < object.len; i++) {
         StrFree(object[i].name);
         if (object[i].value) {
@@ -89315,7 +89529,7 @@ void HostValue::Free() {
             delete object[i].value;
         }
     }
-    object.Reset();
+    VecReset(object);
     kind = HostValueKind::Null;
     boolean = false;
     number = 0;
@@ -89336,7 +89550,7 @@ bool HostValue::CopyFrom(const HostValue& other) {
     }
     for (int i = 0; i < other.array.len; i++) {
         HostValue* value = other.array[i] ? CopyValue(*other.array[i]) : nullptr;
-        if (!value || !array.Append(value)) {
+        if (!value || !VecAppend(array, value)) {
             if (value) {
                 value->Free();
                 delete value;
@@ -89352,7 +89566,7 @@ bool HostValue::CopyFrom(const HostValue& other) {
                           ? CopyValue(*other.object[i].value)
                           : nullptr;
         if ((!field.name.s && other.object[i].name.len > 0) || !field.value ||
-            !object.Append(field)) {
+            !VecAppend(object, field)) {
             StrFree(field.name);
             if (field.value) {
                 field.value->Free();
@@ -89396,7 +89610,7 @@ bool HostValue::Append(const HostValue& value) {
         kind = HostValueKind::Array;
     }
     HostValue* copy = CopyValue(value);
-    if (!copy || !array.Append(copy)) {
+    if (!copy || !VecAppend(array, copy)) {
         if (copy) {
             copy->Free();
             delete copy;
@@ -89424,7 +89638,7 @@ bool HostValue::SetField(Str fieldName, const HostValue& value) {
     field.name = StrDup(fieldName);
     field.value = CopyValue(value);
     if ((!field.name.s && fieldName.len > 0) || !field.value ||
-        !object.Append(field)) {
+        !VecAppend(object, field)) {
         StrFree(field.name);
         if (field.value) {
             field.value->Free();
@@ -89472,7 +89686,7 @@ void HostArguments::Free() {
             delete values[i];
         }
     }
-    values.Reset();
+    VecReset(values);
 }
 
 const HostValue* HostArguments::Get(int index) const {
@@ -89555,7 +89769,7 @@ HostModule::~HostModule() {
         functions[i]->release.Call();
         delete functions[i];
     }
-    functions.Reset();
+    VecReset(functions);
 }
 
 HostModule* HostModule::New(Str name) { return new HostModule(name); }
@@ -89584,7 +89798,7 @@ HostModule* HostModule::SetFunction(Str function, bool async,
     if (!entry) {
         entry = new FunctionEntry();
         entry->name = StrDup(function);
-        if (!functions.Append(entry)) {
+        if (!VecAppend(functions, entry)) {
             StrFree(entry->name);
             delete entry;
             release.Call();
@@ -89720,7 +89934,7 @@ bool HostModule::Validate(HostError* error) const {
                     break;
                 stop++;
             }
-            declared.Append(Str(rest, (int)(stop - rest)));
+            VecAppend(declared, Str(rest, (int)(stop - rest)));
         }
         at = lineEnd < end ? lineEnd + 1 : end;
     }
@@ -89731,10 +89945,10 @@ bool HostModule::Validate(HostError* error) const {
         bool found = false;
         for (int j = 0; j < declared.len; j++)
             if (StrEq(functions[i]->name, declared[j])) found = true;
-        if (!found) missing.Append(functions[i]->name);
+        if (!found) VecAppend(missing, functions[i]->name);
     }
     for (int i = 0; i < declared.len; i++) {
-        if (!Has(declared[i])) extra.Append(declared[i]);
+        if (!Has(declared[i])) VecAppend(extra, declared[i]);
     }
     if (missing.len == 0 && extra.len == 0) return true;
     StrBuilder message;
@@ -89809,7 +90023,7 @@ void HostModulesRelease(HostModules* modules) {
     if (!modules || --modules->refs != 0) return;
     for (int i = 0; i < modules->modules.len; i++)
         modules->modules[i]->Release();
-    modules->modules.Reset();
+    VecReset(modules->modules);
     delete modules;
 }
 
@@ -89818,7 +90032,7 @@ HostModules* HostModulesClone(HostModules* source) {
     if (!source) return copy;
     for (int i = 0; i < source->modules.len; i++) {
         HostModule* module = source->modules[i]->Retain();
-        if (!copy->modules.Append(module)) {
+        if (!VecAppend(copy->modules, module)) {
             module->Release();
             HostModulesRelease(copy);
             return nullptr;
@@ -89858,7 +90072,7 @@ bool HostModulesInsert(HostModules* modules, HostModule* module) {
         modules->generation = NextHostGeneration();
         return true;
     }
-    if (!modules->modules.Append(module->Retain())) return false;
+    if (!VecAppend(modules->modules, module->Retain())) return false;
     for (int i = modules->modules.len - 1; i > 0; i--) {
         if (HostStrLess(modules->modules[i - 1]->Name(),
                         modules->modules[i]->Name()))
@@ -91808,12 +92022,11 @@ static void shell_plugin_SetError(ShellError* error, Str message) {
 
 static Str Join(Arena* arena, Str left, Str right) {
     StrBuilder path;
-    path.a = arena;
-    path.Append(left);
+    StrBuilderAppend(arena, path, left);
     if (left && left.s[left.len - 1] != '/' && left.s[left.len - 1] != '\\')
-        path.AppendChar(GPUI_OS_WINDOWS ? '\\' : '/');
-    path.Append(right);
-    return path.TakeStr();
+        StrBuilderAppendChar(arena, path, GPUI_OS_WINDOWS ? '\\' : '/');
+    StrBuilderAppend(arena, path, right);
+    return StrBuilderTakeStr(arena, path);
 }
 
 static bool ReadBoundedFile(Str path, int limit, Str* out) {
@@ -91834,7 +92047,7 @@ static bool ReadBoundedFile(Str path, int limit, Str* out) {
                 ok = false;
                 break;
             }
-            memcpy(bytes.AppendBlanks((int)read), block, read);
+            memcpy(VecAppendBlanks(bytes, (int)read), block, read);
         }
         if (read != sizeof(block)) {
             if (ferror(file)) ok = false;
@@ -91850,7 +92063,7 @@ static bool ReadBoundedFile(Str path, int limit, Str* out) {
         bytes.cap = 0;
         *out = Str(data, size);
     }
-    bytes.Reset();
+    VecReset(bytes);
     return ok;
 }
 
@@ -91992,7 +92205,7 @@ static bool ParseStringArray(Arena* arena, const JsonValue* value,
             shell_plugin_SetError(error, fmt("%s entries must be non-empty strings", field));
             return false;
         }
-        out->Append(StrDup(arena, item->str));
+        VecAppend(*out, StrDup(arena, item->str));
     }
     return true;
 }
@@ -92147,7 +92360,7 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
                     }
                 }
             }
-            out->http.Append(parsed);
+            VecAppend(out->http, parsed);
         }
     }
     const JsonValue* clipboard = JsonGet(value, "clipboard");
@@ -92185,16 +92398,16 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
 PluginManifest::PluginManifest() : arena(ArenaNew()) {}
 
 PluginManifest::~PluginManifest() {
-    readRoots.Reset();
-    writeRoots.Reset();
-    execute.Reset();
-    networkHosts.Reset();
+    VecReset(readRoots);
+    VecReset(writeRoots);
+    VecReset(execute);
+    VecReset(networkHosts);
     for (int i = 0; i < http.len; i++) {
-        http[i]->methods.Reset();
-        http[i]->paths.Reset();
-        http[i]->pathPrefixes.Reset();
+        VecReset(http[i]->methods);
+        VecReset(http[i]->paths);
+        VecReset(http[i]->pathPrefixes);
     }
-    http.Reset();
+    VecReset(http);
     ArenaDelete(arena);
 }
 
@@ -92485,15 +92698,15 @@ static void FreePlugin(Plugin* plugin, App* app) {
 PluginManager::~PluginManager() {
     for (int i = 0; i < loaded.len; i++)
         FreePlugin(loaded[i], loaded[i]->app);
-    loaded.Reset();
+    VecReset(loaded);
     ClearCatalog();
     for (int i = 0; i < directories.len; i++) StrFree(directories[i]);
-    directories.Reset();
+    VecReset(directories);
     StrFree(dataHome);
 }
 
 PluginManager& PluginManager::AddDirectory(Str directory) {
-    directories.Append(StrDup(directory));
+    VecAppend(directories, StrDup(directory));
     return *this;
 }
 
@@ -92509,7 +92722,7 @@ void PluginManager::ClearCatalog() {
         StrFree(catalog[i].root);
         StrFree(catalog[i].error);
     }
-    catalog.Reset();
+    VecReset(catalog);
 }
 
 static bool ManifestAt(Str root) {
@@ -92532,7 +92745,7 @@ const Vec<PluginDiscovery>& PluginManager::Discover() {
     Vec<Str> roots;
     for (int d = 0; d < directories.len; d++) {
         if (ManifestAt(directories[d])) {
-            roots.Append(StrDup(directories[d]));
+            VecAppend(roots, StrDup(directories[d]));
             continue;
         }
         if (directories[d].len >= kMaxPath) continue;
@@ -92546,7 +92759,7 @@ const Vec<PluginDiscovery>& PluginManager::Discover() {
             if (!entries[i].isDir || entries[i].isSymlink) continue;
             Arena* scratch = ArenaNew();
             Str root = Join(scratch, directories[d], Str(entries[i].name));
-            if (ManifestAt(root)) directoryRoots.Append(StrDup(root));
+            if (ManifestAt(root)) VecAppend(directoryRoots, StrDup(root));
             ArenaDelete(scratch);
         }
         free(entries);
@@ -92554,10 +92767,10 @@ const Vec<PluginDiscovery>& PluginManager::Discover() {
             qsort(directoryRoots.els, (size_t)directoryRoots.len, sizeof(Str),
                   ComparePaths);
         for (int i = 0; i < directoryRoots.len; i++) {
-            roots.Append(directoryRoots[i]);
+            VecAppend(roots, directoryRoots[i]);
             directoryRoots[i] = {};
         }
-        directoryRoots.Reset();
+        VecReset(directoryRoots);
     }
     for (int i = 0; i < roots.len; i++) {
         PluginDiscovery found;
@@ -92581,10 +92794,10 @@ const Vec<PluginDiscovery>& PluginManager::Discover() {
             }
             found.manifest = manifest;
         }
-        catalog.Append(found);
+        VecAppend(catalog, found);
         ShellErrorClear(&error);
     }
-    roots.Reset();
+    VecReset(roots);
     return catalog;
 }
 
@@ -92669,7 +92882,7 @@ bool PluginManager::Load(ShellRuntime* runtime, Str id,
     plugin->assets = new AppAssets(selected->root);
     plugin->assets->Install();
     plugin->app = app;
-    loaded.Append(plugin);
+    VecAppend(loaded, plugin);
     ArenaDelete(scratch);
     return true;
 }
@@ -92948,7 +93161,7 @@ EntityHandle RetainedStore::Push(RetainedEntry* entry) {
         return 0;
     }
     entry->id = nextId++;
-    entries.Append(entry);
+    VecAppend(entries, entry);
     return ((uint64_t)storeId << 32) | entry->id;
 }
 
@@ -93049,7 +93262,7 @@ bool RetainedStore::AddCallback(EntityHandle handle, RetainedEvent event,
             }
         }
     }
-    entry->callbacks.Append({event, callback});
+    VecAppend(entry->callbacks, {event, callback});
     return true;
 }
 
@@ -93058,10 +93271,10 @@ void RetainedStore::Destroy(RetainedEntry* entry,
     if (!entry) return;
     if (callbacks) {
         for (int i = 0; i < entry->callbacks.len; i++) {
-            callbacks->Append(entry->callbacks[i].callback);
+            VecAppend(*callbacks, entry->callbacks[i].callback);
         }
     }
-    entry->callbacks.Reset();
+    VecReset(entry->callbacks);
     if (entry->input) {
         if (entry->app && entry->input->blink.IsValid()) {
             EntityDrop(entry->app, entry->input->blink);
@@ -93127,7 +93340,7 @@ void RetainedStore::Rollback(uint32_t checkpoint,
 
 void RetainedStore::Clear(Vec<CallbackId>* callbacks) {
     for (int i = 0; i < entries.len; i++) Destroy(entries[i], callbacks);
-    entries.Reset();
+    VecReset(entries);
 }
 
 }
@@ -93629,7 +93842,7 @@ struct CallbackArena {
         entry->policy = PolicyRetain(policy);
         entry->application = application;
         entry->registeredIn = registeredIn;
-        entries.Append(entry);
+        VecAppend(entries, entry);
         return entry->id;
     }
 
@@ -93646,7 +93859,7 @@ struct CallbackArena {
         entry->application = application;
         entry->registeredIn = shell::ScopeCurrentGeneration();
         entry->committed = true;
-        entries.Append(entry);
+        VecAppend(entries, entry);
         return entry->id;
     }
 
@@ -93734,7 +93947,7 @@ struct CallbackArena {
             PolicyRelease(entry->policy);
             delete entry;
         }
-        entries.Reset();
+        VecReset(entries);
         building = false;
         buildingStart = 0;
     }
@@ -93869,7 +94082,7 @@ struct ProcessJob {
 
     void Free() {
         for (int i = 0; i < args.len; i++) StrFree(args[i]);
-        args.Reset();
+        VecReset(args);
         StrFree(command);
         output.Free();
         StrFree(error);
@@ -94061,7 +94274,7 @@ static uint32_t NewTask(ShellRuntimeImpl* impl, ShellTaskKind kind,
     task->application = (AppModule*)shell::ScopeCurrentApplication();
     task->app = app;
     task->window = window;
-    impl->tasks.Append(task);
+    VecAppend(impl->tasks, task);
     return task->id;
 }
 
@@ -94425,7 +94638,7 @@ static void WakeStorageWaiters(Vec<shell::StorageWaiter*>* ready,
         delete waiter;
         settle.Call(outcome);
     }
-    ready->Reset();
+    VecReset(*ready);
 }
 
 static void StorageWriteDone(StorageWriteJob* job) {
@@ -94502,16 +94715,15 @@ static int Interrupt(JSRuntime*, void* opaque) {
 static Str ExceptionText(Arena* arena, JSContext* ctx) {
     JSValue exception = JS_GetException(ctx);
     StrBuilder out;
-    out.a = arena;
     size_t messageLen = 0;
     const char* message = JS_ToCStringLen(ctx, &messageLen, exception);
     Str messageText;
     if (message) {
         messageText = StrDup(arena, Str(message, (int)messageLen));
-        out.Append(messageText);
+        StrBuilderAppend(arena, out, messageText);
         JS_FreeCString(ctx, message);
     } else {
-        out.Append(StrL("JavaScript exception"));
+        StrBuilderAppend(arena, out, StrL("JavaScript exception"));
     }
     if (JS_IsError(exception)) {
         JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
@@ -94521,11 +94733,13 @@ static Str ExceptionText(Arena* arena, JSContext* ctx) {
             if (text && stackLen > 0) {
                 Str stackText(text, (int)stackLen);
                 if (!messageText || !StrStartsWith(stackText, messageText)) {
-                    out.AppendChar('\n');
-                    out.Append(stackText);
+                    StrBuilderAppendChar(arena, out, '\n');
+                    StrBuilderAppend(arena, out, stackText);
                 } else if ((int)stackLen > (int)messageLen) {
-                    out.Append(Str(text + messageLen,
-                                   (int)stackLen - (int)messageLen));
+                    StrBuilderAppend(
+                        arena, out,
+                        Str(text + messageLen,
+                            (int)stackLen - (int)messageLen));
                 }
                 JS_FreeCString(ctx, text);
             }
@@ -94533,7 +94747,7 @@ static Str ExceptionText(Arena* arena, JSContext* ctx) {
         JS_FreeValue(ctx, stack);
     }
     JS_FreeValue(ctx, exception);
-    return out.TakeStr();
+    return StrBuilderTakeStr(arena, out);
 }
 
 static bool CaptureException(ShellRuntimeImpl* impl, ShellError* error) {
@@ -95601,7 +95815,7 @@ static JSValue NativeViewNew(JSContext* ctx, JSValueConst, int argc,
     nested.policy = PolicyRetain(policy);
     nested.application = type->application;
     nested.app = app;
-    impl->nestedViews.Append(nested);
+    VecAppend(impl->nestedViews, nested);
     ViewTypeRelease(type);
     return JS_NewUint32(ctx, token);
 }
@@ -95690,7 +95904,7 @@ static JSValue NativeViewSetProps(JSContext* ctx, JSValueConst, int argc,
         for (int i = 0; i < retired.len; i++) {
             impl->callbacks.RetireId(ctx, retired[i]);
         }
-        retired.Reset();
+        VecReset(retired);
         RollbackNestedViews(impl, nestedCheckpoint);
         JS_FreeValue(ctx, restore);
         if (restoreError.IsSet()) {
@@ -96588,7 +96802,7 @@ static JSValue NativeRetainedRelease(JSContext* ctx, JSValueConst, int argc,
     for (int i = 0; impl && i < callbacks.len; i++) {
         impl->callbacks.RetireId(ctx, callbacks[i]);
     }
-    callbacks.Reset();
+    VecReset(callbacks);
     return JS_NewBool(ctx, released);
 }
 
@@ -97765,7 +97979,7 @@ static bool HostFromJs(JSContext* ctx, JSValueConst value, int depth,
             HostValue* converted = new HostValue();
             bool ok = !JS_IsException(item) &&
                       HostFromJs(ctx, item, depth + 1, converted) &&
-                      out->array.Append(converted);
+                      VecAppend(out->array, converted);
             JS_FreeValue(ctx, item);
             if (!ok) {
                 converted->Free();
@@ -97805,7 +98019,7 @@ static bool HostFromJs(JSContext* ctx, JSValueConst value, int depth,
             field.value = new HostValue();
             ok = name && !JS_IsException(item) && field.name.s &&
                  HostFromJs(ctx, item, depth + 1, field.value) &&
-                 out->object.Append(field);
+                 VecAppend(out->object, field);
             if (name) JS_FreeCString(ctx, name);
             JS_FreeValue(ctx, item);
             if (!ok) {
@@ -97844,7 +98058,7 @@ static bool HostArgumentsFromJs(JSContext* ctx, JSValueConst array,
         JSValue item = JS_GetPropertyUint32(ctx, array, (uint32_t)i);
         HostValue* value = new HostValue();
         bool ok = !JS_IsException(item) && HostFromJs(ctx, item, 0, value) &&
-                  arguments->values.Append(value);
+                  VecAppend(arguments->values, value);
         JS_FreeValue(ctx, item);
         if (!ok) {
             value->Free();
@@ -98459,7 +98673,7 @@ static JSValue NativeProcessRun(JSContext* ctx, JSValueConst, int argc,
             break;
         }
         Str copy = StrDup(argument);
-        if (!copy.s || !job->args.Append(copy)) {
+        if (!copy.s || !VecAppend(job->args, copy)) {
             StrFree(copy);
             JS_ThrowOutOfMemory(ctx);
             ok = false;
@@ -98580,7 +98794,7 @@ static JSValue NativeRandom(JSContext* ctx, JSValueConst, int argc,
     }
     int count = (int)requested;
     Vec<uint8_t> bytes;
-    if ((count > 0 && !bytes.AppendBlanks(count)) ||
+    if ((count > 0 && !VecAppendBlanks(bytes, count)) ||
         !shell::SecureRandom(bytes.els, count)) {
         return JS_ThrowInternalError(ctx, "the platform secure random generator failed");
     }
@@ -99704,7 +99918,7 @@ ShellRuntime::~ShellRuntime() {
             for (int i = impl->tasks.len - 1; i >= 0; i--) {
                 DestroyTask(impl, impl->tasks[i], true);
             }
-            impl->tasks.Reset();
+            VecReset(impl->tasks);
             if (impl->taskDriver.IsValid() && impl->taskApp) {
                 ShellTaskDriver* driver = impl->taskDriver.Get(impl->taskApp);
                 if (driver) driver->runtime = nullptr;
@@ -99716,7 +99930,7 @@ ShellRuntime::~ShellRuntime() {
             for (int i = 0; i < retired.len; i++) {
                 impl->callbacks.RetireId(impl->context, retired[i]);
             }
-            retired.Reset();
+            VecReset(retired);
             impl->callbacks.Clear(impl->context);
         }
         delete impl->scratch;
@@ -99724,9 +99938,9 @@ ShellRuntime::~ShellRuntime() {
             StrFree(impl->modules[i]->root);
             delete impl->modules[i];
         }
-        impl->modules.Reset();
-        impl->views.Reset();
-        impl->nestedViews.Reset();
+        VecReset(impl->modules);
+        VecReset(impl->views);
+        VecReset(impl->nestedViews);
         if (impl->context) {
             JS_SetContextOpaque(impl->context, nullptr);
             JS_FreeContext(impl->context);
@@ -99877,7 +100091,7 @@ ViewType* ShellRuntime::LoadApp(Str directory, Str entry, Policy* policy,
     if (application->generation == 0) {
         application->generation = impl->nextModuleGeneration++;
     }
-    impl->modules.Append(application);
+    VecAppend(impl->modules, application);
 
     Str source = {};
     if (!ReadFileBounded(Str(canonical), &source, error)) return nullptr;
@@ -99918,7 +100132,7 @@ static ViewObject* InstantiateObject(ShellRuntime* runtime, ViewType* type,
         for (int i = 0; i < retired.len; i++) {
             impl->callbacks.RetireId(impl->context, retired[i]);
         }
-        retired.Reset();
+        VecReset(retired);
         while (impl->tasks.len > taskCheckpoint) {
             ForgetTask(impl, impl->tasks[impl->tasks.len - 1]->id);
         }
@@ -99947,7 +100161,7 @@ static ViewObject* InstantiateObject(ShellRuntime* runtime, ViewType* type,
         for (int i = 0; i < retired.len; i++) {
             impl->callbacks.RetireId(impl->context, retired[i]);
         }
-        retired.Reset();
+        VecReset(retired);
         while (impl->tasks.len > taskCheckpoint) {
             ForgetTask(impl, impl->tasks[impl->tasks.len - 1]->id);
         }
@@ -100117,7 +100331,7 @@ void ShellRuntime::RegisterScriptView(EntityId view, bool* dirty) {
     for (int i = 0; i < impl->views.len; i++) {
         if (impl->views[i].view == view && impl->views[i].dirty == dirty) return;
     }
-    impl->views.Append({view, dirty});
+    VecAppend(impl->views, {view, dirty});
 }
 
 void ShellRuntime::UnregisterScriptView(EntityId view, bool* dirty) {
@@ -100161,7 +100375,7 @@ void ShellRuntime::ReleaseOwnedEntities(EntityId view) {
     for (int i = 0; i < callbacks.len; i++) {
         impl->callbacks.RetireId(impl->context, callbacks[i]);
     }
-    callbacks.Reset();
+    VecReset(callbacks);
 }
 
 void ShellRuntime::ReleaseApplicationState(ViewObject* object) {
@@ -100188,7 +100402,7 @@ void ShellRuntime::ReleaseApplicationState(ViewObject* object) {
     for (int i = 0; i < callbacks.len; i++) {
         impl->callbacks.RetireId(impl->context, callbacks[i]);
     }
-    callbacks.Reset();
+    VecReset(callbacks);
     impl->callbacks.RetireApplication(impl->context, application);
 }
 
@@ -100387,7 +100601,7 @@ static void RetainedCallbackIds(const shell::RetainedEntry* entry,
     if (!entry) return;
     for (int i = 0; i < entry->callbacks.len; i++) {
         if (entry->callbacks[i].event == event) {
-            out->Append(entry->callbacks[i].callback);
+            VecAppend(*out, entry->callbacks[i].callback);
         }
     }
 }
@@ -100422,7 +100636,7 @@ void ShellRuntime::DispatchInputEvent(shell::EntityHandle handle,
         }
         Dispatch(this, callbacks[i], payload, window, app);
     }
-    callbacks.Reset();
+    VecReset(callbacks);
 }
 
 void ShellRuntime::DispatchSliderEvent(shell::EntityHandle handle,
@@ -100440,7 +100654,7 @@ void ShellRuntime::DispatchSliderEvent(shell::EntityHandle handle,
                               : JS_NewFloat64(impl->context, event.value.hi);
         Dispatch(this, callbacks[i], payload, window, app);
     }
-    callbacks.Reset();
+    VecReset(callbacks);
 }
 
 void ShellRuntime::DispatchOtpEvent(shell::EntityHandle handle,
@@ -100459,7 +100673,7 @@ void ShellRuntime::DispatchOtpEvent(shell::EntityHandle handle,
     for (int i = 0; i < callbacks.len; i++) {
         Dispatch(this, callbacks[i], JS_NewObject(impl->context), window, app);
     }
-    callbacks.Reset();
+    VecReset(callbacks);
 }
 
 void ShellRuntime::RenderVirtualItems(shell::CallbackId renderId,
@@ -100520,7 +100734,7 @@ void ShellRuntime::RenderVirtualItems(shell::CallbackId renderId,
                 succeeded = !JS_IsException(item) &&
                             ElementId(impl->context, item, &root);
                 JS_FreeValue(impl->context, item);
-                if (succeeded) roots.Append(root);
+                if (succeeded) VecAppend(roots, root);
             }
         }
         JS_FreeValue(impl->context, produced);
@@ -100544,11 +100758,11 @@ void ShellRuntime::RenderVirtualItems(shell::CallbackId renderId,
                 }
             }
             if (succeeded) {
-                seen.Append(text);
-                itemKeys.Append(StrDup(cx->a, text));
+                VecAppend(seen, text);
+                VecAppend(itemKeys, StrDup(cx->a, text));
             }
         }
-        seen.Reset();
+        VecReset(seen);
         ArenaDelete(keys);
     }
     impl->scratch = outer;
@@ -100582,8 +100796,8 @@ void ShellRuntime::RenderVirtualItems(shell::CallbackId renderId,
             }
         }
     }
-    itemKeys.Reset();
-    roots.Reset();
+    VecReset(itemKeys);
+    VecReset(roots);
     delete batch;
     double elapsed = TimeNow() - started;
     shell::MetricsAdd(&impl->metrics, shell::MetricsTimerKind::VirtualItems,
@@ -100712,7 +100926,7 @@ CallScopeGuard ScopeEnter(Window* window, App* app, ScopePhase phase,
     if (generation == 0) generation = gNextGeneration++;
     ScopeFrame frame = {window, app,        phase,   generation, 0,
                         view,   heldPolicy, runtime, application};
-    gScopeStack.Append(frame);
+    VecAppend(gScopeStack, frame);
     return CallScopeGuard(generation);
 }
 
@@ -101027,10 +101241,10 @@ SpecArena::~SpecArena() {
 }
 
 void SpecArena::Reset() {
-    nodes.Clear();
-    parented.Clear();
-    claimed.Clear();
-    mountedViews.Clear();
+    VecClear(nodes);
+    VecClear(parented);
+    VecClear(claimed);
+    VecClear(mountedViews);
     virtualItems = 0;
     arena->Reset();
 }
@@ -101076,9 +101290,9 @@ SpecOp SpecArena::CopyOp(const SpecOp& source) {
 SpecId SpecArena::Push(const Component& component) {
     SpecNode* node = ArenaNew<SpecNode>(arena);
     node->component = CopyComponent(component);
-    nodes.Append(node);
-    parented.Append(0);
-    claimed.Append(0);
+    VecAppend(nodes, node);
+    VecAppend(parented, 0);
+    VecAppend(claimed, 0);
     return (SpecId)(nodes.len - 1);
 }
 
@@ -101094,7 +101308,7 @@ bool SpecArena::PushChildView(const Component& component, SpecId* out,
             return false;
         }
     }
-    mountedViews.Append(component.handle);
+    VecAppend(mountedViews, component.handle);
     SpecId id = Push(component);
     if (out) *out = id;
     return true;
@@ -101154,44 +101368,47 @@ bool SpecArena::ClaimVirtualItems(uint64_t count, uint64_t limit) {
     return true;
 }
 
-static void Indent(StrBuilder* out, int depth) {
-    for (int i = 0; i < depth; i++) out->Append(StrL("  "));
+static void Indent(Arena* a, StrBuilder* out, int depth) {
+    for (int i = 0; i < depth; i++)
+        StrBuilderAppend(a, *out, StrL("  "));
 }
 
-static void AppendBridged(StrBuilder* out, const Bridged& value) {
+static void AppendBridged(Arena* a, StrBuilder* out, const Bridged& value) {
     switch (value.kind) {
         case BridgedKind::Nil:
-            out->Append(StrL("nil"));
+            StrBuilderAppend(a, *out, StrL("nil"));
             break;
         case BridgedKind::Bool:
-            out->Append(value.boolean ? StrL("true") : StrL("false"));
+            StrBuilderAppend(a, *out,
+                             value.boolean ? StrL("true") : StrL("false"));
             break;
         case BridgedKind::Number:
-            out->Append(fmt("%g", value.number));
+            StrBuilderAppend(a, *out, fmt("%g", value.number));
             break;
         case BridgedKind::String:
-            out->AppendChar('"');
-            out->Append(value.string);
-            out->AppendChar('"');
+            StrBuilderAppendChar(a, *out, '"');
+            StrBuilderAppend(a, *out, value.string);
+            StrBuilderAppendChar(a, *out, '"');
             break;
     }
 }
 
-static void AppendArgs(StrBuilder* out, const SpecOp& op) {
-    out->AppendChar('(');
+static void AppendArgs(Arena* a, StrBuilder* out, const SpecOp& op) {
+    StrBuilderAppendChar(a, *out, '(');
     for (int i = 0; i < op.argCount; i++) {
-        if (i) out->Append(StrL(", "));
-        AppendBridged(out, op.args[i]);
+        if (i) StrBuilderAppend(a, *out, StrL(", "));
+        AppendBridged(a, out, op.args[i]);
     }
-    out->AppendChar(')');
+    StrBuilderAppendChar(a, *out, ')');
 }
 
-void SpecArena::WriteTree(StrBuilder* out, SpecId id, int depth) const {
+void SpecArena::WriteTree(Arena* a, StrBuilder* out, SpecId id,
+                          int depth) const {
     const SpecNode* node = Node(id);
     if (!node) return;
     const Component& component = node->component;
-    Indent(out, depth);
-    out->Append(Str(ComponentName(component)));
+    Indent(a, out, depth);
+    StrBuilderAppend(a, *out, Str(ComponentName(component)));
     switch (component.kind) {
         case ComponentKind::Text:
         case ComponentKind::Button:
@@ -101219,18 +101436,22 @@ void SpecArena::WriteTree(StrBuilder* out, SpecId id, int depth) const {
         case ComponentKind::Combobox:
         case ComponentKind::HResizable:
         case ComponentKind::VResizable:
-            out->Append(StrL(" \""));
-            out->Append(component.text);
-            out->AppendChar('"');
+            StrBuilderAppend(a, *out, StrL(" \""));
+            StrBuilderAppend(a, *out, component.text);
+            StrBuilderAppendChar(a, *out, '"');
             break;
         case ComponentKind::TableRow:
         case ComponentKind::TableHead:
         case ComponentKind::TableCell:
-            out->Append(fmt(" \"%s\" #%u", component.text, component.index));
+            StrBuilderAppend(
+                a, *out,
+                fmt(" \"%s\" #%u", component.text, component.index));
             break;
         case ComponentKind::DatePicker:
-            out->Append(fmt(" \"%s\" #%llu", component.text,
-                            (unsigned long long)component.handle));
+            StrBuilderAppend(
+                a, *out,
+                fmt(" \"%s\" #%llu", component.text,
+                    (unsigned long long)component.handle));
             break;
         case ComponentKind::ChildView:
         case ComponentKind::Input:
@@ -101241,13 +101462,17 @@ void SpecArena::WriteTree(StrBuilder* out, SpecId id, int depth) const {
         case ComponentKind::SliderTrack:
         case ComponentKind::SliderIndicator:
         case ComponentKind::SliderThumb:
-            out->Append(fmt(" #%llu", (unsigned long long)component.handle));
+            StrBuilderAppend(
+                a, *out,
+                fmt(" #%llu", (unsigned long long)component.handle));
             break;
         case ComponentKind::VVirtualList:
         case ComponentKind::HVirtualList:
             if (component.virtualList) {
-                out->Append(fmt(" \"%s\" ×%d", component.virtualList->id,
-                                component.virtualList->sizeCount));
+                StrBuilderAppend(
+                    a, *out,
+                    fmt(" \"%s\" ×%d", component.virtualList->id,
+                        component.virtualList->sizeCount));
             }
             break;
         default:
@@ -101256,59 +101481,59 @@ void SpecArena::WriteTree(StrBuilder* out, SpecId id, int depth) const {
 
     for (const SpecOp& op : node->ops) {
         if (op.kind == SpecOpKind::NullaryStyle) {
-            out->Append(StrL(" ."));
-            out->Append(op.name);
+            StrBuilderAppend(a, *out, StrL(" ."));
+            StrBuilderAppend(a, *out, op.name);
         } else if (op.kind == SpecOpKind::ParamStyle) {
-            out->Append(StrL(" ."));
-            out->Append(op.name);
-            AppendArgs(out, op);
+            StrBuilderAppend(a, *out, StrL(" ."));
+            StrBuilderAppend(a, *out, op.name);
+            AppendArgs(a, out, op);
         } else if (op.kind == SpecOpKind::Method) {
-            out->Append(StrL(" :"));
-            out->Append(op.name);
-            AppendArgs(out, op);
+            StrBuilderAppend(a, *out, StrL(" :"));
+            StrBuilderAppend(a, *out, op.name);
+            AppendArgs(a, out, op);
         } else if (op.kind == SpecOpKind::Callback) {
-            out->Append(StrL(" :"));
-            out->Append(op.name);
-            out->Append(StrL("(fn)"));
+            StrBuilderAppend(a, *out, StrL(" :"));
+            StrBuilderAppend(a, *out, op.name);
+            StrBuilderAppend(a, *out, StrL("(fn)"));
         } else if (op.kind == SpecOpKind::StateStyle) {
-            out->Append(StrL(" :"));
-            out->Append(op.name);
-            out->AppendChar('(');
+            StrBuilderAppend(a, *out, StrL(" :"));
+            StrBuilderAppend(a, *out, op.name);
+            StrBuilderAppendChar(a, *out, '(');
             const SpecNode* state = Node(op.node);
             if (state) {
                 for (const SpecOp& stateOp : state->ops) {
                     if (stateOp.kind == SpecOpKind::NullaryStyle ||
                         stateOp.kind == SpecOpKind::ParamStyle) {
-                        out->Append(StrL("."));
-                        out->Append(stateOp.name);
+                        StrBuilderAppend(a, *out, StrL("."));
+                        StrBuilderAppend(a, *out, stateOp.name);
                         if (stateOp.kind == SpecOpKind::ParamStyle)
-                            AppendArgs(out, stateOp);
+                            AppendArgs(a, out, stateOp);
                     }
                 }
             } else {
-                out->AppendChar('?');
+                StrBuilderAppendChar(a, *out, '?');
             }
-            out->AppendChar(')');
+            StrBuilderAppendChar(a, *out, ')');
         }
     }
-    out->AppendChar('\n');
+    StrBuilderAppendChar(a, *out, '\n');
 
     for (const SpecOp& op : node->ops) {
         if (op.kind != SpecOpKind::Slot) continue;
-        Indent(out, depth + 1);
-        out->AppendChar('@');
-        out->Append(op.name);
-        out->AppendChar('\n');
-        WriteTree(out, op.node, depth + 2);
+        Indent(a, out, depth + 1);
+        StrBuilderAppendChar(a, *out, '@');
+        StrBuilderAppend(a, *out, op.name);
+        StrBuilderAppendChar(a, *out, '\n');
+        WriteTree(a, out, op.node, depth + 2);
     }
-    for (SpecId child : node->children) WriteTree(out, child, depth + 1);
+    for (SpecId child : node->children)
+        WriteTree(a, out, child, depth + 1);
 }
 
 Str SpecArena::DebugTree(Arena* into, SpecId root) const {
     StrBuilder out;
-    out.a = into;
-    WriteTree(&out, root, 0);
-    return out.TakeStr();
+    WriteTree(into, &out, root, 0);
+    return StrBuilderTakeStr(into, out);
 }
 
 }
@@ -101639,7 +101864,7 @@ static bool DynamicTables(BitReader* reader, Huffman* literals,
 }
 
 static bool AppendOutput(Vec<uint8_t>* output, uint8_t value) {
-    return output->len < kStandardDataLimit && output->Append(value);
+    return output->len < kStandardDataLimit && VecAppend(*output, value);
 }
 
 static bool InflateCodes(BitReader* reader, const Huffman& literals,
@@ -101678,7 +101903,7 @@ static bool InflateCodes(BitReader* reader, const Huffman& literals,
             length > kStandardDataLimit - output->len) return false;
         for (int i = 0; i < length; i++) {
             uint8_t byte = (*output)[output->len - distance];
-            if (!output->Append(byte)) return false;
+            if (!VecAppend(*output, byte)) return false;
         }
     }
 }
@@ -101703,7 +101928,8 @@ static bool InflateRaw(const uint8_t* bytes, int length, Vec<uint8_t>* output,
                 count > reader.length - reader.offset ||
                 count > kStandardDataLimit - output->len) return false;
             for (int i = 0; i < count; i++) {
-                if (!output->Append(reader.bytes[reader.offset + i])) return false;
+                if (!VecAppend(*output, reader.bytes[reader.offset + i]))
+                    return false;
             }
             reader.offset += count;
         } else if (type == 1 || type == 2) {
@@ -101841,7 +102067,7 @@ Storage::Storage(bool writes) : persisted(writes) {}
 Storage::~Storage() {
     ResetEntries();
     for (int i = 0; i < waiters.len; i++) delete waiters[i];
-    waiters.Reset();
+    VecReset(waiters);
     StrFree(path);
 }
 
@@ -101851,7 +102077,7 @@ void Storage::ResetEntries() {
         StrFree(entries[i]->value);
         delete entries[i];
     }
-    entries.Reset();
+    VecReset(entries);
 }
 
 bool Storage::SetPath(Str value, Str* error) {
@@ -101925,7 +102151,7 @@ bool Storage::Load(Str* error) {
         entry->key = StrDup(item->key);
         entry->value = StrDup(item->str);
         if ((!entry->key.s && item->key.len) ||
-            (!entry->value.s && item->str.len) || !entries.Append(entry)) {
+            (!entry->value.s && item->str.len) || !VecAppend(entries, entry)) {
             StrFree(entry->key);
             StrFree(entry->value);
             delete entry;
@@ -102025,7 +102251,7 @@ bool Storage::Set(Str key, Str value, Str* error) {
     StorageEntry* entry = new StorageEntry();
     entry->key = StrDup(key);
     entry->value = copy;
-    if ((!entry->key.s && key.len != 0) || !entries.Append(entry)) {
+    if ((!entry->key.s && key.len != 0) || !VecAppend(entries, entry)) {
         StrFree(entry->key);
         StrFree(entry->value);
         delete entry;
@@ -102112,8 +102338,7 @@ void Storage::ReadyThrough(uint64_t through,
     int keep = 0;
     for (int i = 0; i < waiters.len; i++) {
         StorageWaiter* waiter = waiters[i];
-        if (waiter->revision <= through && ready &&
-            ready->Append(waiter)) {
+        if (waiter->revision <= through && ready && VecAppend(*ready, waiter)) {
             continue;
         } else if (waiter->revision <= through && !ready) {
             delete waiter;
@@ -102159,7 +102384,7 @@ bool Storage::Wait(Func1<StorageOutcome> settle, StorageWaiter** waiter,
     StorageWaiter* pending = new StorageWaiter();
     pending->revision = revision;
     pending->settle = settle;
-    if (!waiters.Append(pending)) {
+    if (!VecAppend(waiters, pending)) {
         delete pending;
         StorageError(error, StrL("allocating a localStorage flush waiter failed"));
         return false;
@@ -123594,7 +123819,7 @@ static bool ReadBounded(Str path, int limit, Str* out) {
     for (;;) {
         size_t count = fread(block, 1, sizeof(block), file);
         if (count > 0) {
-            char* destination = bytes.AppendBlanks((int)count);
+            char* destination = VecAppendBlanks(bytes, (int)count);
             if (bytes.len > limit || !destination) {
                 ok = false;
                 break;
@@ -123608,7 +123833,7 @@ static bool ReadBounded(Str path, int limit, Str* out) {
     }
     fclose(file);
     if (!ok) {
-        bytes.Reset();
+        VecReset(bytes);
         return false;
     }
     int len = bytes.len;
@@ -123651,7 +123876,7 @@ static bool AppendDirectory(Vec<TypesDirectory>* directories, Str path,
     memcpy(directory.path, path.s, (size_t)path.len);
     directory.path[path.len] = 0;
     directory.depth = depth;
-    return directories->Append(directory);
+    return VecAppend(*directories, directory);
 }
 
 static void AppendQuoted(StrBuilder* out, Str value) {
@@ -123815,7 +124040,8 @@ bool ShellWriteTypeDeclarations(Str root, const HostModules* modules,
 
     Vec<TypesDirectory> pending;
     Vec<TypesDirectory> targets;
-    bool ok = pending.Append(rootDirectory) && targets.Append(rootDirectory);
+    bool ok =
+        VecAppend(pending, rootDirectory) && VecAppend(targets, rootDirectory);
     DirEntry* entries = ok ? AllocArray<DirEntry>(kTypesMaxEntries) : nullptr;
     if (!entries) ok = false;
     int files = 0;
@@ -123868,8 +124094,8 @@ bool ShellWriteTypeDeclarations(Str root, const HostModules* modules,
         ShellErrorSet(error,
                       StrL("out of memory while writing type declarations"));
     Free(nullptr, entries);
-    targets.Reset();
-    pending.Reset();
+    VecReset(targets);
+    VecReset(pending);
     StrFree(text);
     return ok;
 }
@@ -124346,7 +124572,7 @@ bool ScanSourceTree(Str directory, SourceTreeStamp* stamp, ShellError* error,
     PendingDirectory root;
     memcpy(root.path, directory.s, (size_t)directory.len);
     root.path[directory.len] = 0;
-    if (!pending.Append(root)) {
+    if (!VecAppend(pending, root)) {
         ShellErrorSet(error, StrL("out of memory while scanning source tree"));
         return false;
     }
@@ -124391,7 +124617,7 @@ bool ScanSourceTree(Str directory, SourceTreeStamp* stamp, ShellError* error,
                 int n = snprintf(child.path, sizeof(child.path), "%s/%s",
                                  dir.path, item.name);
                 if (n <= 0 || n >= (int)sizeof(child.path) ||
-                    !pending.Append(child)) {
+                    !VecAppend(pending, child)) {
                     ShellErrorSet(error,
                                   StrL("source path is too long or could not be recorded"));
                     ok = false;
@@ -124725,7 +124951,7 @@ struct FloatContext {
         newSegment.yStart = divideAtY;
         newSegment.yEnd = segments[idx].yEnd;
         segments[idx].yEnd = divideAtY;
-        segments.InsertAt(idx + 1, newSegment);
+        VecInsertAt(segments, idx + 1, newSegment);
     }
 
     void UpdateLastPlacedFloat(FloatDirection direction, IndexRange placement) {
@@ -124749,10 +124975,10 @@ struct FloatContext {
         float xInset = placed.xInset;
         float y = placed.y;
         if (direction == FloatDirection::Left) {
-            leftFloats.Append(placed);
+            VecAppend(leftFloats, placed);
             return {xInset, y};
         }
-        rightFloats.Append(placed);
+        VecAppend(rightFloats, placed);
         return {availableWidth - xInset - floatedBox.w, y};
     }
 
@@ -124915,7 +125141,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
             Segment gap;
             gap.yStart = lastYEnd;
             gap.yEnd = startY;
-            segments.Append(gap);
+            VecAppend(segments, gap);
         }
         float newStartY = F32Max(lastYEnd, startY);
         Segment seg;
@@ -124924,7 +125150,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
         seg.insets[0] = containingBlockInsets[0];
         seg.insets[1] = containingBlockInsets[1];
         seg.insets[slot] += floatedBox.w;
-        segments.Append(seg);
+        VecAppend(segments, seg);
 
         int si = segments.len - 1;
         UpdateLastPlacedFloat(direction, {si, si + 1});
@@ -124951,7 +125177,7 @@ PlacedFloatedBox FloatContext::PlaceFloatedBoxInner(
             Segment gap;
             gap.yStart = lastYEnd;
             gap.yEnd = minY;
-            segments.Append(gap);
+            VecAppend(segments, gap);
         }
         ei = segments.len - 1;
     } else {
@@ -125202,7 +125428,7 @@ void GenerateItemList(TaffyTree* tree, NodeId node, SizeFOpt nodeInnerSize,
         item.padding = padding;
         item.border = border;
         item.paddingBorderSum = pbSum;
-        items->Append(item);
+        VecAppend(*items, item);
     }
 }
 
@@ -126068,9 +126294,9 @@ LayoutOutput ComputeBlockLayout(TaffyTree* tree, NodeId nodeId,
     rootCtx.bfc = &rootBfc;
     rootCtx.isRoot = true;
     LayoutOutput out = ComputeInner(tree, nodeId, next, &rootCtx);
-    rootBfc.floatContext.leftFloats.Reset();
-    rootBfc.floatContext.rightFloats.Reset();
-    rootBfc.floatContext.segments.Reset();
+    VecReset(rootBfc.floatContext.leftFloats);
+    VecReset(rootBfc.floatContext.rightFloats);
+    VecReset(rootBfc.floatContext.segments);
     return out;
 }
 
@@ -126289,7 +126515,7 @@ void GenerateAnonymousFlexItems(TaffyTree* tree, NodeId node,
         item.scrollbarWidth = cs.scrollbarWidth;
         item.flexGrow = cs.flexGrow;
         item.flexShrink = cs.flexShrink;
-        flexItems->Append(item);
+        VecAppend(*flexItems, item);
     }
 }
 
@@ -126450,7 +126676,7 @@ void CollectFlexLines(const AlgoConstants& c, SizeAvail availableSpace,
     int total = flexItems->len;
 
     if (!c.isWrap) {
-        lines->Append({items, total, 0.0f, 0.0f});
+        VecAppend(*lines, {items, total, 0.0f, 0.0f});
         return;
     }
 
@@ -126467,12 +126693,12 @@ void CollectFlexLines(const AlgoConstants& c, SizeAvail availableSpace,
     switch (mainAxisAvailableSpace.kind) {
         case AvailableSpace::Kind::MaxContent:
 
-            lines->Append({items, total, 0.0f, 0.0f});
+            VecAppend(*lines, {items, total, 0.0f, 0.0f});
             return;
         case AvailableSpace::Kind::MinContent:
 
             for (int i = 0; i < total; i++) {
-                lines->Append({items + i, 1, 0.0f, 0.0f});
+                VecAppend(*lines, {items + i, 1, 0.0f, 0.0f});
             }
             return;
         default:
@@ -126495,7 +126721,7 @@ void CollectFlexLines(const AlgoConstants& c, SizeAvail availableSpace,
                 break;
             }
         }
-        lines->Append({items + start, index - start, 0.0f, 0.0f});
+        VecAppend(*lines, {items + start, index - start, 0.0f, 0.0f});
         start = index;
     }
 }
@@ -127715,7 +127941,7 @@ LayoutOutput ComputePreliminary(TaffyTree* tree, NodeId node,
 
     FlexLine lineBuf[2];
     Vec<FlexLine> flexLines;
-    VecUseInline(flexLines, lineBuf);
+    VecUseExternalBuffer(flexLines, lineBuf);
 
     GenerateAnonymousFlexItems(tree, node, constants, &flexItems);
 
@@ -127776,8 +128002,8 @@ LayoutOutput ComputePreliminary(TaffyTree* tree, NodeId node,
         DetermineContainerCrossSize(&flexLines, knownDimensions, &constants);
 
     if (runMode == RunMode::ComputeSize) {
-        flexItems.Reset();
-        flexLines.Reset();
+        VecReset(flexItems);
+        VecReset(flexLines);
         return LayoutOutput::FromOuterSize(constants.containerSize);
     }
 
@@ -127818,8 +128044,8 @@ LayoutOutput ComputePreliminary(TaffyTree* tree, NodeId node,
         firstVerticalBaseline = Some(offsetVertical + chosen->baseline);
     }
 
-    flexItems.Reset();
-    flexLines.Reset();
+    VecReset(flexItems);
+    VecReset(flexLines);
 
     return LayoutOutput::FromSizesAndBaselines(
         constants.containerSize, Max(inflowContentSize, absoluteContentSize),
@@ -128041,16 +128267,16 @@ struct CellOccupancyMatrix {
         rows = rws;
         nRows = rws.Len();
         nCols = cols.Len();
-        inner.Reset();
+        VecReset(inner);
         int n = nRows * nCols;
         if (n > 0) {
-            uint8_t* p = inner.AppendBlanks(n);
+            uint8_t* p = VecAppendBlanks(inner, n);
             if (p) {
                 memset(p, 0, (size_t)n);
             }
         }
     }
-    void Free() { inner.Reset(); }
+    void Free() { VecReset(inner); }
 
     CellOccupancyState Get(int row, int col) const {
         if (row < 0 || row >= nRows || col < 0 || col >= nCols) {
@@ -128094,7 +128320,7 @@ struct CellOccupancyMatrix {
         int newColCount = oldColCount + reqNegCols + reqPosCols;
 
         Vec<uint8_t> data;
-        uint8_t* p = data.AppendBlanks(newRowCount * newColCount);
+        uint8_t* p = VecAppendBlanks(data, newRowCount * newColCount);
         if (!p) {
             return;
         }
@@ -128105,7 +128331,7 @@ struct CellOccupancyMatrix {
                     inner[row * nCols + col];
             }
         }
-        inner.Reset();
+        VecReset(inner);
         inner = data;
         data.els = nullptr;
         data.len = 0;
@@ -128423,13 +128649,13 @@ struct NamedLineResolver {
 
     void Free() {
         for (int i = 0; i < rowLines.len; i++) {
-            rowLines[i].lines.Reset();
+            VecReset(rowLines[i].lines);
         }
         for (int i = 0; i < columnLines.len; i++) {
-            columnLines[i].lines.Reset();
+            VecReset(columnLines[i].lines);
         }
-        rowLines.Reset();
-        columnLines.Reset();
+        VecReset(rowLines);
+        VecReset(columnLines);
     }
 
     static void Upsert(Vec<LineNameEntry>* map, Str name, NameSuffix suffix,
@@ -128442,15 +128668,15 @@ struct NamedLineResolver {
                         return;
                     }
                 }
-                e.lines.Append(value);
+                VecAppend(e.lines, value);
                 return;
             }
         }
         LineNameEntry e;
         e.name = name;
         e.suffix = suffix;
-        e.lines.Append(value);
-        map->Append(e);
+        VecAppend(e.lines, value);
+        VecAppend(*map, e);
     }
 
     static const Vec<uint16_t>* Find(const Vec<LineNameEntry>& map, Str name,
@@ -128945,9 +129171,9 @@ void CreateImplicitTracks(Vec<GridTrack>* tracks, uint16_t count,
                           NextTrack nextTrack, LengthPercentage gap) {
     for (uint16_t i = 0; i < count; i++) {
         TrackSizingFunction def = nextTrack();
-        tracks->Append(
-            GridTrack::New(def.MinSizingFunction(), def.MaxSizingFunction()));
-        tracks->Append(GridTrack::Gutter(gap));
+        VecAppend(*tracks, GridTrack::New(def.MinSizingFunction(),
+                                          def.MaxSizingFunction()));
+        VecAppend(*tracks, GridTrack::Gutter(gap));
     }
 }
 
@@ -128969,7 +129195,7 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
     }
 
     tracks->len = 0;
-    tracks->Append(GridTrack::Gutter(gap));
+    VecAppend(*tracks, GridTrack::Gutter(gap));
 
     int autoTrackCount = autoTracks.len;
     uint16_t nonAutoRepeatingTrackCount = 0;
@@ -129010,9 +129236,10 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
         for (int i = 0; i < trackTemplate.len; i++) {
             const GridTemplateComponent& c = trackTemplate[i];
             if (!c.isRepeat) {
-                tracks->Append(GridTrack::New(c.single.MinSizingFunction(),
-                                              c.single.MaxSizingFunction()));
-                tracks->Append(GridTrack::Gutter(gap));
+                VecAppend(*tracks,
+                          GridTrack::New(c.single.MinSizingFunction(),
+                                         c.single.MaxSizingFunction()));
+                VecAppend(*tracks, GridTrack::Gutter(gap));
                 currentTrackIndex += 1;
                 continue;
             }
@@ -129022,9 +129249,9 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
                 for (int k = 0; k < total; k++) {
                     TrackSizingFunction f =
                         c.repeat.tracks[k % c.repeat.tracks.len];
-                    tracks->Append(GridTrack::New(f.MinSizingFunction(),
-                                                  f.MaxSizingFunction()));
-                    tracks->Append(GridTrack::Gutter(gap));
+                    VecAppend(*tracks, GridTrack::New(f.MinSizingFunction(),
+                                                      f.MaxSizingFunction()));
+                    VecAppend(*tracks, GridTrack::Gutter(gap));
                     currentTrackIndex += 1;
                 }
                 continue;
@@ -129044,8 +129271,8 @@ void InitializeGridTracks(Vec<GridTrack>* tracks, TrackCounts counts,
                     track.Collapse();
                     gutter.Collapse();
                 }
-                tracks->Append(track);
-                tracks->Append(gutter);
+                VecAppend(*tracks, track);
+                VecAppend(*tracks, gutter);
                 currentTrackIndex += 1;
             }
 
@@ -129491,7 +129718,7 @@ void RecordGridPlacement(CellOccupancyMatrix* matrix, Vec<GridItem>* items,
     item.margin = s.margin;
     item.alignSelf = s.alignSelf.UnwrapOr(parentAlignItems);
     item.justifySelf = s.justifySelf.UnwrapOr(parentJustifyItems);
-    items->Append(item);
+    VecAppend(*items, item);
 }
 
 LineOzl PlaceDefiniteGridItemAxis(const PlacementChild& child,
@@ -131342,8 +131569,8 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
                             .IntoOriginZero(explicitColCount);
         pc.vertical = nameResolver.ResolveRowNames(cs.gridRow)
                           .IntoOriginZero(explicitRowCount);
-        children.Append(pc);
-        childPlacements.Append({cs.gridColumn, cs.gridRow});
+        VecAppend(children, pc);
+        VecAppend(childPlacements, {cs.gridColumn, cs.gridRow});
     }
 
     TrackCounts estColCounts;
@@ -131457,11 +131684,11 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
                                                      .VerticalAxisSum())};
 
     if (runMode == RunMode::ComputeSize) {
-        items.Reset();
-        columns.Reset();
-        rows.Reset();
-        children.Reset();
-        childPlacements.Reset();
+        VecReset(items);
+        VecReset(columns);
+        VecReset(rows);
+        VecReset(children);
+        VecReset(childPlacements);
         cellOccupancyMatrix.Free();
         nameResolver.Free();
         return LayoutOutput::FromOuterSize(containerBorderBox);
@@ -131781,11 +132008,11 @@ LayoutOutput ComputeGridLayout(TaffyTree* tree, NodeId node,
             PointFOpt{None(), Some(gridContainerBaseline)});
     }
 
-    items.Reset();
-    columns.Reset();
-    rows.Reset();
-    children.Reset();
-    childPlacements.Reset();
+    VecReset(items);
+    VecReset(columns);
+    VecReset(rows);
+    VecReset(children);
+    VecReset(childPlacements);
     cellOccupancyMatrix.Free();
     nameResolver.Free();
     return out;
@@ -131820,13 +132047,13 @@ void GridSizeEstimateForTest(uint16_t explicitColCount,
                              uint16_t* outColCounts, uint16_t* outRowCounts) {
     Vec<ChildPlacementStyles> children;
     for (int i = 0; i < n; i++) {
-        children.Append({columns[i], rows[i]});
+        VecAppend(children, {columns[i], rows[i]});
     }
     TrackCounts cols;
     TrackCounts rws;
     ComputeGridSizeEstimate(explicitColCount, explicitRowCount, direction,
                             children.els, children.len, &cols, &rws);
-    children.Reset();
+    VecReset(children);
     outColCounts[0] = cols.negativeImplicit;
     outColCounts[1] = cols.explicitCount;
     outColCounts[2] = cols.positiveImplicit;
@@ -131851,7 +132078,7 @@ int GridInitTracksForTest(const Style& style, AbsoluteAxis axis,
         out[i].min = tracks[i].minTrackSizingFunction.raw;
         out[i].max = tracks[i].maxTrackSizingFunction.raw;
     }
-    tracks.Reset();
+    VecReset(tracks);
     return n;
 }
 
@@ -131881,8 +132108,8 @@ int GridPlaceForTest(TaffyTree* tree, NodeId parent, uint16_t explicitColCount,
                             .IntoOriginZero(explicitColCount);
         pc.vertical = nameResolver.ResolveRowNames(cs.gridRow)
                           .IntoOriginZero(explicitRowCount);
-        children.Append(pc);
-        childPlacements.Append({cs.gridColumn, cs.gridRow});
+        VecAppend(children, pc);
+        VecAppend(childPlacements, {cs.gridColumn, cs.gridRow});
     }
 
     TrackCounts estCols;
@@ -131914,9 +132141,9 @@ int GridPlaceForTest(TaffyTree* tree, NodeId parent, uint16_t explicitColCount,
     outRowCounts[1] = rws.explicitCount;
     outRowCounts[2] = rws.positiveImplicit;
 
-    items.Reset();
-    children.Reset();
-    childPlacements.Reset();
+    VecReset(items);
+    VecReset(children);
+    VecReset(childPlacements);
     matrix.Free();
     nameResolver.Free();
     return n;
@@ -132668,8 +132895,8 @@ NodeData* TaffyTree::Get(NodeId node) const {
 }
 
 void TaffyTree::Init(int capacity) {
-    slots.Reset();
-    freeSlots.Reset();
+    VecReset(slots);
+    VecReset(freeSlots);
     liveCount = 0;
     useRounding = true;
     if (capacity > 0) {
@@ -132683,11 +132910,11 @@ void TaffyTree::Free() {
         if (!d) {
             continue;
         }
-        d->children.Reset();
+        VecReset(d->children);
         delete d;
     }
-    slots.Reset();
-    freeSlots.Reset();
+    VecReset(slots);
+    VecReset(freeSlots);
     liveCount = 0;
 }
 
@@ -132697,7 +132924,7 @@ static int32_t AllocSlot(TaffyTree* tree) {
         tree->freeSlots.len--;
         return idx;
     }
-    tree->slots.Append(nullptr);
+    VecAppend(tree->slots, nullptr);
     return tree->slots.len - 1;
 }
 
@@ -132753,7 +132980,7 @@ NodeId TaffyTree::NewWithChildren(const Style& style, const NodeId* children,
         }
         c->parent = id;
         c->hasParent = true;
-        d->children.Append(children[i]);
+        VecAppend(d->children, children[i]);
     }
     return id;
 }
@@ -132767,7 +132994,7 @@ void TaffyTree::Clear() {
         d->alive = false;
         d->children.len = 0;
         d->hasParent = false;
-        freeSlots.Append((int32_t)i);
+        VecAppend(freeSlots, (int32_t)i);
     }
     liveCount = 0;
 }
@@ -132800,7 +133027,7 @@ void TaffyTree::Remove(NodeId node) {
     d->children.len = 0;
     d->hasParent = false;
     liveCount--;
-    freeSlots.Append(IdIndex(node));
+    VecAppend(freeSlots, IdIndex(node));
 }
 
 void TaffyTree::SetNodeContext(NodeId node, void* context, bool hasContext) {
@@ -132826,7 +133053,7 @@ void TaffyTree::AddChild(NodeId parent, NodeId child) {
     }
     c->parent = parent;
     c->hasParent = true;
-    p->children.Append(child);
+    VecAppend(p->children, child);
     MarkDirty(parent);
 }
 
@@ -132842,7 +133069,7 @@ bool TaffyTree::InsertChildAtIndex(NodeId parent, int childIndex,
     }
     c->parent = parent;
     c->hasParent = true;
-    p->children.InsertAt(childIndex, child);
+    VecInsertAt(p->children, childIndex, child);
     MarkDirty(parent);
     return true;
 }
@@ -132873,7 +133100,7 @@ void TaffyTree::SetChildren(NodeId parent, const NodeId* children, int n) {
     }
     p->children.len = 0;
     for (int i = 0; i < n; i++) {
-        p->children.Append(children[i]);
+        VecAppend(p->children, children[i]);
     }
     MarkDirty(parent);
 }
@@ -133661,7 +133888,7 @@ void CookieListFree(Vec<Cookie>* cookies) {
         base::StrFree(cookie.domain);
         base::StrFree(cookie.path);
     }
-    cookies->Reset();
+    VecReset(*cookies);
 }
 
 Str WorkAroundUriPrefix(Str httpOrHttps, Str protocol) {
@@ -135853,7 +136080,7 @@ void PathFree(Path* p) {
 
 static void gpui_paint_linux_Push(Path* p, const CairoPathOp& op) {
     if (p) {
-        p->ops.Append(op);
+        VecAppend(p->ops, op);
     }
 }
 
@@ -138202,7 +138429,7 @@ static void gpui_paint_wasm_Push(Path* p, float cmd, float a = 0, float b = 0, f
     }
     const float vals[8] = {cmd, a, b, c, d, e, f, g};
     for (int i = 0; i < 8; i++) {
-        p->ops.Append(vals[i]);
+        VecAppend(p->ops, vals[i]);
     }
 
     if (p->js) {
@@ -140636,7 +140863,7 @@ static void EnsureTriPhase() {
 
 static void gpui_paintgpu_win_Push(const Inst& i) {
     EnsureQuadPhase();
-    gB.insts.Append(i);
+    VecAppend(gB.insts, i);
 }
 
 static void Quad(PaintCtx* ctx, int kind, float x, float y, float w, float h,
@@ -140668,7 +140895,7 @@ static void TriVertex(float x, float y, Rgba c) {
     v.y = y;
     SetColor(v.color, c);
     memcpy(v.clip, gB.clip, sizeof(v.clip));
-    gB.tris.Append(v);
+    VecAppend(gB.tris, v);
 }
 
 static void FreeSurfaces(GpuTarget* t) {
@@ -141081,7 +141308,7 @@ void CanvasPushClip(PaintCtx* ctx, float x, float y, float w, float h) {
     }
 
     for (int i = 0; i < 4; i++) {
-        gB.clipStack.Append(gB.clip[i]);
+        VecAppend(gB.clipStack, gB.clip[i]);
     }
     float x0 = x > gB.clip[0] ? x : gB.clip[0];
     float y0 = y > gB.clip[1] ? y : gB.clip[1];
@@ -141122,8 +141349,8 @@ void PathFree(Path* path) {
 }
 
 static void gpui_paintgpu_win_PathPoint(GpuPath* p, float x, float y) {
-    p->pts.Append(x);
-    p->pts.Append(y);
+    VecAppend(p->pts, x);
+    VecAppend(p->pts, y);
     if (x < p->minX) {
         p->minX = x;
     }
@@ -141139,7 +141366,7 @@ static void gpui_paintgpu_win_PathPoint(GpuPath* p, float x, float y) {
 }
 
 static void gpui_paintgpu_win_MoveTo(GpuPath* p, float x, float y) {
-    p->starts.Append(p->pts.len / 2);
+    VecAppend(p->starts, p->pts.len / 2);
     gpui_paintgpu_win_PathPoint(p, x, y);
     p->open = true;
 }
@@ -141260,7 +141487,7 @@ static void PathCover(PaintCtx* ctx, GpuPath* p, const Inst& proto) {
     i.rect[3] = (p->maxY - p->minY) + 2;
     memcpy(i.clip, gB.clip, sizeof(i.clip));
     gB.insts.len = 0;
-    gB.insts.Append(i);
+    VecAppend(gB.insts, i);
     (void)ctx;
 
     if (!EnsureInstBuf(g, gB.insts.len)) {
@@ -141496,7 +141723,7 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
     static Vec<uint8_t> rgb;
     static Vec<uint8_t> gray;
     rgb.len = 0;
-    if (!rgb.AppendBlanks(w * h * 3)) {
+    if (!VecAppendBlanks(rgb, w * h * 3)) {
         an->Release();
         return false;
     }
@@ -141507,7 +141734,7 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
         return false;
     }
     gray.len = 0;
-    if (!gray.AppendBlanks(w * h)) {
+    if (!VecAppendBlanks(gray, w * h)) {
         return false;
     }
     for (int i = 0; i < w * h; i++) {
@@ -143972,7 +144199,7 @@ static NSImage* MenuIconImage(Window* win, const char* path) {
 
     const int px = kMenuImageSize * 2;
     Vec<uint8_t> buf;
-    buf.AppendBlanks(px * px * 4);
+    VecAppendBlanks(buf, px * px * 4);
 
     if (!SvgRasterize(win->paint.pa, Str(path), px, Rgb(0, 0, 0), buf.els)) {
         return nil;
@@ -146003,7 +146230,7 @@ static HMENU BuildMenu(Window* win, const PlatMenuItem* items, int n,
                 info.fMask = MIIM_BITMAP;
                 info.hbmpItem = bmp;
                 SetMenuItemInfoW(menu, position, TRUE, &info);
-                gMenuBitmaps.Append(bmp);
+                VecAppend(gMenuBitmaps, bmp);
             }
         }
         position++;
@@ -146044,7 +146271,7 @@ int PlatShowMenu(Window* win, const PlatMenuItem* items, int n, float x,
     for (int i = 0; i < gMenuBitmaps.len; i++) {
         DeleteObject(gMenuBitmaps[i]);
     }
-    gMenuBitmaps.Reset();
+    VecReset(gMenuBitmaps);
     return selected;
 }
 
@@ -146398,7 +146625,9 @@ struct GpuProbe {
 
 static GpuProbe gProbe;
 
-static bool ProbeOpen() {
+static Mutex gProbeLock;
+
+static bool ProbeOpenLocked() {
     if (gProbe.opened) {
         return true;
     }
@@ -146429,7 +146658,10 @@ static bool ProbeOpen() {
 }
 
 bool GpuAvailable() {
-    return ProbeOpen();
+    gProbeLock.Lock();
+    bool available = ProbeOpenLocked();
+    gProbeLock.Unlock();
+    return available;
 }
 
 static Str EngineOf(const WCHAR* name, char* buf, int cap) {
@@ -146449,8 +146681,8 @@ static Str EngineOf(const WCHAR* name, char* buf, int cap) {
     return {};
 }
 
-float GpuUsagePercent() {
-    if (!ProbeOpen()) {
+static float GpuUsagePercentLocked() {
+    if (!ProbeOpenLocked()) {
         return -1.f;
     }
     if (PdhCollectQueryData(gProbe.query) != ERROR_SUCCESS) {
@@ -146466,7 +146698,7 @@ float GpuUsagePercent() {
         return -1.f;
     }
     gProbe.buffer.len = 0;
-    if (!gProbe.buffer.AppendBlanks((int)bytes)) {
+    if (!VecAppendBlanks(gProbe.buffer, (int)bytes)) {
         return -1.f;
     }
     auto* items = (PDH_FMT_COUNTERVALUE_ITEM_W*)&gProbe.buffer[0];
@@ -146530,15 +146762,24 @@ float GpuUsagePercent() {
     return (float)most;
 }
 
+float GpuUsagePercent() {
+    gProbeLock.Lock();
+    float usage = GpuUsagePercentLocked();
+    gProbeLock.Unlock();
+    return usage;
+}
+
 void GpuProbeFree() {
+    gProbeLock.Lock();
     if (gProbe.query) {
         PdhCloseQuery(gProbe.query);
     }
     gProbe.query = nullptr;
     gProbe.counter = nullptr;
-    gProbe.buffer.Reset();
+    VecReset(gProbe.buffer);
     gProbe.opened = false;
     gProbe.failed = false;
+    gProbeLock.Unlock();
 }
 
 }
@@ -146575,7 +146816,7 @@ static size_t OnBody(char* data, size_t size, size_t n, void* userp) {
     if ((int64_t)out->body.len + (int64_t)want > (int64_t)kHttpMaxBody) {
         return 0;
     }
-    uint8_t* dst = out->body.AppendBlanks((int)want);
+    uint8_t* dst = VecAppendBlanks(out->body, (int)want);
     if (!dst) {
         return 0;
     }
@@ -146642,7 +146883,7 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
     curl_easy_cleanup(c);
     Free(nullptr, u);
     if (!ok) {
-        out->body.Reset();
+        VecReset(out->body);
     }
     return ok;
 }
@@ -146795,7 +147036,7 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
             return false;
         }
         if (n > 0) {
-            uint8_t* dst = out->body.AppendBlanks((int)n);
+            uint8_t* dst = VecAppendBlanks(out->body, (int)n);
             if (!dst) {
                 return false;
             }
@@ -146959,7 +147200,7 @@ static bool ReadResponse(HINTERNET req, const wchar_t* base,
             return false;
         }
         int at = out->body.len;
-        uint8_t* dst = out->body.AppendBlanks((int)avail);
+        uint8_t* dst = VecAppendBlanks(out->body, (int)avail);
         if (!dst) {
             return false;
         }
@@ -147044,7 +147285,7 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
     Free(nullptr, path);
     Free(nullptr, wurl);
     if (!ok) {
-        out->body.Reset();
+        VecReset(out->body);
     }
     return ok;
 }
@@ -147330,8 +147571,8 @@ static uint64_t TickTo100ns() {
 }
 
 void SysStateInit(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
     s->cpu = 0;
     s->mem = 0;
     s->memTotal = 0;
@@ -147344,8 +147585,8 @@ void SysStateInit(SysState* s) {
 }
 
 void SysStateFree(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
 }
 
 static int ReadSmallFile(const char* path, char* buf, int cap) {
@@ -147584,14 +147825,14 @@ static void RefreshProcesses(SysState* s) {
         ProcSample sm;
         sm.pid = pid;
         sm.cpu100ns = cpu;
-        samples.Append(sm);
-        next.Append(pi);
+        VecAppend(samples, sm);
+        VecAppend(next, pi);
     }
     closedir(d);
 
-    s->prevProcs.Reset();
+    VecReset(s->prevProcs);
     s->prevProcs = samples;
-    s->procs.Reset();
+    VecReset(s->procs);
     s->procs = next;
 }
 
@@ -147613,8 +147854,8 @@ void SysRefresh(SysState* s) {
 namespace gpui {
 
 void SysStateInit(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
     s->cpu = 0;
     s->mem = 0;
     s->memTotal = 0;
@@ -147626,8 +147867,8 @@ void SysStateInit(SysState* s) {
 }
 
 void SysStateFree(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
 }
 
 static void RefreshCpu(SysState* s) {
@@ -147780,7 +148021,7 @@ static void RefreshProcesses(SysState* s) {
 
     int nPids = cap / (int)sizeof(pid_t) + 32;
     Vec<pid_t> pids;
-    pid_t* buf = pids.AppendBlanks(nPids);
+    pid_t* buf = VecAppendBlanks(pids, nPids);
     if (!buf) {
         return;
     }
@@ -147829,13 +148070,13 @@ static void RefreshProcesses(SysState* s) {
         ProcSample sm;
         sm.pid = pi.pid;
         sm.cpu100ns = cpu;
-        samples.Append(sm);
-        next.Append(pi);
+        VecAppend(samples, sm);
+        VecAppend(next, pi);
     }
 
-    s->prevProcs.Reset();
+    VecReset(s->prevProcs);
     s->prevProcs = samples;
-    s->procs.Reset();
+    VecReset(s->procs);
     s->procs = next;
 }
 
@@ -147898,8 +148139,8 @@ EM_JS(int, GpJsBatteryCharging, (), {
 });
 
 void SysStateInit(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
     s->cpu = 0;
     s->mem = 0;
     s->memTotal = 0;
@@ -147915,8 +148156,8 @@ void SysStateInit(SysState* s) {
 }
 
 void SysStateFree(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
 }
 
 void SysRefresh(SysState* s) {
@@ -147942,7 +148183,7 @@ void SysRefresh(SysState* s) {
     s->battery.pct = s->battery.present ? (float)GpJsBatteryPct() : 0.f;
     s->battery.charging = GpJsBatteryCharging() != 0;
 
-    s->procs.Reset();
+    VecReset(s->procs);
 }
 
 }
@@ -147962,8 +148203,8 @@ static uint64_t FtToU64(FILETIME ft) {
 }
 
 void SysStateInit(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
     s->cpu = 0;
     s->mem = 0;
     s->memTotal = 0;
@@ -147980,8 +148221,8 @@ void SysStateInit(SysState* s) {
 }
 
 void SysStateFree(SysState* s) {
-    s->prevProcs.Reset();
-    s->procs.Reset();
+    VecReset(s->prevProcs);
+    VecReset(s->procs);
 }
 
 static void RefreshCpu(SysState* s) {
@@ -148118,18 +148359,18 @@ static void RefreshProcesses(SysState* s) {
                     ProcSample sm;
                     sm.pid = pi.pid;
                     sm.cpu100ns = cpu;
-                    samples.Append(sm);
+                    VecAppend(samples, sm);
                 }
                 CloseHandle(h);
             }
-            next.Append(pi);
+            VecAppend(next, pi);
         } while (Process32NextW(snap, &pe));
     }
     CloseHandle(snap);
 
-    s->prevProcs.Reset();
+    VecReset(s->prevProcs);
     s->prevProcs = samples;
-    s->procs.Reset();
+    VecReset(s->procs);
     s->procs = next;
 }
 
@@ -149153,7 +149394,7 @@ static bool ReadDirectory(int root, Str rootName, Str relative,
             fstatat(dirfd(directory), entry->d_name, &info,
                     AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(info.st_mode);
         FsEntry value = {StrDup(Str(entry->d_name, nameLen)), directoryEntry};
-        if (!value.name.s || !result->entries.Append(value)) {
+        if (!value.name.s || !VecAppend(result->entries, value)) {
             StrFree(value.name);
             FsError(error, StrL("allocating an fs.readdir result failed"));
             ok = false;
@@ -149687,7 +149928,7 @@ static bool ReadDirectory(HANDLE root, Str rootName, Str relative,
                     name,
                     (entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
                         (entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0};
-                if (!result->entries.Append(value)) {
+                if (!VecAppend(result->entries, value)) {
                     StrFree(name);
                     FsError(error, StrL("allocating an fs.readdir result failed"));
                     ok = false;
@@ -150183,7 +150424,7 @@ static bool NeedsQuotes(const WCHAR* value) {
 
 static bool AppendWide(Vec<WCHAR>* out, WCHAR value, int count = 1) {
     for (int i = 0; i < count; i++) {
-        if (!out->Append(value)) return false;
+        if (!VecAppend(*out, value)) return false;
     }
     return true;
 }
@@ -150191,13 +150432,13 @@ static bool AppendWide(Vec<WCHAR>* out, WCHAR value, int count = 1) {
 static bool AppendArgument(Vec<WCHAR>* out, Str argument) {
     WCHAR* value = shell_process_win_WideDup(argument);
     if (!value) return false;
-    if (out->len > 0 && !out->Append(L' ')) {
+    if (out->len > 0 && !VecAppend(*out, L' ')) {
         Free(nullptr, value);
         return false;
     }
     if (!NeedsQuotes(value)) {
         for (const WCHAR* at = value; *at; at++) {
-            if (!out->Append(*at)) {
+            if (!VecAppend(*out, *at)) {
                 Free(nullptr, value);
                 return false;
             }
@@ -150205,20 +150446,21 @@ static bool AppendArgument(Vec<WCHAR>* out, Str argument) {
         Free(nullptr, value);
         return true;
     }
-    bool ok = out->Append(L'"');
+    bool ok = VecAppend(*out, L'"');
     int slashes = 0;
     for (const WCHAR* at = value; ok && *at; at++) {
         if (*at == L'\\') {
             slashes++;
         } else if (*at == L'"') {
-            ok = AppendWide(out, L'\\', slashes * 2 + 1) && out->Append(*at);
+            ok =
+                AppendWide(out, L'\\', slashes * 2 + 1) && VecAppend(*out, *at);
             slashes = 0;
         } else {
-            ok = AppendWide(out, L'\\', slashes) && out->Append(*at);
+            ok = AppendWide(out, L'\\', slashes) && VecAppend(*out, *at);
             slashes = 0;
         }
     }
-    if (ok) ok = AppendWide(out, L'\\', slashes * 2) && out->Append(L'"');
+    if (ok) ok = AppendWide(out, L'\\', slashes * 2) && VecAppend(*out, L'"');
     Free(nullptr, value);
     return ok;
 }
@@ -151120,7 +151362,7 @@ static void FlushPendingScripts(WebView* wv) {
         [wv->webview evaluateJavaScript:ToNS(wv->pendingScripts[i]) completionHandler:nil];
         StrFree(wv->pendingScripts[i]);
     }
-    wv->pendingScripts.Reset();
+    VecReset(wv->pendingScripts);
     wv->pendingOpen = false;
 }
 
@@ -151144,13 +151386,13 @@ static void HandleSchemeTask(WebView* wv, int index, id<WKURLSchemeTask> task) {
         Header h;
         h.name = FromNSTemp(name);
         h.value = FromNSTemp(all[name]);
-        headerStore.Append(h);
+        VecAppend(headerStore, h);
     }
 
     Vec<uint8_t> bodyStore;
     NSData* body = request.HTTPBody;
     if (body) {
-        uint8_t* dst = bodyStore.AppendBlanks((int)body.length);
+        uint8_t* dst = VecAppendBlanks(bodyStore, (int)body.length);
         if (dst) {
             memcpy(dst, body.bytes, body.length);
         }
@@ -151163,7 +151405,7 @@ static void HandleSchemeTask(WebView* wv, int index, id<WKURLSchemeTask> task) {
             if (got <= 0) {
                 break;
             }
-            uint8_t* dst = bodyStore.AppendBlanks((int)got);
+            uint8_t* dst = VecAppendBlanks(bodyStore, (int)got);
             if (!dst) {
                 break;
             }
@@ -151194,8 +151436,8 @@ static void HandleSchemeTask(WebView* wv, int index, id<WKURLSchemeTask> task) {
         Respond(responder, &response);
     }
 
-    headerStore.FreeEls();
-    bodyStore.FreeEls();
+    VecReset(headerStore);
+    VecReset(bodyStore);
 }
 
 static void DeliverResponse(RequestResponder* responder, NSHTTPURLResponse* response,
@@ -151373,7 +151615,7 @@ WebView* WebViewNew(void* parentWindow, const WebViewAttributes* attrs, bool asC
         p.ctx = attrs->customProtocols[i].ctx;
         p.handler = attrs->customProtocols[i].handler;
         int protocolIndex = wv->protocols.len;
-        wv->protocols.Append(p);
+        VecAppend(wv->protocols, p);
 
         GpuiWrySchemeHandler* handler = [[GpuiWrySchemeHandler alloc] init];
         handler.wv = wv;
@@ -151560,11 +151802,11 @@ void WebViewFree(WebView* wv) {
     for (int i = 0; i < wv->protocols.len; i++) {
         StrFree(wv->protocols[i].name);
     }
-    wv->protocols.FreeEls();
+    VecReset(wv->protocols);
     for (int i = 0; i < wv->pendingScripts.len; i++) {
         StrFree(wv->pendingScripts[i]);
     }
-    wv->pendingScripts.FreeEls();
+    VecReset(wv->pendingScripts);
     StrFree(wv->id);
 
     delete wv;
@@ -151580,7 +151822,7 @@ bool WebViewEval(WebView* wv, Str js) {
     }
 
     if (wv->pendingOpen) {
-        wv->pendingScripts.Append(StrDup(js));
+        VecAppend(wv->pendingScripts, StrDup(js));
         return true;
     }
     [wv->webview evaluateJavaScript:ToNS(js) completionHandler:nil];
@@ -151597,7 +151839,7 @@ bool WebViewEvalWithCallback(WebView* wv, Str js, void* ctx,
     }
     if (wv->pendingOpen) {
 
-        wv->pendingScripts.Append(StrDup(js));
+        VecAppend(wv->pendingScripts, StrDup(js));
         return true;
     }
     [wv->webview evaluateJavaScript:ToNS(js)
@@ -153934,7 +154176,7 @@ static void FreeDropPaths(Vec<Str>* paths) {
     for (int i = 0; i < paths->len; i++) {
         StrFree(paths->els[i]);
     }
-    paths->FreeEls();
+    VecReset(*paths);
 }
 
 static bool GetDropPaths(IDataObject* data, Vec<Str>* paths, HDROP* hdropOut) {
@@ -153957,7 +154199,7 @@ static bool GetDropPaths(IDataObject* data, Vec<Str>* paths, HDROP* hdropOut) {
         UINT charCount = DragQueryFileW(hdrop, i, nullptr, 0);
         WCHAR* path = new WCHAR[(size_t)charCount + 1];
         if (DragQueryFileW(hdrop, i, path, charCount + 1) == charCount) {
-            paths->Append(StrDup(WstrToUtf8Temp(path, (int)charCount)));
+            VecAppend(*paths, StrDup(WstrToUtf8Temp(path, (int)charCount)));
         }
         delete[] path;
     }
@@ -154049,7 +154291,7 @@ struct DragDropController {
             RevokeDragDrop(target->hwnd);
             target->Release();
         }
-        targets.FreeEls();
+        VecReset(targets);
     }
 };
 
@@ -154067,7 +154309,7 @@ static BOOL CALLBACK InjectDragDropTarget(HWND hwnd, LPARAM param) {
     target->fn = ctx->handler;
     HRESULT revoked = RevokeDragDrop(hwnd);
     if (revoked != DRAGDROP_E_INVALIDHWND && SUCCEEDED(RegisterDragDrop(hwnd, target))) {
-        ctx->controller->targets.Append(target);
+        VecAppend(ctx->controller->targets, target);
     } else {
         target->Release();
     }
@@ -154157,7 +154399,7 @@ struct EnvironmentOptions : ICoreWebView2EnvironmentOptions,
         for (int i = 0; i < customSchemeRegistrations.len; i++) {
             customSchemeRegistrations[i]->Release();
         }
-        customSchemeRegistrations.FreeEls();
+        VecReset(customSchemeRegistrations);
     }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
@@ -154300,11 +154542,11 @@ struct EnvironmentOptions : ICoreWebView2EnvironmentOptions,
         }
         Vec<IUnknown*> copy;
         for (UINT32 i = 0; i < count; i++) {
-            if (!values[i] || !copy.Append(values[i])) {
+            if (!values[i] || !VecAppend(copy, values[i])) {
                 for (int j = 0; j < copy.len; j++) {
                     copy[j]->Release();
                 }
-                copy.FreeEls();
+                VecReset(copy);
                 return values[i] ? E_OUTOFMEMORY : E_POINTER;
             }
             values[i]->AddRef();
@@ -154312,7 +154554,7 @@ struct EnvironmentOptions : ICoreWebView2EnvironmentOptions,
         for (int i = 0; i < customSchemeRegistrations.len; i++) {
             customSchemeRegistrations[i]->Release();
         }
-        customSchemeRegistrations.FreeEls();
+        VecReset(customSchemeRegistrations);
         customSchemeRegistrations = copy;
         return S_OK;
     }
@@ -155196,7 +155438,7 @@ static HRESULT PrepareRequest(WebView* wv, ICoreWebView2WebResourceRequest* req,
             Header h;
             h.name = TakePwstrTemp(name);
             h.value = TakePwstrTemp(value);
-            if (!headerStore->Append(h)) {
+            if (!VecAppend(*headerStore, h)) {
                 hr = E_OUTOFMEMORY;
             }
         } else {
@@ -155227,7 +155469,7 @@ static HRESULT PrepareRequest(WebView* wv, ICoreWebView2WebResourceRequest* req,
             if (FAILED(hr) || read == 0) {
                 break;
             }
-            uint8_t* dst = bodyStore->AppendBlanks((int)read);
+            uint8_t* dst = VecAppendBlanks(*bodyStore, (int)read);
             if (!dst) {
                 hr = E_OUTOFMEMORY;
                 break;
@@ -155286,8 +155528,8 @@ static HRESULT OnWebResourceRequested(void* ctx, ICoreWebView2*,
         ICoreWebView2WebResourceResponse* response = MakeBadRequest(wv->env, hr);
         HRESULT responseHr = response ? args->put_Response(response) : E_FAIL;
         wry_wry_win_Rel(&response);
-        headerStore.FreeEls();
-        bodyStore.FreeEls();
+        VecReset(headerStore);
+        VecReset(bodyStore);
         return responseHr;
     }
 
@@ -155310,8 +155552,8 @@ static HRESULT OnWebResourceRequested(void* ctx, ICoreWebView2*,
         Respond(responder, &response);
     }
 
-    headerStore.FreeEls();
-    bodyStore.FreeEls();
+    VecReset(headerStore);
+    VecReset(bodyStore);
     return S_OK;
 }
 
@@ -155907,7 +156149,7 @@ WebView* WebViewNew(void* parentWindow, const WebViewAttributes* attrs, bool asC
         p.name = StrDup(attrs->customProtocols[i].name);
         p.ctx = attrs->customProtocols[i].ctx;
         p.handler = attrs->customProtocols[i].handler;
-        wv->protocols.Append(p);
+        VecAppend(wv->protocols, p);
     }
 
     if (attrs->hasTheme) {
@@ -156059,7 +156301,7 @@ void WebViewFree(WebView* wv) {
     for (int i = 0; i < wv->protocols.len; i++) {
         StrFree(wv->protocols[i].name);
     }
-    wv->protocols.FreeEls();
+    VecReset(wv->protocols);
     StrFree(wv->id);
     delete wv;
 }
@@ -156418,7 +156660,7 @@ static bool CookiesInner(WebView* wv, LPCWSTR uri, Vec<Cookie>* out) {
             return false;
         }
         Cookie cookie;
-        if (CookieFromWebView2(source, &cookie) && !out->Append(cookie)) {
+        if (CookieFromWebView2(source, &cookie) && !VecAppend(*out, cookie)) {
             FreeCookieFields(&cookie);
             wry_wry_win_Rel(&source);
             wry_wry_win_Rel(&cookies);

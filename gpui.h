@@ -17,6 +17,7 @@
 #endif
 
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -431,13 +432,114 @@ template <typename T>
 struct Vec;
 
 template <typename T>
-bool VecReserve(Arena* arena, T& v, int wantedSize);
+struct VecIdentity {
+    using type = T;
+};
+template <typename T>
+using VecIdentityT = typename VecIdentity<T>::type;
+
+#if defined(__GNUC__) || defined(__clang__)
+
+struct __attribute__((__may_alias__)) VecNonTemplated {
+#else
+struct VecNonTemplated {
+#endif
+    int len;
+    int cap;
+    void* els;
+};
+
+bool VecReserveNT(Arena* arena, VecNonTemplated* v, int elSize, int wantedSize);
+void* VecInsertSpaceNT(VecNonTemplated* v, int elSize, int idx, int count);
+bool VecResizeNT(VecNonTemplated* v, int elSize, int newSize);
+void VecRemoveAtNT(VecNonTemplated* v, int elSize, int idx, int count);
+void VecRemoveAtFastNT(VecNonTemplated* v, int elSize, int idx);
+void VecFreeElementsNT(VecNonTemplated* v);
+void VecClearNT(VecNonTemplated* v, int elSize);
+void* VecTakeNT(VecNonTemplated* v, int elSize);
+void VecCopyFromNT(VecNonTemplated* v, int elSize, int srcLen,
+                   const void* srcEls, bool zeroTail);
 
 template <typename T>
-inline T* VecReserve(Vec<T>& v, int capNeeded);
+VecNonTemplated* VecNT(Vec<T>& v);
+
+template <typename T>
+auto VecReserve(Arena* arena, T& v, int n) -> decltype(v.els);
+
+template <typename T>
+inline T* VecReserve(Vec<T>& v, int n);
+
+template <typename T>
+bool VecResize(Vec<T>& v, int newSize);
 
 template <typename T>
 T* VecInsertSpace(Vec<T>& v, int idx, int count);
+
+template <typename T>
+void VecClear(Vec<T>& v);
+
+template <typename T>
+void VecReset(Vec<T>& v);
+
+template <typename T>
+void VecFreeMembers(Vec<T>& v);
+
+template <typename T>
+T* VecTake(Vec<T>& v);
+
+template <typename T>
+T* VecData(const Vec<T>& v);
+
+template <typename T>
+bool VecAppend(Vec<T>& v, const VecIdentityT<T>& el);
+
+template <typename T>
+bool VecAppendVec(Vec<T>& v, const Vec<T>& other);
+
+template <typename T>
+bool VecAppendN(Vec<T>& v, const T* src, int count);
+
+template <typename T>
+T* VecAppendBlanks(Vec<T>& v, int count);
+
+template <typename T>
+bool VecInsertAt(Vec<T>& v, int idx, const VecIdentityT<T>& el);
+
+template <typename T, typename E>
+bool VecPush(Arena* arena, T& v, E el);
+
+template <typename T>
+void VecRemoveAtN(Vec<T>& v, int idx, int count);
+
+template <typename T>
+void VecRemoveAt(Vec<T>& v, int idx);
+
+template <typename T>
+T VecPopAt(Vec<T>& v, int idx);
+
+template <typename T>
+void VecRemoveAtFast(Vec<T>& v, int idx);
+
+template <typename T>
+void VecRemoveLast(Vec<T>& v);
+
+template <typename T>
+T VecPop(Vec<T>& v);
+
+template <typename T>
+int VecRemove(Vec<T>& v, const T& el);
+
+template <typename T>
+bool VecIsValidIndex(const Vec<T>& v, int idx);
+
+template <typename T>
+T& VecLast(const Vec<T>& v);
+
+template <typename T>
+int VecFind(const Vec<T>& v, const T& el, int startAt = 0);
+
+template <typename T>
+bool VecContains(const Vec<T>& v, const T& el);
 
 template <typename T>
 struct Vec {
@@ -449,155 +551,272 @@ struct Vec {
     int dbgId = 0;
 #endif
 
-    int Cap() const { return cap < 0 ? -cap : cap; }
-
-    void FreeEls() {
-        if (els) {
-            if (cap > 0) {
-                Free(nullptr, (void*)els);
-            } else {
-
-                cap = 0;
-            }
-            els = nullptr;
-        }
-    }
-
-    void Reset() {
-        FreeEls();
-        len = 0;
-        cap = 0;
-    }
-
-    void Clear() {
-        len = 0;
-        if (els && Cap() > 0) {
-            memset((void*)els, 0, (size_t)Cap() * sizeof(T));
-        }
-    }
-
     explicit Vec(GPUI_VEC_DBG_ARGS0) GPUI_VEC_DBG_INIT('V') {}
 
     Vec(const Vec& other GPUI_VEC_DBG_ARGS) GPUI_VEC_DBG_INIT('V') {
-        VecReserve(*this, other.len);
-        len = other.len;
-        if (other.len > 0 && other.els && els) {
-            memcpy((void*)els, (const void*)other.els,
-                   sizeof(T) * (size_t)other.len);
-        }
+        VecCopyFromNT(VecNT(*this), (int)sizeof(T), other.len,
+                      (const void*)other.els, false);
     }
 
     Vec& operator=(const Vec& other) {
         if (this == &other) {
             return *this;
         }
-        Reset();
-        VecReserve(*this, other.len);
-        len = other.len;
-        if (other.len > 0) {
-            memcpy((void*)els, (const void*)other.els, sizeof(T) * (size_t)len);
-            memset((void*)(els + len), 0, sizeof(T) * (size_t)(Cap() - len));
-        }
+        VecReset(*this);
+        VecCopyFromNT(VecNT(*this), (int)sizeof(T), other.len,
+                      (const void*)other.els, true);
         return *this;
     }
 
     ~Vec() {
 #if defined(DEBUG)
-        VecDbgDeath(dbgId, len, Cap());
+        VecDbgDeath(dbgId, len, cap < 0 ? -cap : cap);
 #endif
-        FreeEls();
+        VecReset(*this);
     }
 
     T& operator[](int idx) const { return els[idx]; }
 
-    bool InsertAt(int idx, const T& el) {
-        T* p = VecInsertSpace(*this, idx, 1);
-        if (!p) {
-            return false;
-        }
-        p[0] = el;
-        return true;
-    }
-
-    bool Append(const T& el) { return InsertAt(len, el); }
-
-    T* AppendBlanks(int count) { return VecInsertSpace(*this, len, count); }
+    using iterator = T*;
+    using const_iterator = const T*;
+    iterator begin() { return els; }
+    const_iterator begin() const { return els; }
+    iterator end() { return els ? els + len : nullptr; }
+    const_iterator end() const { return els ? els + len : nullptr; }
 };
 
-inline int VecNextCap(int cap, int wanted, int elSize) {
-    if (cap == 0) {
-        int floorCap = elSize == 1 ? 8 : elSize <= 1024 ? 4 : 1;
-        return std::max(floorCap, wanted);
-    }
-    return std::max(cap * 2, wanted);
+static_assert(offsetof(Vec<char>, len) == offsetof(VecNonTemplated, len));
+static_assert(offsetof(Vec<char>, cap) == offsetof(VecNonTemplated, cap));
+static_assert(offsetof(Vec<char>, els) == offsetof(VecNonTemplated, els));
+static_assert(offsetof(Vec<double>, els) == offsetof(VecNonTemplated, els));
+#if !defined(DEBUG)
+static_assert(sizeof(Vec<char>) == sizeof(VecNonTemplated));
+static_assert(sizeof(Vec<double>) == sizeof(VecNonTemplated));
+#endif
+
+template <typename T>
+inline int len(const Vec<T>& v) {
+    return v.len;
 }
 
 template <typename T>
-bool VecReserve(Arena* arena, T& v, int wantedSize) {
+VecNonTemplated* VecNT(Vec<T>& v) {
+    return (VecNonTemplated*)&v;
+}
 
-    int elSize = (int)sizeof(*v.els);
-    int curCap = v.cap < 0 ? -v.cap : v.cap;
-    if (wantedSize <= curCap) {
-        return true;
+template <typename T>
+auto VecReserve(Arena* arena, T& v, int n) -> decltype(v.els) {
+    static_assert(offsetof(T, len) == offsetof(VecNonTemplated, len));
+    static_assert(offsetof(T, cap) == offsetof(VecNonTemplated, cap));
+    static_assert(offsetof(T, els) == offsetof(VecNonTemplated, els));
+    if (!VecReserveNT(arena, (VecNonTemplated*)&v, (int)sizeof(*v.els), n)) {
+        return nullptr;
     }
-    int newCap = VecNextCap(curCap, wantedSize, elSize);
-    if (v.cap < 0) {
-
-        auto* borrowed = v.els;
-        v.els = nullptr;
-        v.cap = 0;
-        if (!VecRealloc(arena, (void**)&v.els, 0, &v.cap, newCap, elSize)) {
-            v.els = borrowed;
-            v.cap = -curCap;
-            return false;
-        }
-        if (v.len > 0) {
-            memcpy((void*)v.els, (const void*)borrowed,
-                   (size_t)v.len * (size_t)elSize);
-        }
-        return true;
-    }
-    return VecRealloc(arena, (void**)&v.els, v.len, &v.cap, newCap, elSize);
+    return v.els;
 }
 
 template <typename T, int N>
-inline void VecUseInline(Vec<T>& v, T (&buf)[N]) {
+inline void VecUseExternalBuffer(Vec<T>& v, T (&buf)[N]) {
     v.els = buf;
     v.cap = -N;
     v.len = 0;
 }
 
 template <typename T>
-inline T* VecReserve(Vec<T>& v, int capNeeded) {
+inline T* VecReserve(Vec<T>& v, int n) {
 #if defined(DEBUG)
-
-    if (capNeeded > v.Cap()) {
-        VecDbgGrow(v.dbgId, v.len, v.Cap(), capNeeded,
-                   VecNextCap(v.Cap(), capNeeded, (int)sizeof(T)));
+    int curCap = v.cap < 0 ? -v.cap : v.cap;
+    if (n > curCap) {
+        int floorCap = sizeof(T) == 1 ? 8 : sizeof(T) <= 1024 ? 4 : 1;
+        int next =
+            curCap == 0 ? std::max(floorCap, n) : std::max(curCap * 2, n);
+        VecDbgGrow(v.dbgId, v.len, curCap, n, next);
     }
 #endif
-    if (!VecReserve(nullptr, v, capNeeded)) {
-        return nullptr;
-    }
-    return v.els;
+    return VecReserve(nullptr, v, n);
 }
 
 template <typename T>
 T* VecInsertSpace(Vec<T>& v, int idx, int count) {
-    int newLen = std::max(v.len, idx) + count;
-    T* ok = VecReserve(v, newLen);
-    if (!ok) {
-        return nullptr;
+    return (T*)VecInsertSpaceNT(VecNT(v), (int)sizeof(T), idx, count);
+}
+
+template <typename T>
+bool VecResize(Vec<T>& v, int newSize) {
+    return VecResizeNT(VecNT(v), (int)sizeof(T), newSize);
+}
+
+template <typename T>
+void VecClear(Vec<T>& v) {
+    VecClearNT(VecNT(v), (int)sizeof(T));
+}
+
+template <typename T>
+void VecReset(Vec<T>& v) {
+    VecFreeElementsNT(VecNT(v));
+}
+
+template <typename T>
+void VecFreeMembers(Vec<T>& v) {
+    for (int i = 0; i < v.len; i++) {
+        free(v.els[i]);
     }
-    T* res = &(v.els[idx]);
-    if (v.len > idx) {
-        T* src = v.els + idx;
-        T* dst = v.els + idx + count;
-        memmove((void*)dst, (const void*)src,
-                (size_t)(v.len - idx) * sizeof(T));
+    VecReset(v);
+}
+
+template <typename T>
+T* VecTake(Vec<T>& v) {
+    return (T*)VecTakeNT(VecNT(v), (int)sizeof(T));
+}
+
+template <typename T>
+T* VecData(const Vec<T>& v) {
+    return v.els;
+}
+
+template <typename T>
+bool VecAppend(Vec<T>& v, const VecIdentityT<T>& el) {
+    return VecInsertAt(v, v.len, el);
+}
+
+template <typename T>
+bool VecAppendVec(Vec<T>& v, const Vec<T>& other) {
+    return VecAppendN(v, other.els, other.len);
+}
+
+template <typename T>
+bool VecAppendN(Vec<T>& v, const T* src, int count) {
+    if (count == 0) {
+        return true;
     }
-    v.len = newLen;
-    return res;
+    T* dst = VecInsertSpace(v, v.len, count);
+    if (!dst) {
+        return false;
+    }
+    memcpy((void*)dst, (const void*)src, (size_t)count * sizeof(T));
+    return true;
+}
+
+template <typename T>
+T* VecAppendBlanks(Vec<T>& v, int count) {
+    return VecInsertSpace(v, v.len, count);
+}
+
+template <typename T>
+bool VecInsertAt(Vec<T>& v, int idx, const VecIdentityT<T>& el) {
+    T* p = VecInsertSpace(v, idx, 1);
+    if (!p) {
+        return false;
+    }
+    p[0] = el;
+    return true;
+}
+
+template <typename T, typename E>
+bool VecPush(Arena* arena, T& v, E el) {
+    if (!VecReserve(arena, v, v.len + 1)) {
+        return false;
+    }
+    v.els[v.len++] = el;
+    return true;
+}
+
+template <typename T>
+void VecRemoveAtN(Vec<T>& v, int idx, int count) {
+    VecRemoveAtNT(VecNT(v), (int)sizeof(T), idx, count);
+}
+
+template <typename T>
+void VecRemoveAt(Vec<T>& v, int idx) {
+    VecRemoveAtN(v, idx, 1);
+}
+
+template <typename T>
+T VecPopAt(Vec<T>& v, int idx) {
+    T el = v.els[idx];
+    VecRemoveAt(v, idx);
+    return el;
+}
+
+template <typename T>
+void VecRemoveAtFast(Vec<T>& v, int idx) {
+    VecRemoveAtFastNT(VecNT(v), (int)sizeof(T), idx);
+}
+
+template <typename T>
+void VecRemoveLast(Vec<T>& v) {
+    if (v.len > 0) {
+        VecRemoveAt(v, v.len - 1);
+    }
+}
+
+template <typename T>
+T VecPop(Vec<T>& v) {
+    T el = v.els[v.len - 1];
+    VecRemoveAtFast(v, v.len - 1);
+    return el;
+}
+
+template <typename T>
+int VecRemove(Vec<T>& v, const T& el) {
+    int i = VecFind(v, el);
+    if (i >= 0) {
+        VecRemoveAt(v, i);
+    }
+    return i;
+}
+
+template <typename T>
+inline void DeleteVecMembers(Vec<T>& v) {
+    for (T& el : v) {
+        delete el;
+    }
+    VecClear(v);
+}
+
+template <typename T>
+bool VecIsValidIndex(const Vec<T>& v, int idx) {
+    return idx >= 0 && idx < v.len;
+}
+
+template <typename T>
+T& VecLast(const Vec<T>& v) {
+    return v.els[v.len - 1];
+}
+
+template <typename T>
+int VecFind(const Vec<T>& v, const T& el, int startAt) {
+    for (int i = startAt; i < v.len; i++) {
+        if (v.els[i] == el) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+template <typename T>
+bool VecContains(const Vec<T>& v, const T& el) {
+    return VecFind(v, el) >= 0;
+}
+
+template <typename T>
+struct VecSortCmp {
+    using Fn = int (*)(const T* a, const T* b);
+};
+
+template <typename T>
+void VecSort(Vec<T>& v, typename VecSortCmp<T>::Fn cmpFunc) {
+    if (v.len > 0) {
+        auto cmp = (int (*)(const void*, const void*))cmpFunc;
+        qsort((void*)v.els, (size_t)v.len, sizeof(T), cmp);
+    }
+}
+
+template <typename T>
+void VecReverse(Vec<T>& v) {
+    for (int i = 0; i < v.len / 2; i++) {
+        std::swap(v.els[i], v.els[v.len - i - 1]);
+    }
 }
 
 template <typename T>
@@ -997,24 +1216,23 @@ int SeqStrCount(SeqStrings strs);
 
 void StrLowerAscii(char* s);
 
-struct StrBuilder {
-    Arena* a = nullptr;
-    char* els = nullptr;
-    int len = 0;
-    int cap = 0;
-    Str buf;
-
-    explicit StrBuilder(Str externalBuf = {});
-    StrBuilder(const StrBuilder&) = delete;
-    StrBuilder& operator=(const StrBuilder&) = delete;
-    ~StrBuilder();
-
+struct StrBuilder : Vec<char> {
     void Reset(Str s = {});
-    bool InsertAt(int idx, char el);
+
     bool AppendChar(char c);
     bool Append(Str src);
+    char RemoveAt(int idx, int count = 1);
+    char RemoveLast();
     Str TakeStr();
+    char LastChar() const;
 };
+
+void StrBuilderUseExternalBuffer(StrBuilder& b, Str buf);
+
+bool StrBuilderReserve(Arena* a, StrBuilder& b, int cap);
+bool StrBuilderAppendChar(Arena* a, StrBuilder& b, char c);
+bool StrBuilderAppend(Arena* a, StrBuilder& b, Str s);
+Str StrBuilderTakeStr(Arena* a, StrBuilder& b);
 
 struct FmtArg {
     enum class Kind {
@@ -5318,8 +5536,8 @@ struct SearchMatcher {
     bool replacing = false;
 
     ~SearchMatcher() {
-        ranges.Reset();
-        text.Reset();
+        VecReset(ranges);
+        VecReset(text);
         StrFree(query);
     }
 };
@@ -8366,12 +8584,12 @@ struct DockState {
 
     ~DockState() {
         for (int i = 0; i < nodes.len; i++) {
-            nodes[i].child.Reset();
-            nodes[i].size.Reset();
-            nodes[i].panel.Reset();
+            VecReset(nodes[i].child);
+            VecReset(nodes[i].size);
+            VecReset(nodes[i].panel);
         }
-        nodes.Reset();
-        panels.Reset();
+        VecReset(nodes);
+        VecReset(panels);
     }
 };
 
@@ -8921,7 +9139,7 @@ struct TilesState {
     static void OnTileUp(TilesState* self, Ctx* cx, const MouseUpEvent* ev,
                          intptr_t ix);
 
-    ~TilesState() { items.Reset(); }
+    ~TilesState() { VecReset(items); }
 };
 
 struct TileContext {
@@ -9084,11 +9302,11 @@ struct DockAreaState {
 
     ~DockAreaState() {
         for (int i = 0; i < nodes.len; i++) {
-            nodes[i].children.Reset();
-            nodes[i].sizes.Reset();
-            nodes[i].metas.Reset();
+            VecReset(nodes[i].children);
+            VecReset(nodes[i].sizes);
+            VecReset(nodes[i].metas);
         }
-        nodes.Reset();
+        VecReset(nodes);
     }
 };
 
@@ -9199,8 +9417,8 @@ struct BaseGlobalState {
     bool suppressTextSelection = false;
 
     ~BaseGlobalState() {
-        deferredPopovers.Reset();
-        appMenus.Reset();
+        VecReset(deferredPopovers);
+        VecReset(appMenus);
         if (appMenuArena) {
             ArenaDelete(appMenuArena);
         }
@@ -9275,8 +9493,8 @@ struct History {
     bool CanRedo() const { return redos.len > 0; }
 
     void Clear() {
-        undos.Clear();
-        redos.Clear();
+        VecClear(undos);
+        VecClear(redos);
     }
 
     void Push(I item) {
@@ -9292,7 +9510,7 @@ struct History {
             RetainDifferent(&redos, item);
         }
         item.SetVersion(nextVersion);
-        undos.Append(item);
+        VecAppend(undos, item);
 
     }
 
@@ -9350,16 +9568,16 @@ struct History {
         }
         I first = (*from)[from->len - 1];
         from->len--;
-        changes.Append(first);
+        VecAppend(changes, first);
         uint64_t pickedVersion = first.Version();
 
         while (ContainsVersion(*from, pickedVersion)) {
             I change = (*from)[from->len - 1];
             from->len--;
-            changes.Append(change);
+            VecAppend(changes, change);
         }
         for (int i = 0; i < changes.len; i++) {
-            to->Append(changes[i]);
+            VecAppend(*to, changes[i]);
         }
         return changes;
     }
@@ -10931,12 +11149,12 @@ struct ResizableState {
     Listener onResized = {};
 
     ~ResizableState() {
-        sizes.Reset();
-        mins.Reset();
-        maxs.Reset();
-        grows.Reset();
-        shown.Reset();
-        laid.Reset();
+        VecReset(sizes);
+        VecReset(mins);
+        VecReset(maxs);
+        VecReset(grows);
+        VecReset(shown);
+        VecReset(laid);
     }
 
     static void OnHandleDown(ResizableState* self, Ctx* cx,
@@ -11930,7 +12148,7 @@ struct TextSelectionProjection {
     int Len() const { return ranges.len; }
     const TextSelectionRange* Ranges() const { return ranges.els; }
     bool IsActive() const { return active; }
-    void Reset() { ranges.Reset(); }
+    void Reset() { VecReset(ranges); }
 };
 
 enum class TextSelectionEventKind : uint8_t {
@@ -12287,7 +12505,7 @@ struct ToastManager {
         entry.hasTimeout = options.hasTimeout;
         entry.timeoutRemainingMs = options.timeoutMs;
         entry.lastAdvanceMs = nowMs;
-        return entries.Append(entry);
+        return VecAppend(entries, entry);
     }
 
     bool Dismiss(const I& id, int64_t nowMs) {
@@ -12315,7 +12533,7 @@ struct ToastManager {
             entry.status = ToastTransitionStatus::Ending;
             entry.transitionElapsedMs = 0;
             entry.lastAdvanceMs = nowMs;
-            changed.Append(entry.id);
+            VecAppend(changed, entry.id);
         }
         return changed;
     }
@@ -12335,7 +12553,7 @@ struct ToastManager {
                     if (entry.transitionElapsedMs >= transitionDurationMs) {
                         entry.status = ToastTransitionStatus::Present;
                         entry.transitionElapsedMs = 0;
-                        out.presented.Append(entry.id);
+                        VecAppend(out.presented, entry.id);
                         out.changed = true;
                     }
                     break;
@@ -12346,7 +12564,7 @@ struct ToastManager {
                             entry.timeoutRemainingMs = 0;
                             entry.status = ToastTransitionStatus::Ending;
                             entry.transitionElapsedMs = 0;
-                            out.ending.Append(entry.id);
+                            VecAppend(out.ending, entry.id);
                             out.changed = true;
                         }
                     }
@@ -12365,7 +12583,7 @@ struct ToastManager {
                 continue;
             }
             ToastRemoved<I, T> removed = {entry.id, entry.value};
-            if (!out.removed.Append(removed)) {
+            if (!VecAppend(out.removed, removed)) {
                 index++;
                 continue;
             }
@@ -12667,8 +12885,8 @@ struct ItemSizeLayout {
     Bounds lastLayoutBounds = {};
 
     ~ItemSizeLayout() {
-        sizes.Reset();
-        origins.Reset();
+        VecReset(sizes);
+        VecReset(origins);
     }
 };
 
@@ -12822,8 +13040,8 @@ struct TreeState {
     static void OnScroll(TreeState* self, Ctx* cx, const ScrollEvent* ev);
 
     ~TreeState() {
-        items.Reset();
-        entries.Reset();
+        VecReset(items);
+        VecReset(entries);
     }
 };
 
@@ -14596,10 +14814,10 @@ struct SankeyGraph {
     int errNode = 0;
 
     void Reset() {
-        nodes.Reset();
-        links.Reset();
-        srcLinks.Reset();
-        tgtLinks.Reset();
+        VecReset(nodes);
+        VecReset(links);
+        VecReset(srcLinks);
+        VecReset(tgtLinks);
     }
 };
 
@@ -15207,8 +15425,8 @@ struct ListState {
 
     ~ListState() {
         StrFree(lastQuery);
-        sectionCounts.Reset();
-        rowHeights.Reset();
+        VecReset(sectionCounts);
+        VecReset(rowHeights);
     }
 
     static void OnRowClick(ListState* self, Ctx* cx, const ClickEvent* ev,
@@ -15457,7 +15675,7 @@ struct SearchableGroup {
     SearchableGroup* Item(const SearchableListItem& item);
     SearchableGroup* Items(const SearchableListItem* items, int nItems);
     bool Matches(Str query) const;
-    ~SearchableGroup() { items.Reset(); }
+    ~SearchableGroup() { VecReset(items); }
 };
 
 struct SearchableVec {
@@ -15471,8 +15689,8 @@ struct SearchableVec {
     const SearchableListItem* Item(IndexPath path) const;
     bool Position(Str value, IndexPath* out) const;
     ~SearchableVec() {
-        items.Reset();
-        matchedItems.Reset();
+        VecReset(items);
+        VecReset(matchedItems);
     }
 };
 
@@ -15562,8 +15780,8 @@ struct SearchableListState {
                              const ActionEvent* ev);
 
     ~SearchableListState() {
-        selected.Reset();
-        matches.Reset();
+        VecReset(selected);
+        VecReset(matches);
     }
 };
 
@@ -15863,7 +16081,7 @@ struct ComboboxState {
     static void OnMouseDownOut(ComboboxState* self, Ctx* cx,
                                const MouseDownEvent* event);
 
-    ~ComboboxState() { selectionSnapshot.Reset(); }
+    ~ComboboxState() { VecReset(selectionSnapshot); }
 };
 
 Entity<SearchableListState> ComboboxListEntity(Entity<ComboboxState> state);
@@ -16122,10 +16340,10 @@ struct CommandState {
     static void OnAction(CommandState* self, Ctx* cx, const ActionEvent* ev);
 
     ~CommandState() {
-        rows.Reset();
-        matched.Reset();
-        rowSizes.Reset();
-        applied.Reset();
+        VecReset(rows);
+        VecReset(matched);
+        VecReset(rowSizes);
+        VecReset(applied);
     }
 };
 
@@ -16993,7 +17211,7 @@ struct UiGlobalState {
     Vec<EntityId> textViewStateStack;
     uint64_t selectionDocumentOrder = 1;
 
-    ~UiGlobalState() { textViewStateStack.Reset(); }
+    ~UiGlobalState() { VecReset(textViewStateStack); }
 };
 
 UiGlobalState* UiGlobalStateOf(App* app);
@@ -17830,7 +18048,7 @@ struct PopupMenuState {
     static void OnContextDown(PopupMenuState* self, Ctx* cx,
                               const MouseDownEvent* ev);
 
-    ~PopupMenuState() { rows.Reset(); }
+    ~PopupMenuState() { VecReset(rows); }
 };
 
 void PopupMenuOpen(PopupMenuState* s, Ctx* cx);
@@ -19670,7 +19888,7 @@ struct SettingsState {
     InputState search;
     Vec<SettingBinding> fields;
 
-    ~SettingsState() { fields.Reset(); }
+    ~SettingsState() { VecReset(fields); }
 
     static void OnPageClick(SettingsState* self, Ctx* cx, const ClickEvent* ev,
                             intptr_t page);
@@ -20498,11 +20716,11 @@ struct TableState {
     FocusHandle focus = {};
 
     ~TableState() {
-        colWidth.Reset();
-        colMinWidths.Reset();
-        colMaxWidths.Reset();
-        colOrder.Reset();
-        colBounds.Reset();
+        VecReset(colWidth);
+        VecReset(colMinWidths);
+        VecReset(colMaxWidths);
+        VecReset(colOrder);
+        VecReset(colBounds);
     }
     Listener onLoadMore = {};
 
@@ -21984,6 +22202,8 @@ struct FpsReadout {
     float droppedPercent = 0;
 };
 
+struct FpsResourceJob;
+
 struct FpsMonitor {
     FrameSampler sampler;
     FpsReadout readout;
@@ -21997,13 +22217,18 @@ struct FpsMonitor {
     ResourceProbe probe;
     ResourceSample resources;
     bool hasResources = false;
-    double resourcesAt = -1;
+    Window* resourceWindow = nullptr;
+    int resourceTimer = 0;
+    int resourceTask = 0;
+    FpsResourceJob* resourceJob = nullptr;
     bool compact = false;
 
     float axisMax = (1.f / 60.f) * 2.f;
 
+    ~FpsMonitor();
     static El* Render(FpsMonitor* self, Ctx* cx);
     static void OnToggleCompact(FpsMonitor* self, Ctx* cx, const ClickEvent*);
+    static void OnResourceTick(FpsMonitor* self, Ctx* cx, const TickEvent*);
 };
 
 enum class FpsAnchor : uint8_t {
@@ -24503,7 +24728,7 @@ class SpecArena {
     bool CheckLive(SpecId id, SpecError* error) const;
     Component CopyComponent(const Component& component);
     SpecOp CopyOp(const SpecOp& op);
-    void WriteTree(StrBuilder* out, SpecId id, int depth) const;
+    void WriteTree(Arena* a, StrBuilder* out, SpecId id, int depth) const;
 };
 
 }
