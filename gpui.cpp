@@ -34561,9 +34561,8 @@ namespace gpui {
 
 Rgba ResizableHandleColor(const base_theme::Theme& theme, bool active) {
     if (active) {
-        return theme.resizable.hasActiveHandle
-                   ? theme.resizable.activeHandle
-                   : theme.tokens.colors.ring;
+        return theme.resizable.hasActiveHandle ? theme.resizable.activeHandle
+                                               : theme.tokens.colors.ring;
     }
     return theme.resizable.hasHandle ? theme.resizable.handle
                                      : theme.tokens.colors.border;
@@ -34758,9 +34757,9 @@ bool ResizableState::ResizePanel(Ctx* cx, int ix, float size) {
         handle = ix - 1;
         requested = sizes[handle] + sizes[ix] - size;
     }
-    bool changed = ResizablePanelResize(sizes.els, mins.els, maxs.els,
-                                        sizes.len, handle, requested,
-                                        ContainerSize());
+    bool changed =
+        ResizablePanelResize(sizes.els, mins.els, maxs.els, sizes.len, handle,
+                             requested, ContainerSize());
 
     if (onResized.IsValid()) {
         ResizablePanelEvent ev = {sizes.els, sizes.len};
@@ -34797,8 +34796,10 @@ bool ResizableState::RemovePanel(Ctx* cx, int ix) {
     if (ix < grows.len) ResizableVecRemove(&grows, ix);
     if (ix < shown.len) ResizableVecRemove(&shown, ix);
     if (ix < laid.len) ResizableVecRemove(&laid, ix);
-    if (dragging == ix) dragging = -1;
-    else if (dragging > ix) dragging--;
+    if (dragging == ix)
+        dragging = -1;
+    else if (dragging > ix)
+        dragging--;
     ResizableAdjustToContainer(sizes.els, sizes.len, ContainerSize());
     Notify(cx);
     return true;
@@ -34827,8 +34828,9 @@ void ResizableState::Clear() {
     lastContainer = 0;
 }
 
-ResizablePanelGroup* ResizablePanelGroup::New(
-    Ctx* cx, Str id, Entity<ResizableState> state, gpui::Axis axis) {
+ResizablePanelGroup* ResizablePanelGroup::New(Ctx* cx, Str id,
+                                              Entity<ResizableState> state,
+                                              gpui::Axis axis) {
     Arena* a = cx->a;
     ResizablePanelGroup* r = ArenaNew<ResizablePanelGroup>(a);
     r->a = a;
@@ -34903,8 +34905,8 @@ ResizeHandle* ResizeHandle::OnDrag(Listener listener) {
     return this;
 }
 
-ResizeHandle* ResizeHandle::WithAppearance(
-    void* user, ResizeHandleRenderer renderer) {
+ResizeHandle* ResizeHandle::WithAppearance(void* user,
+                                           ResizeHandleRenderer renderer) {
     appearanceUser = user;
     appearance = renderer;
     return this;
@@ -34924,8 +34926,10 @@ El* ResizeHandle::IntoEl() {
     El* line = appearance ? appearance(appearanceUser, &context, cx) : nullptr;
     if (!line) {
         line = Div(cx->a)->Bg(active ? activeColor : color);
-        if (AxisIsHorizontal(axis)) line->W(kResizeHandleSize)->H(kFill);
-        else line->H(kResizeHandleSize)->W(kFill);
+        if (AxisIsHorizontal(axis))
+            line->W(kResizeHandleSize)->H(kFill);
+        else
+            line->H(kResizeHandleSize)->W(kFill);
     }
     El* handle = Div(cx->a)
                      ->Absolute()
@@ -34937,9 +34941,7 @@ El* ResizeHandle::IntoEl() {
         handle->OnDrag(kResizeDrag, 0)->OnDragMove(onDrag);
     }
     if (AxisIsHorizontal(axis)) {
-        handle->Cursor(CursorKind::ColResize)
-            ->Top(0)
-            ->H(kFill);
+        handle->Cursor(CursorKind::ColResize)->Top(0)->H(kFill);
         if (hasPlacement && SideIsLeft(placement)) {
 
             handle->Right(1)
@@ -34966,8 +34968,10 @@ ResizeHandle* resize_handle(Ctx* cx, Str id, Axis axis) {
 }
 
 ResizablePanelGroup* ResizablePanelGroup::Size(float v) {
-    if (AxisIsHorizontal(groupAxis)) height = v;
-    else width = v;
+    if (AxisIsHorizontal(groupAxis))
+        height = v;
+    else
+        width = v;
     return this;
 }
 
@@ -34983,7 +34987,7 @@ ResizablePanelGroup* ResizablePanelGroup::Axis(gpui::Axis value) {
 }
 
 ResizablePanelGroup* ResizablePanelGroup::HandleColors(Rgba rest,
-                                                        Rgba dragging) {
+                                                       Rgba dragging) {
     handleColor = rest;
     handleDragColor = dragging;
     return this;
@@ -35002,7 +35006,7 @@ ResizablePanelGroup* ResizablePanelGroup::OnResize(Listener listener) {
 }
 
 ResizablePanelGroup* ResizablePanelGroup::Panel(El* content, float size,
-                                                 float min, float max) {
+                                                float min, float max) {
     panels.Append(a, content);
     sizes.Append(a, size);
     mins.Append(a, min);
@@ -35040,7 +35044,7 @@ ResizablePanelGroup* ResizablePanelGroup::Child(ResizablePanel* panel) {
 }
 
 ResizablePanelGroup* ResizablePanelGroup::Children(ResizablePanel** values,
-                                                    int count) {
+                                                   int count) {
     panels.len = 0;
     sizes.len = 0;
     mins.len = 0;
@@ -35102,7 +35106,15 @@ El* ResizablePanelGroup::IntoEl() {
 
     float container = horiz ? s->bounds.w : s->bounds.h;
     bool resolved = true;
+    bool anyGrow = false;
     for (int i = 0; i < panels.len; i++) {
+        if (shown[i] && grows[i]) {
+            anyGrow = true;
+        }
+
+        if (grows[i]) {
+            continue;
+        }
         if (s->sizes[i] <= 0 && shown[i] && i < s->laid.len) {
             float was = horiz ? s->laid[i].w : s->laid[i].h;
             if (was > 0) {
@@ -35112,7 +35124,7 @@ El* ResizablePanelGroup::IntoEl() {
         resolved = resolved && (s->sizes[i] > 0 || !shown[i]);
     }
 
-    if (resolved && container > 0 && s->lastContainer > 0 &&
+    if (!anyGrow && resolved && container > 0 && s->lastContainer > 0 &&
         container != s->lastContainer) {
         ResizableAdjustToContainer(s->sizes.els, s->sizes.len, container);
     }
@@ -35180,10 +35192,9 @@ El* ResizablePanelGroup::IntoEl() {
                 h->nextUp = up;
             }
             ResizeHandleContext handleContext = {s->axis, active};
-            El* line = handleAppearance
-                           ? handleAppearance(handleAppearanceUser,
-                                              &handleContext, cx)
-                           : nullptr;
+            El* line = handleAppearance ? handleAppearance(handleAppearanceUser,
+                                                           &handleContext, cx)
+                                        : nullptr;
             bool builtInLine = line == nullptr;
             if (!line) {
                 line = Div(a)->Bg(active ? handleDragColor : handleColor);
@@ -35259,12 +35270,12 @@ ResizablePanel* ResizablePanel::Visible(bool value) {
 }
 
 ResizablePanelGroup* h_resizable(Ctx* cx, Str id,
-                                  Entity<ResizableState> state) {
+                                 Entity<ResizableState> state) {
     return ResizablePanelGroup::New(cx, id, state, Axis::Horizontal);
 }
 
 ResizablePanelGroup* v_resizable(Ctx* cx, Str id,
-                                  Entity<ResizableState> state) {
+                                 Entity<ResizableState> state) {
     return ResizablePanelGroup::New(cx, id, state, Axis::Vertical);
 }
 
@@ -48474,15 +48485,27 @@ static bool HighlightNameColor(Str name, ThemeMode mode, Rgba fallback,
         const char* name;
         SyntaxTok tok;
     } kMap[] = {
-        {"keyword", SyntaxTok::Keyword},   {"type", SyntaxTok::Type},
-        {"class", SyntaxTok::Type},        {"struct", SyntaxTok::Type},
-        {"enum", SyntaxTok::Type},         {"interface", SyntaxTok::Type},
-        {"function", SyntaxTok::Function}, {"method", SyntaxTok::Function},
-        {"macro", SyntaxTok::Function},    {"property", SyntaxTok::Property},
-        {"variable", SyntaxTok::Property}, {"parameter", SyntaxTok::Property},
-        {"string", SyntaxTok::String},     {"number", SyntaxTok::Number},
-        {"boolean", SyntaxTok::Boolean},   {"comment", SyntaxTok::Comment},
-        {"tag", SyntaxTok::Tag},           {"attribute", SyntaxTok::Attribute},
+        {"keyword", SyntaxTok::Keyword},
+        {"type", SyntaxTok::Type},
+        {"class", SyntaxTok::Type},
+        {"struct", SyntaxTok::Type},
+        {"enum", SyntaxTok::Type},
+        {"interface", SyntaxTok::Type},
+        {"function", SyntaxTok::Function},
+        {"method", SyntaxTok::Function},
+        {"macro", SyntaxTok::Function},
+        {"property", SyntaxTok::Property},
+        {"variable", SyntaxTok::Property},
+        {"parameter", SyntaxTok::Property},
+        {"string", SyntaxTok::String},
+        {"number", SyntaxTok::Number},
+        {"boolean", SyntaxTok::Boolean},
+        {"comment", SyntaxTok::Comment},
+        {"tag", SyntaxTok::Tag},
+        {"attribute", SyntaxTok::Attribute},
+        {"title", SyntaxTok::Title},
+        {"text.literal", SyntaxTok::Literal},
+        {"text.code.span", SyntaxTok::Literal},
     };
     Str head = name;
     for (int pass = 0; pass < 2; pass++) {
@@ -48685,6 +48708,10 @@ static Str SynHlTokName(SyntaxTok tok) {
             return StrL("tag");
         case SyntaxTok::Attribute:
             return StrL("attribute");
+        case SyntaxTok::Title:
+            return StrL("title");
+        case SyntaxTok::Literal:
+            return StrL("text.literal");
         default:
             return Str{};
     }
@@ -61596,6 +61623,7 @@ El* StatusBar::IntoEl() {
     El* bar = Div(a)
                   ->FlexRow()
                   ->W(kFill)
+                  ->Shrink0()
                   ->ItemsCenter()
                   ->Gap(8)
                   ->PadY(4)
@@ -62258,8 +62286,7 @@ static int SyntaxSkipSpace(const SyntaxLexer* lx, int at) {
 
 static bool SyntaxAt(const SyntaxLexer* lx, int at, const char* s) {
     int n = (int)strlen(s);
-    return at + n <= lx->src.len &&
-           StrEq(Str(lx->src.s + at, n), Str(s, n));
+    return at + n <= lx->src.len && StrEq(Str(lx->src.s + at, n), Str(s, n));
 }
 
 static void SyntaxScanString(SyntaxLexer* lx, char quote, bool escapes) {
@@ -62353,10 +62380,8 @@ static bool SyntaxNextMarkdown(SyntaxLexer* lx) {
         lx->at = end;
         if (MdIsFenceLine(line)) {
             lx->inFence = false;
-            SyntaxEmit(lx, start, SyntaxTok::Keyword);
-        } else {
-            SyntaxEmit(lx, start, SyntaxTok::Text);
         }
+        SyntaxEmit(lx, start, SyntaxTok::Literal);
         return true;
     }
 
@@ -62385,13 +62410,13 @@ static bool SyntaxNextMarkdown(SyntaxLexer* lx) {
         if (MdIsFenceLine(line)) {
             lx->inFence = true;
             lx->at = end;
-            SyntaxEmit(lx, start, SyntaxTok::Keyword);
+            SyntaxEmit(lx, start, SyntaxTok::Literal);
             return true;
         }
         if (c == '#') {
 
             lx->at = end;
-            SyntaxEmit(lx, start, SyntaxTok::Keyword);
+            SyntaxEmit(lx, start, SyntaxTok::Title);
             return true;
         }
         if (c == '>') {
@@ -62428,7 +62453,7 @@ static bool SyntaxNextMarkdown(SyntaxLexer* lx) {
                 break;
             }
         }
-        SyntaxEmit(lx, start, SyntaxTok::String);
+        SyntaxEmit(lx, start, SyntaxTok::Literal);
         return true;
     }
     bool image = c == '!' && lx->at + 1 < s.len && s.s[lx->at + 1] == '[';
@@ -62693,6 +62718,9 @@ static const SyntaxColorRow kColors[] = {
     {SyntaxTok::Comment, {0x00, 0x7f, 0xff, 0xff}, {0x9e, 0x9e, 0x9e, 0xff}},
     {SyntaxTok::Tag, {0x04, 0x33, 0xff, 0xff}, {0xb5, 0xaf, 0x9a, 0xff}},
     {SyntaxTok::Attribute, {0x95, 0x79, 0x31, 0xff}, {0xe7, 0xcb, 0x8f, 0xff}},
+
+    {SyntaxTok::Title, {0x04, 0x33, 0xff, 0xff}, {0xcc, 0x9e, 0x00, 0xff}},
+    {SyntaxTok::Literal, {0x6f, 0x42, 0xc1, 0xff}, {0xa3, 0xe0, 0x9f, 0xff}},
 };
 
 Rgba SyntaxTokColor(SyntaxTok tok, ThemeMode mode, Rgba fallback) {
@@ -71624,8 +71652,13 @@ TitleBar* TitleBar::New(Ctx* cx) {
     t->cx = cx;
 
     Rgba mixed = RgbaMix(th.titleBar, th.background, 0.55f);
-    t->content =
-        Div(a)->FlexRow()->H(kFill)->Flex1()->ItemsCenter()->JustifyBetween();
+    t->content = Div(a)
+                     ->FlexRow()
+                     ->H(kFill)
+                     ->Flex1()
+                     ->MinW(0)
+                     ->ItemsCenter()
+                     ->JustifyBetween();
     t->bar = Div(a)
                  ->FlexRow()
                  ->W(kFill)
@@ -140464,6 +140497,8 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
         desc.BufferCount = 3;
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+
+        desc.Scaling = DXGI_SCALING_NONE;
         HRESULT hr = ctx->pa->dxgiFactory->CreateSwapChainForHwnd(
             ctx->pa->d3d, hwnd, &desc, nullptr, nullptr, &t->swap);
         if (FAILED(hr)) {
@@ -141926,14 +141961,11 @@ static bool EnsureShaderBytes() {
     if (result >= 0) {
         return result != 0;
     }
-    bool ok = DecodeBase95(kShaderVSQuad95, kShaderVSQuadBytes,
-                           kShaderVSQuadSize) &&
-              DecodeBase95(kShaderPSQuad95, kShaderPSQuadBytes,
-                           kShaderPSQuadSize) &&
-              DecodeBase95(kShaderVSTri95, kShaderVSTriBytes,
-                           kShaderVSTriSize) &&
-              DecodeBase95(kShaderPSTri95, kShaderPSTriBytes,
-                           kShaderPSTriSize);
+    bool ok =
+        DecodeBase95(kShaderVSQuad95, kShaderVSQuadBytes, kShaderVSQuadSize) &&
+        DecodeBase95(kShaderPSQuad95, kShaderPSQuadBytes, kShaderPSQuadSize) &&
+        DecodeBase95(kShaderVSTri95, kShaderVSTriBytes, kShaderVSTriSize) &&
+        DecodeBase95(kShaderPSTri95, kShaderPSTriBytes, kShaderPSTriSize);
     result = ok ? 1 : 0;
     if (!ok) {
         logf("paint/gpu: embedded shader bytecode is invalid");
@@ -142196,8 +142228,7 @@ static D3D12_RESOURCE_DESC D12Buffer(UINT64 bytes) {
 }
 
 static D3D12_RESOURCE_DESC D12Texture(int w, int h, DXGI_FORMAT format,
-                                     int samples,
-                                     D3D12_RESOURCE_FLAGS flags) {
+                                      int samples, D3D12_RESOURCE_FLAGS flags) {
     D3D12_RESOURCE_DESC d = {};
     d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     d.Width = (UINT64)w;
@@ -142227,13 +142258,15 @@ static void D12Barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* r,
 }
 
 static D3D12_CPU_DESCRIPTOR_HANDLE D12SrvCpu(int ix) {
-    D3D12_CPU_DESCRIPTOR_HANDLE h = gD12.srvHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE h = gD12.srvHeap
+                                        ->GetCPUDescriptorHandleForHeapStart();
     h.ptr += (SIZE_T)ix * gD12.srvStep;
     return h;
 }
 
 static D3D12_GPU_DESCRIPTOR_HANDLE D12SrvGpu(int ix) {
-    D3D12_GPU_DESCRIPTOR_HANDLE h = gD12.srvHeap->GetGPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE h = gD12.srvHeap
+                                        ->GetGPUDescriptorHandleForHeapStart();
     h.ptr += (UINT64)ix * gD12.srvStep;
     return h;
 }
@@ -142310,19 +142343,19 @@ static bool D12MakePipelines(int samples) {
     d.RTVFormats[0] = DXGI_FORMAT_B8G8R8A8_UNORM;
     d.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
     d.SampleDesc.Count = (UINT)samples;
-    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
-                                                    (void**)&p->quad))) {
+    if (FAILED(g->dev->CreateGraphicsPipelineState(
+            &d, __uuidof(ID3D12PipelineState), (void**)&p->quad))) {
         return false;
     }
 
     D3D12_DEPTH_STENCIL_DESC cover = D12DepthOff();
     cover.StencilEnable = TRUE;
-    cover.FrontFace = D12StencilOp(D3D12_STENCIL_OP_ZERO,
-                                   D3D12_COMPARISON_FUNC_NOT_EQUAL);
+    cover.FrontFace =
+        D12StencilOp(D3D12_STENCIL_OP_ZERO, D3D12_COMPARISON_FUNC_NOT_EQUAL);
     cover.BackFace = cover.FrontFace;
     d.DepthStencilState = cover;
-    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
-                                                    (void**)&p->cover))) {
+    if (FAILED(g->dev->CreateGraphicsPipelineState(
+            &d, __uuidof(ID3D12PipelineState), (void**)&p->cover))) {
         return false;
     }
 
@@ -142338,8 +142371,8 @@ static bool D12MakePipelines(int samples) {
     d.VS = {kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize};
     d.PS = {kShaderPSTriBytes, (SIZE_T)kShaderPSTriSize};
     d.DepthStencilState = D12DepthOff();
-    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
-                                                    (void**)&p->tri))) {
+    if (FAILED(g->dev->CreateGraphicsPipelineState(
+            &d, __uuidof(ID3D12PipelineState), (void**)&p->tri))) {
         return false;
     }
 
@@ -142347,21 +142380,21 @@ static bool D12MakePipelines(int samples) {
     d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
     D3D12_DEPTH_STENCIL_DESC stencil = D12DepthOff();
     stencil.StencilEnable = TRUE;
-    stencil.FrontFace = D12StencilOp(D3D12_STENCIL_OP_INVERT,
-                                     D3D12_COMPARISON_FUNC_ALWAYS);
+    stencil.FrontFace =
+        D12StencilOp(D3D12_STENCIL_OP_INVERT, D3D12_COMPARISON_FUNC_ALWAYS);
     stencil.BackFace = stencil.FrontFace;
     d.DepthStencilState = stencil;
-    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
-                                                    (void**)&p->evenOdd))) {
+    if (FAILED(g->dev->CreateGraphicsPipelineState(
+            &d, __uuidof(ID3D12PipelineState), (void**)&p->evenOdd))) {
         return false;
     }
-    stencil.FrontFace = D12StencilOp(D3D12_STENCIL_OP_INCR,
-                                     D3D12_COMPARISON_FUNC_ALWAYS);
-    stencil.BackFace = D12StencilOp(D3D12_STENCIL_OP_DECR,
-                                    D3D12_COMPARISON_FUNC_ALWAYS);
+    stencil.FrontFace =
+        D12StencilOp(D3D12_STENCIL_OP_INCR, D3D12_COMPARISON_FUNC_ALWAYS);
+    stencil.BackFace =
+        D12StencilOp(D3D12_STENCIL_OP_DECR, D3D12_COMPARISON_FUNC_ALWAYS);
     d.DepthStencilState = stencil;
-    if (FAILED(g->dev->CreateGraphicsPipelineState(&d, __uuidof(ID3D12PipelineState),
-                                                    (void**)&p->nonZero))) {
+    if (FAILED(g->dev->CreateGraphicsPipelineState(
+            &d, __uuidof(ID3D12PipelineState), (void**)&p->nonZero))) {
         return false;
     }
     return true;
@@ -142396,11 +142429,10 @@ static bool D12EnsureGpu(PaintApp* pa) {
         }
         adapter->Release();
     }
-    HRESULT hr = chosen
-                     ? D3D12CreateDevice(chosen, D3D_FEATURE_LEVEL_11_0,
-                                         __uuidof(ID3D12Device),
-                                         (void**)&g->dev)
-                     : E_FAIL;
+    HRESULT hr =
+        chosen ? D3D12CreateDevice(chosen, D3D_FEATURE_LEVEL_11_0,
+                                   __uuidof(ID3D12Device), (void**)&g->dev)
+               : E_FAIL;
     if (chosen) {
         chosen->Release();
     }
@@ -142422,17 +142454,16 @@ static bool D12EnsureGpu(PaintApp* pa) {
     D3D12_COMMAND_QUEUE_DESC qd = {};
     qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     if (FAILED(g->dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue),
-                                           (void**)&g->queue))) {
+                                          (void**)&g->queue))) {
         return false;
     }
     ID3D12CommandAllocator* bootstrap = nullptr;
     if (FAILED(g->dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                               __uuidof(ID3D12CommandAllocator),
-                                               (void**)&bootstrap)) ||
-        FAILED(g->dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                         bootstrap, nullptr,
-                                         __uuidof(ID3D12GraphicsCommandList),
-                                         (void**)&g->list))) {
+                                              __uuidof(ID3D12CommandAllocator),
+                                              (void**)&bootstrap)) ||
+        FAILED(g->dev->CreateCommandList(
+            0, D3D12_COMMAND_LIST_TYPE_DIRECT, bootstrap, nullptr,
+            __uuidof(ID3D12GraphicsCommandList), (void**)&g->list))) {
         gpui_paintgpu_win_Rel(&bootstrap);
         return false;
     }
@@ -142444,7 +142475,7 @@ static bool D12EnsureGpu(PaintApp* pa) {
     hd.NumDescriptors = 1 + kD12ImageSlots;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (FAILED(g->dev->CreateDescriptorHeap(&hd, __uuidof(ID3D12DescriptorHeap),
-                                             (void**)&g->srvHeap))) {
+                                            (void**)&g->srvHeap))) {
         return false;
     }
     g->srvStep = g->dev->GetDescriptorHandleIncrementSize(
@@ -142498,10 +142529,9 @@ static bool D12EnsureGpu(PaintApp* pa) {
         }
         return false;
     }
-    hr = g->dev->CreateRootSignature(0, sig->GetBufferPointer(),
-                                     sig->GetBufferSize(),
-                                     __uuidof(ID3D12RootSignature),
-                                     (void**)&g->root);
+    hr = g->dev->CreateRootSignature(
+        0, sig->GetBufferPointer(), sig->GetBufferSize(),
+        __uuidof(ID3D12RootSignature), (void**)&g->root);
     sig->Release();
     if (err) {
         err->Release();
@@ -142510,13 +142540,12 @@ static bool D12EnsureGpu(PaintApp* pa) {
         return false;
     }
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
-    D3D12_RESOURCE_DESC atlas = D12Texture(
-        kAtlasDim, kAtlasDim, DXGI_FORMAT_R8_UNORM, 1,
-        D3D12_RESOURCE_FLAG_NONE);
+    D3D12_RESOURCE_DESC atlas =
+        D12Texture(kAtlasDim, kAtlasDim, DXGI_FORMAT_R8_UNORM, 1,
+                   D3D12_RESOURCE_FLAG_NONE);
     if (FAILED(g->dev->CreateCommittedResource(
-            &heap, D3D12_HEAP_FLAG_NONE, &atlas,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
-            (void**)&g->atlas))) {
+            &heap, D3D12_HEAP_FLAG_NONE, &atlas, D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr, __uuidof(ID3D12Resource), (void**)&g->atlas))) {
         return false;
     }
     D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
@@ -142526,8 +142555,7 @@ static bool D12EnsureGpu(PaintApp* pa) {
     sv.Texture2D.MipLevels = 1;
     g->dev->CreateShaderResourceView(g->atlas, &sv, D12SrvCpu(0));
     if (FAILED(g->dev->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-                                    __uuidof(ID3D12Fence),
-                                    (void**)&g->fence))) {
+                                   __uuidof(ID3D12Fence), (void**)&g->fence))) {
         return false;
     }
     g->fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -142540,7 +142568,9 @@ static bool D12EnsureGpu(PaintApp* pa) {
     return true;
 }
 #else
-static bool D12EnsureGpu(PaintApp*) { return false; }
+static bool D12EnsureGpu(PaintApp*) {
+    return false;
+}
 #endif
 
 static bool MakeAtlas(Gpu* g) {
@@ -142646,19 +142676,18 @@ static bool EnsureGpu(PaintApp* pa) {
         return false;
     }
 
-    bool ok = EnsureShaderBytes() &&
-              SUCCEEDED(g->dev->CreateVertexShader(
-                  kShaderVSQuadBytes, (SIZE_T)kShaderVSQuadSize, nullptr,
-                  &g->vsQuad)) &&
-              SUCCEEDED(g->dev->CreatePixelShader(
-                  kShaderPSQuadBytes, (SIZE_T)kShaderPSQuadSize, nullptr,
-                  &g->psQuad)) &&
-              SUCCEEDED(g->dev->CreateVertexShader(
-                  kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize, nullptr,
-                  &g->vsTri)) &&
-              SUCCEEDED(g->dev->CreatePixelShader(
-                  kShaderPSTriBytes, (SIZE_T)kShaderPSTriSize, nullptr,
-                  &g->psTri));
+    bool ok =
+        EnsureShaderBytes() &&
+        SUCCEEDED(g->dev->CreateVertexShader(kShaderVSQuadBytes,
+                                             (SIZE_T)kShaderVSQuadSize, nullptr,
+                                             &g->vsQuad)) &&
+        SUCCEEDED(g->dev->CreatePixelShader(kShaderPSQuadBytes,
+                                            (SIZE_T)kShaderPSQuadSize, nullptr,
+                                            &g->psQuad)) &&
+        SUCCEEDED(g->dev->CreateVertexShader(
+            kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize, nullptr, &g->vsTri)) &&
+        SUCCEEDED(g->dev->CreatePixelShader(
+            kShaderPSTriBytes, (SIZE_T)kShaderPSTriSize, nullptr, &g->psTri));
     if (ok) {
         D3D11_INPUT_ELEMENT_DESC el[] = {
             {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
@@ -142669,8 +142698,7 @@ static bool EnsureGpu(PaintApp* pa) {
              D3D11_INPUT_PER_VERTEX_DATA, 0},
         };
         ok = SUCCEEDED(g->dev->CreateInputLayout(
-            el, 3, kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize,
-            &g->triLayout));
+            el, 3, kShaderVSTriBytes, (SIZE_T)kShaderVSTriSize, &g->triLayout));
     }
     if (!ok) {
         return false;
@@ -142858,8 +142886,8 @@ static void D12FreeTarget(D12Target* t) {
 }
 
 static D3D12_CPU_DESCRIPTOR_HANDLE D12Rtv(D12Target* t, int ix) {
-    D3D12_CPU_DESCRIPTOR_HANDLE h =
-        t->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE h = t->rtvHeap
+                                        ->GetCPUDescriptorHandleForHeapStart();
     h.ptr += (SIZE_T)ix * gD12.dev->GetDescriptorHandleIncrementSize(
                               D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     return h;
@@ -142913,9 +142941,9 @@ static bool D12MakeWindowSurfaces(D12Target* t) {
     t->samples = D12SupportedSamples(t->samples);
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
     if (t->samples > 1) {
-        D3D12_RESOURCE_DESC color = D12Texture(
-            t->pxW, t->pxH, DXGI_FORMAT_B8G8R8A8_UNORM, t->samples,
-            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        D3D12_RESOURCE_DESC color =
+            D12Texture(t->pxW, t->pxH, DXGI_FORMAT_B8G8R8A8_UNORM, t->samples,
+                       D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         D3D12_CLEAR_VALUE cv = {};
         cv.Format = color.Format;
         if (FAILED(gD12.dev->CreateCommittedResource(
@@ -142929,16 +142957,16 @@ static bool D12MakeWindowSurfaces(D12Target* t) {
         rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2DMS;
         gD12.dev->CreateRenderTargetView(t->msaa, &rv, D12Rtv(t, 3));
     }
-    D3D12_RESOURCE_DESC depth = D12Texture(
-        t->pxW, t->pxH, DXGI_FORMAT_D24_UNORM_S8_UINT, t->samples,
-        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    D3D12_RESOURCE_DESC depth =
+        D12Texture(t->pxW, t->pxH, DXGI_FORMAT_D24_UNORM_S8_UINT, t->samples,
+                   D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
     D3D12_CLEAR_VALUE dv = {};
     dv.Format = depth.Format;
     dv.DepthStencil.Depth = 1.f;
     if (FAILED(gD12.dev->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &depth,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE, &dv,
-            __uuidof(ID3D12Resource), (void**)&t->depth))) {
+            D3D12_RESOURCE_STATE_DEPTH_WRITE, &dv, __uuidof(ID3D12Resource),
+            (void**)&t->depth))) {
         return false;
     }
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
@@ -142955,41 +142983,41 @@ static bool D12MakeOffscreenSurfaces(D12Target* t) {
         return false;
     }
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
-    D3D12_RESOURCE_DESC color = D12Texture(
-        t->pxW, t->pxH, DXGI_FORMAT_B8G8R8A8_UNORM, 1,
-        D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    D3D12_RESOURCE_DESC color =
+        D12Texture(t->pxW, t->pxH, DXGI_FORMAT_B8G8R8A8_UNORM, 1,
+                   D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     D3D12_CLEAR_VALUE cv = {};
     cv.Format = color.Format;
     if (FAILED(gD12.dev->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &color,
-            D3D12_RESOURCE_STATE_RENDER_TARGET, &cv,
-            __uuidof(ID3D12Resource), (void**)&t->offTex))) {
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &cv, __uuidof(ID3D12Resource),
+            (void**)&t->offTex))) {
         return false;
     }
     gD12.dev->CreateRenderTargetView(t->offTex, nullptr, D12Rtv(t, 3));
     UINT rows = 0;
     UINT64 rowBytes = 0;
-    gD12.dev->GetCopyableFootprints(&color, 0, 1, 0, &t->readbackLayout,
-                                    &rows, &rowBytes, &t->readbackBytes);
+    gD12.dev->GetCopyableFootprints(&color, 0, 1, 0, &t->readbackLayout, &rows,
+                                    &rowBytes, &t->readbackBytes);
     D3D12_HEAP_PROPERTIES readHeap = D12Heap(D3D12_HEAP_TYPE_READBACK);
     D3D12_RESOURCE_DESC read = D12Buffer(t->readbackBytes);
     if (FAILED(gD12.dev->CreateCommittedResource(
             &readHeap, D3D12_HEAP_FLAG_NONE, &read,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-            __uuidof(ID3D12Resource), (void**)&t->readback))) {
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+            (void**)&t->readback))) {
         return false;
     }
     t->samples = 1;
-    D3D12_RESOURCE_DESC depth = D12Texture(
-        t->pxW, t->pxH, DXGI_FORMAT_D24_UNORM_S8_UINT, 1,
-        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+    D3D12_RESOURCE_DESC depth =
+        D12Texture(t->pxW, t->pxH, DXGI_FORMAT_D24_UNORM_S8_UINT, 1,
+                   D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
     D3D12_CLEAR_VALUE dv = {};
     dv.Format = depth.Format;
     dv.DepthStencil.Depth = 1.f;
     if (FAILED(gD12.dev->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &depth,
-            D3D12_RESOURCE_STATE_DEPTH_WRITE, &dv,
-            __uuidof(ID3D12Resource), (void**)&t->depth))) {
+            D3D12_RESOURCE_STATE_DEPTH_WRITE, &dv, __uuidof(ID3D12Resource),
+            (void**)&t->depth))) {
         return false;
     }
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
@@ -143032,8 +143060,7 @@ static bool D12BeginCommands(D12Target* t) {
         t->offscreen ? D12Rtv(t, 3)
                      : (t->msaa ? D12Rtv(t, 3) : D12Rtv(t, t->frameIx));
     if (!t->offscreen && !t->msaa) {
-        D12Barrier(gD12.list, t->back[t->frameIx],
-                   D3D12_RESOURCE_STATE_PRESENT,
+        D12Barrier(gD12.list, t->back[t->frameIx], D3D12_RESOURCE_STATE_PRESENT,
                    D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = D12Dsv(t);
@@ -143105,10 +143132,9 @@ static void* D12Upload(UINT64 bytes, UINT64 align,
 }
 
 static bool D12UploadTexture(ID3D12Resource* texture,
-                             D3D12_RESOURCE_STATES* state,
-                             DXGI_FORMAT format, int x, int y, int w, int h,
-                             int bytesPerPixel, const uint8_t* pixels,
-                             int srcPitch) {
+                             D3D12_RESOURCE_STATES* state, DXGI_FORMAT format,
+                             int x, int y, int w, int h, int bytesPerPixel,
+                             const uint8_t* pixels, int srcPitch) {
     D12Target* t = (D12Target*)gB.target;
     if (!t || !texture || !state || !pixels || w <= 0 || h <= 0) {
         return false;
@@ -143216,9 +143242,9 @@ static void D12SubmitTris(D3D12_PRIMITIVE_TOPOLOGY topology, TriMode mode) {
     }
     memcpy(dst, gB.tris.els, (size_t)bytes);
     D12Pipelines* p = &gD12.pipes[D12PipeIx(t->samples)];
-    ID3D12PipelineState* state =
-        mode == kTriEvenOdd ? p->evenOdd
-                            : mode == kTriNonZero ? p->nonZero : p->tri;
+    ID3D12PipelineState* state = mode == kTriEvenOdd   ? p->evenOdd
+                                 : mode == kTriNonZero ? p->nonZero
+                                                       : p->tri;
     gD12.list->SetPipelineState(state);
     D3D12_VERTEX_BUFFER_VIEW vb = {};
     vb.BufferLocation = gpu;
@@ -143316,9 +143342,9 @@ static void FlushTris(D3D_PRIMITIVE_TOPOLOGY topo, TriMode mode) {
     UINT off = 0;
     g->ctx->VSSetShader(g->vsTri, nullptr, 0);
     bool colorWrite = mode == kTriColor;
-    ID3D11DepthStencilState* ds =
-        mode == kTriEvenOdd ? g->dsEvenOdd
-                            : mode == kTriNonZero ? g->dsNonZero : g->dsOff;
+    ID3D11DepthStencilState* ds = mode == kTriEvenOdd   ? g->dsEvenOdd
+                                  : mode == kTriNonZero ? g->dsNonZero
+                                                        : g->dsOff;
     g->ctx->PSSetShader(colorWrite ? g->psTri : nullptr, nullptr, 0);
     g->ctx->IASetInputLayout(g->triLayout);
     g->ctx->IASetVertexBuffers(0, 1, &g->triBuf, &stride, &off);
@@ -143521,8 +143547,7 @@ static void BeginFrameState(Gpu* g, GpuTarget* t) {
     gB.stats = FrameStats{};
 }
 
-static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW,
-                                int pxH) {
+static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
     if (!ctx || !ctx->pa || !D12EnsureGpu(ctx->pa)) {
         return false;
     }
@@ -143551,12 +143576,13 @@ static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW,
         desc.BufferCount = kD12FrameCount;
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        desc.Scaling = DXGI_SCALING_NONE;
         IDXGISwapChain1* swap1 = nullptr;
         HRESULT hr = gD12.factory->CreateSwapChainForHwnd(
             gD12.queue, hwnd, &desc, nullptr, nullptr, &swap1);
         if (SUCCEEDED(hr)) {
-            hr = swap1->QueryInterface(__uuidof(IDXGISwapChain3),
-                                       (void**)&t->swap);
+            hr = swap1->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&t
+                                                                      ->swap);
             swap1->Release();
         }
         if (FAILED(hr) || !t->swap || !D12MakeFrames(t) ||
@@ -143571,8 +143597,7 @@ static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW,
         t->pxW = pxW;
         t->pxH = pxH;
         scene::Invalidate();
-        if (FAILED(t->swap->ResizeBuffers(kD12FrameCount, (UINT)pxW,
-                                          (UINT)pxH,
+        if (FAILED(t->swap->ResizeBuffers(kD12FrameCount, (UINT)pxW, (UINT)pxH,
                                           DXGI_FORMAT_B8G8R8A8_UNORM, 0)) ||
             !D12MakeWindowSurfaces(t)) {
             D12FreeTarget(t);
@@ -143593,8 +143618,7 @@ static bool D12PaintTargetEnd(PaintCtx* ctx) {
     ID3D12Resource* back = t->back[t->frameIx];
     if (t->msaa) {
         if (!skip) {
-            D12Barrier(gD12.list, t->msaa,
-                       D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D12Barrier(gD12.list, t->msaa, D3D12_RESOURCE_STATE_RENDER_TARGET,
                        D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
             D12Barrier(gD12.list, back, D3D12_RESOURCE_STATE_PRESENT,
                        D3D12_RESOURCE_STATE_RESOLVE_DEST);
@@ -143602,8 +143626,7 @@ static bool D12PaintTargetEnd(PaintCtx* ctx) {
                                           DXGI_FORMAT_B8G8R8A8_UNORM);
             D12Barrier(gD12.list, back, D3D12_RESOURCE_STATE_RESOLVE_DEST,
                        D3D12_RESOURCE_STATE_PRESENT);
-            D12Barrier(gD12.list, t->msaa,
-                       D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+            D12Barrier(gD12.list, t->msaa, D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
                        D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
     } else {
@@ -143679,8 +143702,8 @@ static bool D12PaintTargetEndOffscreen(PaintCtx* ctx, uint8_t* outBgra) {
         if (SUCCEEDED(t->readback->Map(0, &read, (void**)&mapped))) {
             for (int y = 0; y < t->pxH; y++) {
                 memcpy(outBgra + (size_t)y * (size_t)t->pxW * 4,
-                       mapped + (size_t)y *
-                                    t->readbackLayout.Footprint.RowPitch,
+                       mapped + (size_t)y * t->readbackLayout.Footprint
+                                                .RowPitch,
                        (size_t)t->pxW * 4);
             }
             D3D12_RANGE wrote = {0, 0};
@@ -143727,6 +143750,7 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
         desc.BufferCount = 3;
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        desc.Scaling = DXGI_SCALING_NONE;
         if (FAILED(g->factory->CreateSwapChainForHwnd(
                 g->dev, hwnd, &desc, nullptr, nullptr, &t->swap))) {
             delete t;
@@ -143882,9 +143906,8 @@ void CanvasClear(PaintCtx* ctx, Rgba c) {
         if (PaintD3d12On()) {
             D12Target* t = (D12Target*)gB.target;
             D3D12_CPU_DESCRIPTOR_HANDLE rtv =
-                t->offscreen
-                    ? D12Rtv(t, 3)
-                    : (t->msaa ? D12Rtv(t, 3) : D12Rtv(t, t->frameIx));
+                t->offscreen ? D12Rtv(t, 3)
+                             : (t->msaa ? D12Rtv(t, 3) : D12Rtv(t, t->frameIx));
             gD12.list->ClearRenderTargetView(rtv, col, 0, nullptr);
             return;
         }
@@ -144316,17 +144339,16 @@ static int D12ImageDescriptor(const Image* img) {
     }
     D12ImageSlot* slot = &gD12.images[gD12.imageCount];
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
-    D3D12_RESOURCE_DESC td = D12Texture(
-        w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 1, D3D12_RESOURCE_FLAG_NONE);
+    D3D12_RESOURCE_DESC td = D12Texture(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 1,
+                                        D3D12_RESOURCE_FLAG_NONE);
     if (FAILED(gD12.dev->CreateCommittedResource(
-            &heap, D3D12_HEAP_FLAG_NONE, &td,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
-            (void**)&slot->tex))) {
+            &heap, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr, __uuidof(ID3D12Resource), (void**)&slot->tex))) {
         return -1;
     }
     D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COPY_DEST;
-    if (!D12UploadTexture(slot->tex, &state, DXGI_FORMAT_B8G8R8A8_UNORM, 0,
-                          0, w, h, 4, bgra, w * 4)) {
+    if (!D12UploadTexture(slot->tex, &state, DXGI_FORMAT_B8G8R8A8_UNORM, 0, 0,
+                          w, h, 4, bgra, w * 4)) {
         gpui_paintgpu_win_Rel(&slot->tex);
         return -1;
     }
@@ -144337,8 +144359,8 @@ static int D12ImageDescriptor(const Image* img) {
     sv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sv.Texture2D.MipLevels = 1;
-    gD12.dev->CreateShaderResourceView(slot->tex, &sv,
-                                       D12SrvCpu(slot->descriptor));
+    gD12.dev
+        ->CreateShaderResourceView(slot->tex, &sv, D12SrvCpu(slot->descriptor));
     gD12.imageCount++;
     return slot->descriptor;
 }
@@ -144711,16 +144733,30 @@ void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
 
 namespace gpui {
 
-bool PaintGpuOn() { return false; }
-bool PaintD3d12On() { return false; }
-int PaintGpuSamples() { return (int)WinPaintOptionsGet().msaa; }
+bool PaintGpuOn() {
+    return false;
+}
+bool PaintD3d12On() {
+    return false;
+}
+int PaintGpuSamples() {
+    return (int)WinPaintOptionsGet().msaa;
+}
 
 namespace gpuw {
 
-bool PaintTargetBegin(PaintCtx*, void*, int, int) { return false; }
-bool PaintTargetBeginOffscreen(PaintCtx*, int, int) { return false; }
-bool PaintTargetEndOffscreen(PaintCtx*, uint8_t*) { return false; }
-bool PaintTargetEnd(PaintCtx*) { return false; }
+bool PaintTargetBegin(PaintCtx*, void*, int, int) {
+    return false;
+}
+bool PaintTargetBeginOffscreen(PaintCtx*, int, int) {
+    return false;
+}
+bool PaintTargetEndOffscreen(PaintCtx*, uint8_t*) {
+    return false;
+}
+bool PaintTargetEnd(PaintCtx*) {
+    return false;
+}
 void PaintTargetFree(PaintCtx*) {}
 void CanvasClear(PaintCtx*, Rgba) {}
 void CanvasFillRect(PaintCtx*, float, float, float, float, Rgba) {}
@@ -144732,7 +144768,9 @@ void CanvasLine(PaintCtx*, float, float, float, float, float, Rgba,
 void CanvasEllipse(PaintCtx*, float, float, float, float, float, Rgba) {}
 void CanvasPushClip(PaintCtx*, float, float, float, float) {}
 void CanvasPopClip(PaintCtx*) {}
-Path* PathNew(PaintCtx*, bool) { return nullptr; }
+Path* PathNew(PaintCtx*, bool) {
+    return nullptr;
+}
 void PathFree(Path*) {}
 void PathMoveTo(Path*, float, float) {}
 void PathLineTo(Path*, float, float) {}
@@ -144747,7 +144785,9 @@ void PathRealize(PaintCtx*, Path*) {}
 void ImageDraw(PaintCtx*, Image*, Bounds, float) {}
 void TextLayoutDraw(PaintCtx*, TextLayout*, float, float, Rgba, bool, float) {}
 static FrameStats gEmptyStats;
-const FrameStats& LastFrameStats() { return gEmptyStats; }
+const FrameStats& LastFrameStats() {
+    return gEmptyStats;
+}
 
 }
 }
@@ -148594,12 +148634,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam,
             }
             auto* p = (NCCALCSIZE_PARAMS*)lParam;
             LONG top = p->rgrc[0].top;
-            LRESULT r = DefWindowProcW(hwnd, msg, wParam, lParam);
+            DefWindowProcW(hwnd, msg, wParam, lParam);
             p->rgrc[0].top = top;
             if (IsZoomed(hwnd)) {
                 p->rgrc[0].top += BorderYPx();
             }
-            return r;
+
+            return WVR_REDRAW;
         }
         case WM_NCHITTEST: {
             LRESULT hit = DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -148644,7 +148685,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam,
             return 0;
         case WM_SIZE:
             win->paint.dpi = HostDpi(hwnd);
-            InvalidateRect(hwnd, nullptr, FALSE);
+
+            if (wParam != SIZE_MINIMIZED) {
+                RenderFrame(win);
+                ValidateRect(hwnd, nullptr);
+            }
             return 0;
         case WM_DPICHANGED: {
             auto* r = (RECT*)lParam;

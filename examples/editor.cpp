@@ -43,11 +43,11 @@ using namespace gpui;
 // short list that stands in for the ignorer -- the entries this repo's own
 // .gitignore names, plus the ones a sibling checkout tends to leave about.
 //
-// A leading dot is not itself a reason to skip: `.github`, `.gitignore` and
-// `.clang-format` are in the tree the ignorer keeps, so they are in this one.
-static const char* const kSkipDirs[] = {".git",         ".work",  "out",
-                                        "target",       ".emsdk", "build",
-                                        "node_modules", ".vs",    ".cache"};
+// A leading dot is not itself a reason to skip: `.github`, `.gitignore`,
+// `.clang-format` and `.cache` are in the tree the ignorer keeps (`.cache`
+// is not in this repo's .gitignore), so they are in this one.
+static const char* const kSkipDirs[] = {
+    ".git", ".work", "out", "target", ".emsdk", "build", "node_modules", ".vs"};
 
 static bool SkipEntry(const char* name) {
     if (!name[0]) {
@@ -1429,7 +1429,7 @@ static El* EditorTitleBar(EditorApp* self, Ctx* cx, const MenuDef* defs,
                           int nDefs) {
     Arena* a = cx->a;
     const Theme& th = ThemeNow(cx->app);
-    El* menus = Div(a)->FlexRow()->H(kFill)->ItemsCenter();
+    El* menus = Div(a)->FlexRow()->H(kFill)->ItemsCenter()->Shrink0();
     if (self->appMenuBar) {
         menus->Child(EditorMenuBar(cx, defs, nDefs));
     } else {
@@ -1443,6 +1443,7 @@ static El* EditorTitleBar(EditorApp* self, Ctx* cx, const MenuDef* defs,
             ->FlexRow()
             ->H(kFill)
             ->ItemsCenter()
+            ->Shrink0()
             ->PadX(8)
             ->Gap(2)
             ->Child(EditorAppearanceMenu(self, cx))
@@ -1540,12 +1541,11 @@ El* EditorApp::Render(EditorApp* self, Ctx* cx) {
                    ->Bg(th.sidebar);
     El* left = Div(a)
                    ->FlexCol()
-                   ->W(240)
-                   ->H(bodyH)
-                   ->Shrink0()
+                   ->SizeFull()
+                   ->ClipX()
+                   ->ClipY()
                    ->Pad(4)
                    ->Bg(th.sidebar)
-                   ->BorderR(1, th.border)
                    ->Child(tree);
 
     component::Highlighter* ed =
@@ -1561,9 +1561,17 @@ El* EditorApp::Render(EditorApp* self, Ctx* cx) {
         ed->Folding();
     }
     ed->Diagnostics(self->diagnostics, self->nDiagnostics);
-    El* right = Div(a)->FlexCol()->Flex1()->H(bodyH)->Child(ed->IntoEl());
+    El* right = Div(a)->FlexCol()->SizeFull()->MinW(0)->Child(ed->IntoEl());
 
-    El* body = Div(a)->FlexRow()->W(kFill)->H(bodyH)->Child(left)->Child(right);
+    // h_resizable("editor-container"): a 240px file pane the user can drag,
+    // and a flex editor that takes the rest. The group's own state is keyed
+    // off the id, so a drag survives the frame.
+    El* body = component::Resizable::New(cx, StrL("editor-container"))
+                   ->H(kFill)
+                   ->Panel(left, 240)
+                   ->Grow(right)
+                   ->IntoEl();
+    body = Div(a)->FlexCol()->W(kFill)->Flex1()->MinW(0)->MinH(0)->Child(body);
 
     Listener toggle = Listen(cx, &OnToggle);
     Listener cycle = Listen(cx, &OnCycleRows);
@@ -1615,7 +1623,7 @@ El* EditorApp::Render(EditorApp* self, Ctx* cx) {
     if (cx->win->opts.clientTitleBar) {
         root->Child(EditorTitleBar(self, cx, defs, nDefs));
     }
-    root->Child(body)->Child(bar->IntoEl());
+    root->Child(body)->Child(bar->IntoEl()->Shrink0());
     if (self->dialogOpen) {
         root->Child(component::Dialog::New(cx)
                         ->Open(true)

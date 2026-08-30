@@ -17413,6 +17413,9 @@ enum class SyntaxTok : uint8_t {
     Comment,
     Tag,
     Attribute,
+
+    Title,
+    Literal,
 };
 
 using SyntaxLang = int8_t;
