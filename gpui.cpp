@@ -4076,8 +4076,7 @@ int AssetsAddSource(void* user, AssetLoadFn load, AssetExistsFn exists) {
 void AssetsRemoveSource(int id) {
     for (int i = 0; i < gSourceN; i++) {
         if (gSources[i].id != id) continue;
-        for (int j = i + 1; j < gSourceN; j++)
-            gSources[j - 1] = gSources[j];
+        for (int j = i + 1; j < gSourceN; j++) gSources[j - 1] = gSources[j];
         gSourceN--;
         return;
     }
@@ -4289,8 +4288,7 @@ bool AssetsExists(Str relPath) {
         return false;
     }
     for (int i = gSourceN - 1; i >= 0; i--)
-        if (gSources[i].exists &&
-            gSources[i].exists(gSources[i].user, relPath))
+        if (gSources[i].exists && gSources[i].exists(gSources[i].user, relPath))
             return true;
 
     char rel[kMaxPath];
@@ -6215,8 +6213,7 @@ El* El::Shadows(const BoxShadow* values, int count) {
         count > 0x7fffffff / (int)sizeof(BoxShadow)) {
         return this;
     }
-    BoxShadow* copy =
-        (BoxShadow*)Alloc(arena, count * (int)sizeof(BoxShadow));
+    BoxShadow* copy = (BoxShadow*)Alloc(arena, count * (int)sizeof(BoxShadow));
     if (!copy) {
         return this;
     }
@@ -6298,15 +6295,16 @@ enum class ScrollbarPaintState : uint8_t {
 static Background ScrollbarThumbBg(const El* e, const RuntimeStyle& th,
                                    ScrollbarPaintState state, float alpha) {
     if (!e->scrollThemeSet) {
-        return ScrollbarThumbBg(th, state == ScrollbarPaintState::HoverThumb ||
-                                        state == ScrollbarPaintState::Active,
+        return ScrollbarThumbBg(th,
+                                state == ScrollbarPaintState::HoverThumb ||
+                                    state == ScrollbarPaintState::Active,
                                 alpha);
     }
-    Background c = state == ScrollbarPaintState::Active
-                       ? e->scrollThumbActive
-                       : (state == ScrollbarPaintState::HoverThumb
-                              ? e->scrollThumbHover
-                              : e->scrollThumb);
+    Background c =
+        state == ScrollbarPaintState::Active
+            ? e->scrollThumbActive
+            : (state == ScrollbarPaintState::HoverThumb ? e->scrollThumbHover
+                                                        : e->scrollThumb);
     return alpha >= 1.f ? c : BackgroundOpacity(c, alpha);
 }
 
@@ -6325,7 +6323,7 @@ static Background ScrollbarBarBg(const El* e, const RuntimeStyle& th,
                 state == ScrollbarPaintState::HoverThumb
             ? e->scrollTrackActive
             : (state == ScrollbarPaintState::HoverBar ? e->scrollTrackHover
-                                                       : e->scrollTrack);
+                                                      : e->scrollTrack);
     return alpha >= 1.f ? c : BackgroundOpacity(c, alpha);
 }
 
@@ -6377,8 +6375,7 @@ static float ScrollbarThumbInset(const El* e, ScrollbarPaintState state) {
                       : e->scrollThumbInset);
 }
 
-static float ScrollbarThumbMinLength(const El* e,
-                                     ScrollbarPaintState state) {
+static float ScrollbarThumbMinLength(const El* e, ScrollbarPaintState state) {
     if (!e->scrollThemeSet) return 48.f;
     return state == ScrollbarPaintState::Active
                ? e->scrollThumbActiveMinLength
@@ -7567,16 +7564,35 @@ static bool TextMeasKeyEq(const TextMeasSlot* sl, uint32_t hash, Str s,
 static uint8_t ElTextWeight(const El* e) {
     uint8_t w = kFontWeightNormal;
     switch ((FontWeight)e->style.fontWeight) {
-        case FontWeight::Thin: w = kFontWeightThin; break;
-        case FontWeight::ExtraLight: w = kFontWeightExtraLight; break;
-        case FontWeight::Light: w = kFontWeightLight; break;
-        case FontWeight::Normal: w = kFontWeightExplicitNormal; break;
-        case FontWeight::Medium: w = kFontWeightMedium; break;
-        case FontWeight::Semibold: w = kFontWeightSemibold; break;
-        case FontWeight::Bold: w = kFontWeightBold; break;
-        case FontWeight::ExtraBold: w = kFontWeightExtraBold; break;
-        case FontWeight::Black: w = kFontWeightBlack; break;
-        default: break;
+        case FontWeight::Thin:
+            w = kFontWeightThin;
+            break;
+        case FontWeight::ExtraLight:
+            w = kFontWeightExtraLight;
+            break;
+        case FontWeight::Light:
+            w = kFontWeightLight;
+            break;
+        case FontWeight::Normal:
+            w = kFontWeightExplicitNormal;
+            break;
+        case FontWeight::Medium:
+            w = kFontWeightMedium;
+            break;
+        case FontWeight::Semibold:
+            w = kFontWeightSemibold;
+            break;
+        case FontWeight::Bold:
+            w = kFontWeightBold;
+            break;
+        case FontWeight::ExtraBold:
+            w = kFontWeightExtraBold;
+            break;
+        case FontWeight::Black:
+            w = kFontWeightBlack;
+            break;
+        default:
+            break;
     }
     if (e->style.fontWeight == 0 && e->style.fontBold) {
         w = kFontWeightBold;
@@ -8466,8 +8482,8 @@ static void PrepareEl(PaintCtx* ctx, El* e, float inheritFont, Rgba inheritFg) {
     if (e->style.fontWeight || e->style.fontBold || e->style.fontSemibold ||
         e->style.fontMedium) {
         for (El* c = e->first; c; c = c->next) {
-            if (c->style.fontWeight || c->style.fontBold || c->style.fontSemibold ||
-                c->style.fontMedium) {
+            if (c->style.fontWeight || c->style.fontBold ||
+                c->style.fontSemibold || c->style.fontMedium) {
                 continue;
             }
             c->style.fontWeight = e->style.fontWeight;
@@ -8735,8 +8751,7 @@ static taffy::NodeId LayoutSync(LayoutSyncCtx* sc, El* e, taffy::NodeId prev,
         int had = lc->tree.ChildCount(prev);
         if (i < had) {
             taffy::NodeId old = lc->tree.ChildAtIndex(prev, i);
-            LayoutNode* oldRec =
-                (LayoutNode*)lc->tree.GetNodeContext(old);
+            LayoutNode* oldRec = (LayoutNode*)lc->tree.GetNodeContext(old);
             if (oldRec && oldRec->kind == (uint8_t)c->kind) {
                 taffy::NodeId now = LayoutSync(sc, c, old, true, false);
                 if (now != old) {
@@ -8853,29 +8868,29 @@ AnchoredPosition AnchoredSideResolve(Bounds trigger, Size popup, Size view,
 
     int placed = 0;
     if (preferred == 3) {
-        placed = popup.w <= availRight
-                     ? 3
-                     : (popup.w <= availLeft
-                            ? 2
-                            : (availRight >= availLeft ? 3 : 2));
+        placed =
+            popup.w <= availRight
+                ? 3
+                : (popup.w <= availLeft ? 2
+                                        : (availRight >= availLeft ? 3 : 2));
     } else if (preferred == 2) {
-        placed = popup.w <= availLeft
-                     ? 2
-                     : (popup.w <= availRight
-                            ? 3
-                            : (availLeft >= availRight ? 2 : 3));
+        placed =
+            popup.w <= availLeft
+                ? 2
+                : (popup.w <= availRight ? 3
+                                         : (availLeft >= availRight ? 2 : 3));
     } else if (preferred == 1) {
-        placed = popup.h <= availBelow
-                     ? 1
-                     : (popup.h <= availAbove
-                            ? 0
-                            : (availBelow >= availAbove ? 1 : 0));
+        placed =
+            popup.h <= availBelow
+                ? 1
+                : (popup.h <= availAbove ? 0
+                                         : (availBelow >= availAbove ? 1 : 0));
     } else {
-        placed = popup.h <= availAbove
-                     ? 0
-                     : (popup.h <= availBelow
-                            ? 1
-                            : (availBelow >= availAbove ? 1 : 0));
+        placed =
+            popup.h <= availAbove
+                ? 0
+                : (popup.h <= availBelow ? 1
+                                         : (availBelow >= availAbove ? 1 : 0));
     }
 
     float alignedX = trigger.x;
@@ -8914,16 +8929,14 @@ AnchoredPosition AnchoredCornerResolve(Anchor anchor, Point at, Size popup,
     Bounds bounds = BoundsAt(at, popup);
     if (anchor == Anchor::TopCenter || anchor == Anchor::BottomCenter) {
         bounds.x -= popup.w * 0.5f;
-    } else if (anchor == Anchor::TopRight ||
-               anchor == Anchor::BottomRight ||
+    } else if (anchor == Anchor::TopRight || anchor == Anchor::BottomRight ||
                anchor == Anchor::RightCenter) {
         bounds.x -= popup.w;
     }
     if (anchor == Anchor::BottomLeft || anchor == Anchor::BottomCenter ||
         anchor == Anchor::BottomRight) {
         bounds.y -= popup.h;
-    } else if (anchor == Anchor::LeftCenter ||
-               anchor == Anchor::RightCenter) {
+    } else if (anchor == Anchor::LeftCenter || anchor == Anchor::RightCenter) {
         bounds.y -= popup.h * 0.5f;
     }
     AnchoredPosition out = {};
@@ -8931,8 +8944,7 @@ AnchoredPosition AnchoredCornerResolve(Anchor anchor, Point at, Size popup,
     return out;
 }
 
-static void PlaceAnchored(El* e, float viewW, float viewH,
-                          float clientInset) {
+static void PlaceAnchored(El* e, float viewW, float viewH, float clientInset) {
     for (El* c = e->first; c; c = c->next) {
         PlaceAnchored(c, viewW, viewH, clientInset);
         const Style& s = c->style;
@@ -9033,10 +9045,10 @@ static void PlaceAnchored(El* e, float viewW, float viewH,
                     ? AnchoredCornerResolve(s.anchor, s.positionerPoint,
                                             {c->w, c->h}, {viewW, viewH},
                                             margin)
-                    : AnchoredSideResolve(
-                          s.positionerTrigger, {c->w, c->h}, {viewW, viewH},
-                          margin, s.positionerPlacement, s.positionerAlign,
-                          s.anchorGap);
+                    : AnchoredSideResolve(s.positionerTrigger, {c->w, c->h},
+                                          {viewW, viewH}, margin,
+                                          s.positionerPlacement,
+                                          s.positionerAlign, s.anchorGap);
             ax = resolved.bounds.x;
             ay = resolved.bounds.y;
         }
@@ -9091,8 +9103,7 @@ static void LayoutElIn(LayoutCache* lc, PaintCtx* ctx, El* e, float x, float y,
     LayoutSyncCtx sc = {lc, ctx, availW, availH};
 
     if (lc->hasRoot) {
-        LayoutNode* rec =
-            (LayoutNode*)lc->tree.GetNodeContext(lc->root);
+        LayoutNode* rec = (LayoutNode*)lc->tree.GetNodeContext(lc->root);
         if (!rec || rec->kind != (uint8_t)e->kind) {
             LayoutDropSubtree(lc, lc->root);
             lc->hasRoot = false;
@@ -10154,8 +10165,7 @@ bool LineSafeClipBottom(const LineSpan* spans, int count, float boxBottom,
         }
         float bottom = span.top + span.lineHeight;
         while (bottom <= span.bottom + epsilon) {
-            if (bottom <= clip + epsilon &&
-                (!found || bottom > lastBottom)) {
+            if (bottom <= clip + epsilon && (!found || bottom > lastBottom)) {
                 found = true;
                 lastBottom = bottom;
                 lastHeight = span.lineHeight;
@@ -10194,8 +10204,7 @@ static Bounds BoundsIntersect(Bounds a, Bounds b) {
     float y = a.y > b.y ? a.y : b.y;
     float right = a.Right() < b.Right() ? a.Right() : b.Right();
     float bottom = a.Bottom() < b.Bottom() ? a.Bottom() : b.Bottom();
-    return {x, y, right > x ? right - x : 0.f,
-            bottom > y ? bottom - y : 0.f};
+    return {x, y, right > x ? right - x : 0.f, bottom > y ? bottom - y : 0.f};
 }
 
 static Bounds HitMaskedBounds(PaintCtx* ctx, Bounds bounds) {
@@ -10236,8 +10245,8 @@ static bool ResolveLineClamp(PaintCtx* ctx, El* e, float* clipBottom) {
         LineClampEvent ev = {clamped};
         ListenerCall(ctx->app, ctx->window, e->onLineClamp, &ev);
     }
-    bool tighter = clamped &&
-                   LineSafeClipBottom(spans.els, spans.len, boxBottom,
+    bool tighter =
+        clamped && LineSafeClipBottom(spans.els, spans.len, boxBottom,
                                       contentBottom, clipBottom);
     VecReset(spans);
     return tighter;
@@ -10285,8 +10294,7 @@ static void PaintCaret(PaintCtx* ctx, El* e, float font) {
                 off = e->text.len;
             }
             int n = 0;
-            if (off > 0 &&
-                (e->caretLineEndAffinity || off == e->text.len)) {
+            if (off > 0 && (e->caretLineEndAffinity || off == e->text.len)) {
 
                 n = TextLayoutRangeRects(tl, e->text, 0, off, r, 32);
                 if (n > 0) {
@@ -10403,11 +10411,10 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
 
     int outerHitParent = ctx->hitParent;
     if (e->clickId || e->onClick.IsValid() || e->listener.IsValid() ||
-        e->clickAction || e->onHover.IsValid() ||
-        e->onMouseMove.IsValid() || e->onMouseDown.IsValid() ||
-        e->onMouseUp.IsValid() || e->onDragMove.IsValid() ||
-        e->onMouseDownOut.IsValid() || e->onMouseUpOut.IsValid() ||
-        e->drag.IsValid() || e->onDrop.IsValid() ||
+        e->clickAction || e->onHover.IsValid() || e->onMouseMove.IsValid() ||
+        e->onMouseDown.IsValid() || e->onMouseUp.IsValid() ||
+        e->onDragMove.IsValid() || e->onMouseDownOut.IsValid() ||
+        e->onMouseUpOut.IsValid() || e->drag.IsValid() || e->onDrop.IsValid() ||
         e->cursor != CursorKind::Arrow || e->slider || e->stopMouseDown ||
         e->suppressTextSelection || e->scrollMaskAxes) {
         HitRect hr;
@@ -10809,9 +10816,8 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
                          e->style.overflowX == Overflow::Scroll &&
                          e->contentW > e->w + 1.f && e->w > 0;
     bool onBand =
-        overBox &&
-        ((canVertical && ctx->mouseX >= e->x + e->w - trackW) ||
-         (canHorizontal && ctx->mouseY >= e->y + e->h - trackW));
+        overBox && ((canVertical && ctx->mouseX >= e->x + e->w - trackW) ||
+                    (canHorizontal && ctx->mouseY >= e->y + e->h - trackW));
     bool barVisible = !e->noScrollbar;
     float barAlpha = 1.f;
     float barSlide = 0.f;
@@ -10887,8 +10893,8 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
                                   : (onBar ? ScrollbarPaintState::HoverBar
                                            : ScrollbarPaintState::Normal));
         float inset = ScrollbarThumbInset(e, state);
-        float rawThumbH = ScrollbarThumbSize(
-            e->h, e->h, e->contentH, ScrollbarThumbMinLength(e, state));
+        float rawThumbH = ScrollbarThumbSize(e->h, e->h, e->contentH,
+                                             ScrollbarThumbMinLength(e, state));
         float thumbH = rawThumbH - inset * 2.f;
         if (thumbH < 0) thumbH = 0;
         float wantW = ScrollbarThumbWidth(e, state);
@@ -10899,12 +10905,12 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
                             barMotion.expand, TimeNow(), &ctx->wantsAnimFrame);
         }
         float thumbX = e->x + e->w - thumbW - inset;
-        float thumbY = e->y + inset +
-                       ScrollbarThumbPos(e->h, rawThumbH, e->scrollY, e->h,
-                                         e->contentH);
+        float thumbY =
+            e->y + inset +
+            ScrollbarThumbPos(e->h, rawThumbH, e->scrollY, e->h, e->contentH);
 
-        FillBackground(ctx, e->x + e->w - trackW + barSlide, e->y, trackW,
-                       e->h, 0, nullptr,
+        FillBackground(ctx, e->x + e->w - trackW + barSlide, e->y, trackW, e->h,
+                       0, nullptr,
                        ScrollbarBarBg(e, barTheme, state, barAlpha));
         FillBackground(ctx, thumbX + barSlide, thumbY, thumbW, thumbH,
                        ThumbRadius(e, barTheme, state, thumbW, thumbH), nullptr,
@@ -10918,8 +10924,8 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
         float normalRaw = ScrollbarThumbSize(
             e->w, e->w, e->contentW,
             ScrollbarThumbMinLength(e, ScrollbarPaintState::Normal));
-        float normalStart = ScrollbarThumbPos(e->w, normalRaw, e->scrollX,
-                                              e->w, e->contentW, marginEnd);
+        float normalStart = ScrollbarThumbPos(e->w, normalRaw, e->scrollX, e->w,
+                                              e->contentW, marginEnd);
         float normalLength = normalRaw - normalInset * 2.f;
         if (normalLength < 0) normalLength = 0;
         bool pointerOnThumb =
@@ -10934,8 +10940,8 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
                                   : (onBar ? ScrollbarPaintState::HoverBar
                                            : ScrollbarPaintState::Normal));
         float inset = ScrollbarThumbInset(e, state);
-        float rawThumbW = ScrollbarThumbSize(
-            e->w, e->w, e->contentW, ScrollbarThumbMinLength(e, state));
+        float rawThumbW = ScrollbarThumbSize(e->w, e->w, e->contentW,
+                                             ScrollbarThumbMinLength(e, state));
         float thumbW = rawThumbW - inset * 2.f;
         if (thumbW < 0) thumbW = 0;
         float wantH = ScrollbarThumbWidth(e, state);
@@ -10950,8 +10956,8 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
                        ScrollbarThumbPos(e->w, rawThumbW, e->scrollX, e->w,
                                          e->contentW, marginEnd);
 
-        FillBackground(ctx, e->x, e->y + e->h - trackW + barSlide, e->w,
-                       trackW, 0, nullptr,
+        FillBackground(ctx, e->x, e->y + e->h - trackW + barSlide, e->w, trackW,
+                       0, nullptr,
                        ScrollbarBarBg(e, barTheme, state, barAlpha));
         FillBackground(ctx, thumbX, thumbY + barSlide, thumbW, thumbH,
                        ThumbRadius(e, barTheme, state, thumbH, thumbW), nullptr,
@@ -11230,8 +11236,7 @@ static bool TextHitOwnerMatches(const TextHit& hit, EntityId owner) {
     return !owner.IsValid() || hit.owner == owner;
 }
 
-static bool AtomReached(PaintCtx* ctx, int i, int a, int b,
-                        EntityId owner) {
+static bool AtomReached(PaintCtx* ctx, int i, int a, int b, EntityId owner) {
     const TextHit& t = ctx->texts[i];
     const SelBlock* blk = t.src ? t.src->block : nullptr;
     const TextHit* prev = i > 0 ? &ctx->texts[i - 1] : nullptr;
@@ -11294,8 +11299,7 @@ static int CopyTextHitsFiltered(PaintCtx* ctx, int a, int b, int scope,
         int gap = pos + plen;
         bool spansGap = i + 1 < ctx->texts.len && a <= gap && b > gap;
 
-        bool atom =
-            t.atom && src && t.src && AtomReached(ctx, i, a, b, owner);
+        bool atom = t.atom && src && t.src && AtomReached(ctx, i, a, b, owner);
         if ((lo >= hi || !t.text.s) && !atom) {
             sep = sep || spansGap;
             continue;
@@ -11362,9 +11366,8 @@ int CopyTextHitsIn(PaintCtx* ctx, int a, int b, int scope, char* out, int cap,
     return CopyTextHitsFiltered(ctx, a, b, scope, {}, out, cap, fmt);
 }
 
-int CopyTextHitsInEntity(PaintCtx* ctx, int a, int b, int scope,
-                         EntityId owner, char* out, int cap,
-                         SelectionFormat fmt) {
+int CopyTextHitsInEntity(PaintCtx* ctx, int a, int b, int scope, EntityId owner,
+                         char* out, int cap, SelectionFormat fmt) {
     return CopyTextHitsFiltered(ctx, a, b, scope, owner, out, cap, fmt);
 }
 
@@ -12583,8 +12586,7 @@ bool KeyChordParse(Str spec, KeyChord* out) {
         bool secondary = base::StrEqI(part, "secondary");
         if (base::StrEqI(part, "ctrl") || (secondary && !GPUI_OS_MAC)) {
             c.ctrl = true;
-        } else if (base::StrEqI(part, "cmd") ||
-                   base::StrEqI(part, "super") ||
+        } else if (base::StrEqI(part, "cmd") || base::StrEqI(part, "super") ||
                    base::StrEqI(part, "win")) {
             c.platform = true;
         }
@@ -12594,8 +12596,7 @@ bool KeyChordParse(Str spec, KeyChord* out) {
             c.platform = true;
         }
 #endif
-        else if (base::StrEqI(part, "alt") ||
-                   base::StrEqI(part, "option")) {
+        else if (base::StrEqI(part, "alt") || base::StrEqI(part, "option")) {
             c.alt = true;
         } else if (base::StrEqI(part, "shift")) {
             c.shift = true;
@@ -14978,13 +14979,14 @@ static SvgCtx RefineCtx(const SvgIcon* ic, const SvgCtx& outer, Str tag) {
         }
     }
     if (GetAttr(tag, "font-weight", buf, 64)) {
-        cur.bold = StrEqI(Str(buf), "bold") || StrToIntUnchecked(Str(buf)) >= 600;
+        cur.bold =
+            StrEqI(Str(buf), "bold") || StrToIntUnchecked(Str(buf)) >= 600;
     }
     if (GetAttr(tag, "text-anchor", buf, 64)) {
         Str v(buf);
         cur.anchor = StrEqI(v, "middle") ? kTextAnchorMiddle
                      : StrEqI(v, "end")  ? kTextAnchorEnd
-                                               : kTextAnchorStart;
+                                         : kTextAnchorStart;
     }
     if (GetAttr(tag, "fill", buf, 64)) {
         Rgba c;
@@ -15870,8 +15872,8 @@ static void FrameBenchTick(Window* win, float secs) {
     logf(
         "frame-bench n=%d mean=%.3fms median=%.3fms p95=%.3fms min=%.3fms "
         "max=%.3fms",
-        n, sum / n, samples[n / 2], samples[(int)((float)n * 0.95f)], samples[0],
-        samples[n - 1]);
+        n, sum / n, samples[n / 2], samples[(int)((float)n * 0.95f)],
+        samples[0], samples[n - 1]);
     double sb = 0, sl = 0, sp = 0;
     for (int i = 0; i < n; i++) {
         sb += build[i];
@@ -16134,9 +16136,9 @@ void WindowDrawFrame(Window* win, void* native, int pxW, int pxH, float dipW,
         }
         if (s->scrollY != was && s->autoScroll.hasLastDrag) {
             bool affinity = false;
-            int offset = InputIndexForPosition(
-                s, &win->paint, s->autoScroll.lastDrag.x,
-                s->autoScroll.lastDrag.y, &affinity);
+            int offset =
+                InputIndexForPosition(s, &win->paint, s->autoScroll.lastDrag.x,
+                                      s->autoScroll.lastDrag.y, &affinity);
             InputSelectToWithAffinity(s, win->app, win, offset, affinity);
         }
         WindowRequestAnimationFrame(win);
@@ -16697,8 +16699,8 @@ static void InputPress(Window* win, const MouseDownEvent& in) {
         InputFocus(s, win->app, win);
     }
     bool lineEndAffinity = false;
-    int offset = InputIndexForPosition(s, &win->paint, in.x, in.y,
-                                       &lineEndAffinity);
+    int offset =
+        InputIndexForPosition(s, &win->paint, in.x, in.y, &lineEndAffinity);
 
     if (InputClickDefinition(s, win->app, win, offset,
                              in.modifiers.Secondary())) {
@@ -16709,11 +16711,9 @@ static void InputPress(Window* win, const MouseDownEvent& in) {
     } else if (in.clickCount == 2) {
         InputSelectWord(s, win->app, win, offset);
     } else if (in.modifiers.shift) {
-        InputSelectToWithAffinity(s, win->app, win, offset,
-                                  lineEndAffinity);
+        InputSelectToWithAffinity(s, win->app, win, offset, lineEndAffinity);
     } else {
-        InputMoveToWithAffinity(s, win->app, win, offset,
-                                lineEndAffinity);
+        InputMoveToWithAffinity(s, win->app, win, offset, lineEndAffinity);
     }
     s->selecting = true;
 }
@@ -16754,8 +16754,7 @@ static ScrollRect* ScrollbarAt(PaintCtx* ctx, float x, float y,
             return &ctx->scrolls[i];
         }
         if (s.barX && ScrollsX(s) && x >= s.bounds.x && x <= s.bounds.Right() &&
-            y >= s.bounds.Bottom() - s.trackWidth &&
-            y <= s.bounds.Bottom()) {
+            y >= s.bounds.Bottom() - s.trackWidth && y <= s.bounds.Bottom()) {
             *horizontal = true;
             return &ctx->scrolls[i];
         }
@@ -16789,38 +16788,35 @@ static void ScrollbarPress(Window* win, ScrollRect* s, float x, float y,
     float content = horizontal ? s->contentW : s->contentH;
     float origin = horizontal ? s->bounds.x : s->bounds.y;
     float at = horizontal ? x : y;
-    float marginEnd =
-        horizontal && s->barY && ScrollsY(*s) ? s->trackWidth : 0;
-    float rawThumb = ScrollbarThumbSize(track, track, content,
-                                        s->thumbMinLength);
-    float rawStart = origin + ScrollbarThumbPos(
-                                  track, rawThumb,
-                                  horizontal ? s->scrollX : s->scrollY, track,
-                                  content, marginEnd);
+    float marginEnd = horizontal && s->barY && ScrollsY(*s) ? s->trackWidth : 0;
+    float rawThumb =
+        ScrollbarThumbSize(track, track, content, s->thumbMinLength);
+    float rawStart =
+        origin + ScrollbarThumbPos(track, rawThumb,
+                                   horizontal ? s->scrollX : s->scrollY, track,
+                                   content, marginEnd);
     float thumbStart = rawStart + s->thumbInset;
     float thumbLength = rawThumb - s->thumbInset * 2.f;
     if (thumbLength < 0) thumbLength = 0;
-    bool crossInside = horizontal
-                           ? y <= s->bounds.Bottom() - s->thumbInset
-                           : x <= s->bounds.Right() - s->thumbInset;
-    bool onThumb = crossInside && at >= thumbStart &&
-                   at <= thumbStart + thumbLength;
+    bool crossInside = horizontal ? y <= s->bounds.Bottom() - s->thumbInset
+                                  : x <= s->bounds.Right() - s->thumbInset;
+    bool onThumb =
+        crossInside && at >= thumbStart && at <= thumbStart + thumbLength;
     if (!onThumb) {
 
-        rawThumb = ScrollbarThumbSize(track, track, content,
-                                      s->thumbHoverMinLength);
-        rawStart = origin + ScrollbarThumbPos(
-                                track, rawThumb,
-                                horizontal ? s->scrollX : s->scrollY, track,
-                                content, marginEnd);
+        rawThumb =
+            ScrollbarThumbSize(track, track, content, s->thumbHoverMinLength);
+        rawStart =
+            origin + ScrollbarThumbPos(track, rawThumb,
+                                       horizontal ? s->scrollX : s->scrollY,
+                                       track, content, marginEnd);
         float hoverStart = rawStart + s->thumbHoverInset;
         float hoverLength = rawThumb - s->thumbHoverInset * 2.f;
         if (hoverLength < 0) hoverLength = 0;
         bool hoverCross = horizontal
                               ? y <= s->bounds.Bottom() - s->thumbHoverInset
                               : x <= s->bounds.Right() - s->thumbHoverInset;
-        if (hoverCross && at >= hoverStart &&
-            at <= hoverStart + hoverLength) {
+        if (hoverCross && at >= hoverStart && at <= hoverStart + hoverLength) {
             onThumb = true;
             thumbStart = hoverStart;
             thumbLength = hoverLength;
@@ -16828,20 +16824,19 @@ static void ScrollbarPress(Window* win, ScrollRect* s, float x, float y,
     }
     if (onThumb) {
 
-        rawThumb = ScrollbarThumbSize(track, track, content,
-                                      s->thumbHoverMinLength);
-        rawStart = origin + ScrollbarThumbPos(
-                                track, rawThumb,
-                                horizontal ? s->scrollX : s->scrollY, track,
-                                content, marginEnd);
+        rawThumb =
+            ScrollbarThumbSize(track, track, content, s->thumbHoverMinLength);
+        rawStart =
+            origin + ScrollbarThumbPos(track, rawThumb,
+                                       horizontal ? s->scrollX : s->scrollY,
+                                       track, content, marginEnd);
         thumbStart = rawStart + s->thumbHoverInset;
         thumbLength = rawThumb - s->thumbHoverInset * 2.f;
         if (thumbLength < 0) thumbLength = 0;
-        crossInside = horizontal
-                          ? y <= s->bounds.Bottom() - s->thumbHoverInset
-                          : x <= s->bounds.Right() - s->thumbHoverInset;
-        onThumb = crossInside && at >= thumbStart &&
-                  at <= thumbStart + thumbLength;
+        crossInside = horizontal ? y <= s->bounds.Bottom() - s->thumbHoverInset
+                                 : x <= s->bounds.Right() - s->thumbHoverInset;
+        onThumb =
+            crossInside && at >= thumbStart && at <= thumbStart + thumbLength;
     }
     if (onThumb) {
         win->scrollDragId = s->id;
@@ -16895,12 +16890,11 @@ static void ScrollbarDrag(Window* win, float x, float y) {
     float content = horizontal ? s->contentW : s->contentH;
     float origin = horizontal ? s->bounds.x : s->bounds.y;
     float at = horizontal ? x : y;
-    float rawThumb = ScrollbarThumbSize(track, track, content,
-                                        s->thumbActiveMinLength);
+    float rawThumb =
+        ScrollbarThumbSize(track, track, content, s->thumbActiveMinLength);
     float thumb = rawThumb - s->thumbActiveInset * 2.f;
     if (thumb < 0) thumb = 0;
-    float marginEnd =
-        horizontal && s->barY && ScrollsY(*s) ? s->trackWidth : 0;
+    float marginEnd = horizontal && s->barY && ScrollsY(*s) ? s->trackWidth : 0;
     float off = ScrollbarOffsetForDrag(at, win->scrollDragGrab, origin, track,
                                        thumb, track, content, marginEnd);
     ScrollbarEmit(win, s, horizontal ? off : s->scrollX,
@@ -16955,8 +16949,7 @@ static bool SliderKeyStep(Window* win, int key, bool ctrl, bool alt) {
 }
 
 static bool SemanticKeyStep(Window* win, int key, bool ctrl, bool alt) {
-    if (ctrl || alt || !win->focusId ||
-        (key != KeyUp && key != KeyDown)) {
+    if (ctrl || alt || !win->focusId || (key != KeyUp && key != KeyDown)) {
         return false;
     }
     for (int i = 0; i < win->focusEls.len; i++) {
@@ -17084,8 +17077,7 @@ static void DispatchMouseMove(Window* win, const MouseMoveEvent& in) {
         s->autoScroll.lastDrag = Point{x, y};
         s->autoScroll.hasLastDrag = true;
         bool affinity = false;
-        int offset =
-            InputIndexForPosition(s, &win->paint, x, y, &affinity);
+        int offset = InputIndexForPosition(s, &win->paint, x, y, &affinity);
         InputSelectToWithAffinity(s, win->app, win, offset, affinity);
 
         float delta = 0;
@@ -17155,8 +17147,8 @@ static void HitChain(Window* win, float x, float y, Vec<int>* out) {
 }
 
 template <typename Ev, typename Pick>
-static void DispatchChain(Window* win, const Vec<int>& chain, Ev* ev,
-                          Pick pick, bool stopMouseDown = false) {
+static void DispatchChain(Window* win, const Vec<int>& chain, Ev* ev, Pick pick,
+                          bool stopMouseDown = false) {
     win->stopPropagation = false;
     for (int k = chain.len - 1; k >= 0 && !win->stopPropagation; k--) {
         const HitRect& hr = win->paint.hits[chain[k]];
@@ -17185,8 +17177,7 @@ static void DispatchChain(Window* win, const Vec<int>& chain, Ev* ev,
 static void DispatchMouseDownOut(Window* win, const MouseDownEvent& in) {
     for (int i = 0; i < win->paint.hits.len; i++) {
         const HitRect& hr = win->paint.hits[i];
-        if (hr.onMouseDownOut.IsValid() &&
-            !hr.bounds.Contains({in.x, in.y})) {
+        if (hr.onMouseDownOut.IsValid() && !hr.bounds.Contains({in.x, in.y})) {
             ListenerCall(win->app, win, hr.onMouseDownOut, &in);
         }
     }
@@ -17211,9 +17202,11 @@ static void DispatchMouseDown(Window* win, const MouseDownEvent& in) {
         HitChain(win, x, y, &chain);
         MouseDownEvent ev = in;
         DispatchChain(
-            win, chain, &ev, [](const HitRect& hr, DispatchPhase phase) {
+            win, chain, &ev,
+            [](const HitRect& hr, DispatchPhase phase) {
                 return hr.mouseDownPhase == phase ? hr.onMouseDown : Listener{};
-            }, true);
+            },
+            true);
         VecReset(chain);
         DispatchMouseDownOut(win, in);
         ClearPendingClick(win);
@@ -17277,9 +17270,11 @@ static void DispatchMouseDown(Window* win, const MouseDownEvent& in) {
         HitChain(win, x, y, &chain);
         MouseDownEvent ev = in;
         DispatchChain(
-            win, chain, &ev, [](const HitRect& hr, DispatchPhase phase) {
+            win, chain, &ev,
+            [](const HitRect& hr, DispatchPhase phase) {
                 return hr.mouseDownPhase == phase ? hr.onMouseDown : Listener{};
-            }, true);
+            },
+            true);
         VecReset(chain);
     }
     DispatchMouseDownOut(win, in);
@@ -17459,9 +17454,8 @@ static bool ScrollMaskIsTopmost(Window* win, const ScrollRect& s, float x,
 
 #if !GPUI_OS_WASM
 static OngoingScroll* ScrollLockFor(Window* win, int id, Axis maskAxis) {
-    int* slotId = maskAxis == Axis::Horizontal
-                      ? &win->scrollLockHorizontalId
-                      : &win->scrollLockVerticalId;
+    int* slotId = maskAxis == Axis::Horizontal ? &win->scrollLockHorizontalId
+                                               : &win->scrollLockVerticalId;
     OngoingScroll* slot = maskAxis == Axis::Horizontal
                               ? &win->scrollLockHorizontal
                               : &win->scrollLockVertical;
@@ -17538,8 +17532,7 @@ static void DispatchScrollWheel(Window* win, const ScrollWheelEvent& in) {
             Point horizontal = {};
             Point vertical = {};
             if (s.maskAxes & 1) {
-                horizontal =
-                    ScrollMaskDelta(win, s, in, Axis::Horizontal);
+                horizontal = ScrollMaskDelta(win, s, in, Axis::Horizontal);
             }
             if (s.maskAxes & 2) {
                 vertical = ScrollMaskDelta(win, s, in, Axis::Vertical);
@@ -17565,8 +17558,8 @@ static void DispatchScrollWheel(Window* win, const ScrollWheelEvent& in) {
                 return;
             }
             if (takeY) {
-                float offY = ClampScroll(s.scrollY - vertical.y, s.contentH,
-                                         s.bounds.h);
+                float offY =
+                    ClampScroll(s.scrollY - vertical.y, s.contentH, s.bounds.h);
                 if (offY == s.scrollY) {
 
                     continue;
@@ -18555,10 +18548,8 @@ El* AlertDialogAction::New(Ctx* cx) {
     return Div(a)->PathClick(id)->OnClickAction(action::Confirm());
 }
 
-El* AlertDialogTrigger::New(Ctx* cx, Listener onOpen,
-                            DialogHandle handle) {
-    return DialogTrigger::New(cx, onOpen, handle,
-                              StrL("alert-dialog-trigger"));
+El* AlertDialogTrigger::New(Ctx* cx, Listener onOpen, DialogHandle handle) {
+    return DialogTrigger::New(cx, onOpen, handle, StrL("alert-dialog-trigger"));
 }
 
 AlertDialog* AlertDialog::New(Ctx* cx) {
@@ -18985,7 +18976,8 @@ bool Date::IsComplete() const {
 }
 
 bool Date::IsActive(LocalDate value) const {
-    return (CalendarDateValid(start) && CalendarDateCompare(start, value) == 0) ||
+    return (CalendarDateValid(start) &&
+            CalendarDateCompare(start, value) == 0) ||
            (kind == DateKind::Range && CalendarDateValid(end) &&
             CalendarDateCompare(end, value) == 0);
 }
@@ -19034,8 +19026,7 @@ bool DateMatcherMatches(const Matcher& matcher, LocalDate date) {
             return (matcher.weekdayMask &
                     (1u << CalendarWeekday(date.year, date.month, date.day))) !=
                    0;
-        case MatcherKind::Interval:
-        {
+        case MatcherKind::Interval: {
             LocalDate before = CalendarDateValid(matcher.interval.before)
                                    ? matcher.interval.before
                                    : matcher.from;
@@ -19237,13 +19228,12 @@ bool CalendarNextYearPage(CalendarState* s) {
     return true;
 }
 
-void CalendarState::OnDate(CalendarState* self, Ctx* cx,
-                           const ClickEvent*, intptr_t dateKey) {
+void CalendarState::OnDate(CalendarState* self, Ctx* cx, const ClickEvent*,
+                           intptr_t dateKey) {
     CalendarStateSelectDate(self, DatePickerDateFromKey(dateKey), cx, true);
 }
 
-void CalendarState::OnPrev(CalendarState* self, Ctx* cx,
-                           const ClickEvent*) {
+void CalendarState::OnPrev(CalendarState* self, Ctx* cx, const ClickEvent*) {
     if (self->view == CalendarView::Day) {
         CalendarPrevMonth(self);
     } else if (self->view == CalendarView::Year) {
@@ -19252,8 +19242,7 @@ void CalendarState::OnPrev(CalendarState* self, Ctx* cx,
     Notify(cx);
 }
 
-void CalendarState::OnNext(CalendarState* self, Ctx* cx,
-                           const ClickEvent*) {
+void CalendarState::OnNext(CalendarState* self, Ctx* cx, const ClickEvent*) {
     if (self->view == CalendarView::Day) {
         CalendarNextMonth(self);
     } else if (self->view == CalendarView::Year) {
@@ -19276,8 +19265,8 @@ void CalendarState::OnYearToggle(CalendarState* self, Ctx* cx,
     Notify(cx);
 }
 
-void CalendarState::OnMonth(CalendarState* self, Ctx* cx,
-                            const ClickEvent*, intptr_t month) {
+void CalendarState::OnMonth(CalendarState* self, Ctx* cx, const ClickEvent*,
+                            intptr_t month) {
     self->currentMonth = (int)month;
     self->view = CalendarView::Day;
     Notify(cx);
@@ -19454,8 +19443,7 @@ static El* CalMonthGrid(Ctx* cx, const CalendarOpts& o, int year, int month) {
     }
     panel->Child(header);
 
-    int offset =
-        (CalendarWeekday(year, month, 1) - o.firstDayOfWeek + 7) % 7;
+    int offset = (CalendarWeekday(year, month, 1) - o.firstDayOfWeek + 7) % 7;
     int cells = CalendarGridCells(offset, CalendarDaysInMonth(year, month));
     LocalDate first = DateAddDays({year, month, 1}, -offset);
     El* week = nullptr;
@@ -19678,20 +19666,20 @@ CheckboxStyles& CheckboxStyles::Disabled(const StateStyle& style) {
     return *this;
 }
 
-CheckboxIndicatorStyles&
-CheckboxIndicatorStyles::Checked(const StateStyle& style) {
+CheckboxIndicatorStyles& CheckboxIndicatorStyles::Checked(
+    const StateStyle& style) {
     StateStyleRefine(&checked, style);
     return *this;
 }
 
-CheckboxIndicatorStyles&
-CheckboxIndicatorStyles::Indeterminate(const StateStyle& style) {
+CheckboxIndicatorStyles& CheckboxIndicatorStyles::Indeterminate(
+    const StateStyle& style) {
     StateStyleRefine(&indeterminate, style);
     return *this;
 }
 
-CheckboxIndicatorStyles&
-CheckboxIndicatorStyles::Disabled(const StateStyle& style) {
+CheckboxIndicatorStyles& CheckboxIndicatorStyles::Disabled(
+    const StateStyle& style) {
     StateStyleRefine(&disabled, style);
     return *this;
 }
@@ -19704,10 +19692,9 @@ El* Checkbox::New(Ctx* cx, Str id, CheckboxState state, bool disabled,
     Arena* a = cx->a;
 
     AccessibilityToggled toggled =
-        state == CheckboxState::Indeterminate
-            ? AccessibilityToggled::Mixed
-            : state == CheckboxState::Checked ? AccessibilityToggled::True
-                                               : AccessibilityToggled::False;
+        state == CheckboxState::Indeterminate ? AccessibilityToggled::Mixed
+        : state == CheckboxState::Checked     ? AccessibilityToggled::True
+                                              : AccessibilityToggled::False;
     El* e = Div(a)
                 ->PathClick(id)
                 ->Role(role)
@@ -19720,7 +19707,7 @@ El* Checkbox::New(Ctx* cx, Str id, CheckboxState state, bool disabled,
         StateStyle base = instance ? *instance : StateStyle{};
         const StateStyle* states[2] = {
             state == CheckboxState::Checked && styles ? &styles->checked
-                                                       : nullptr,
+                                                      : nullptr,
             state == CheckboxState::Indeterminate && styles
                 ? &styles->indeterminate
                 : nullptr,
@@ -19756,7 +19743,7 @@ El* CheckboxIndicator::New(Ctx* cx, CheckboxState state, bool disabled,
         StateStyle base = instance ? *instance : StateStyle{};
         const StateStyle* states[2] = {
             state == CheckboxState::Checked && styles ? &styles->checked
-                                                       : nullptr,
+                                                      : nullptr,
             state == CheckboxState::Indeterminate && styles
                 ? &styles->indeterminate
                 : nullptr,
@@ -20204,11 +20191,8 @@ El* ColorPicker::New(Ctx* cx, Str id, bool open, bool disabled,
                      Listener onOpenChange, FocusHandle focus, int tabIndex,
                      bool tabStop, const char* keyContext) {
     Arena* a = cx->a;
-    El* e = Div(a)
-                ->Id(id)
-                ->Role(role)
-                ->AriaExpanded(open)
-                ->AriaDisabled(disabled);
+    El* e =
+        Div(a)->Id(id)->Role(role)->AriaExpanded(open)->AriaDisabled(disabled);
     if (accessibilityLabel.s) {
         e->AriaLabel(accessibilityLabel);
     }
@@ -20241,16 +20225,16 @@ El* ColorSwatch::New(Ctx* cx, Str id, Listener onClick, Listener onHover,
                      Str accessibilityLabel, int tabIndex, bool tabStop,
                      AccessibilityRole role) {
     Arena* a = cx->a;
-    El* e = Div(a)
-                ->PathClick(id)
-                ->Role(role)
-                ->AriaLabel(accessibilityLabel.s
-                                ? accessibilityLabel
-                                : ColorPickerHexString(a, color))
-                ->AriaToggled(selected ? AccessibilityToggled::True
-                                       : AccessibilityToggled::False)
-                ->AriaSelected(selected)
-                ->AriaDisabled(disabled);
+    El* e =
+        Div(a)
+            ->PathClick(id)
+            ->Role(role)
+            ->AriaLabel(accessibilityLabel.s ? accessibilityLabel
+                                             : ColorPickerHexString(a, color))
+            ->AriaToggled(selected ? AccessibilityToggled::True
+                                   : AccessibilityToggled::False)
+            ->AriaSelected(selected)
+            ->AriaDisabled(disabled);
     if (!disabled) {
         e->PathId(id)->TabIndex(tabIndex)->TabStop(tabStop);
     }
@@ -21387,8 +21371,7 @@ struct DialogTriggerState {
             return;
         }
         if (self->handle.IsValid()) {
-            self->handle.SetOpen(cx, true,
-                                 DialogChangeReason::TriggerPress);
+            self->handle.SetOpen(cx, true, DialogChangeReason::TriggerPress);
         }
         if (self->onOpen.IsValid()) {
             ListenerCall(cx->app, cx->win, self->onOpen, ev);
@@ -21397,13 +21380,11 @@ struct DialogTriggerState {
     }
 };
 
-El* DialogTrigger::New(Ctx* cx, Listener onOpen, DialogHandle handle,
-                       Str id) {
+El* DialogTrigger::New(Ctx* cx, Listener onOpen, DialogHandle handle, Str id) {
     Arena* a = cx->a;
     El* e = Div(a);
-    Entity<DialogTriggerState> trigger =
-        ElementStateEntity<DialogTriggerState>(
-            cx, id, StrL("gpui::DialogTriggerState"));
+    Entity<DialogTriggerState> trigger = ElementStateEntity<DialogTriggerState>(
+        cx, id, StrL("gpui::DialogTriggerState"));
     if (DialogTriggerState* state = trigger.Get(cx)) {
         state->handle = handle;
         state->onOpen = onOpen;
@@ -21909,7 +21890,8 @@ El* RenderNode(const AreaCtx& ac, int node) {
 El* RenderDragPreview(const AreaCtx& ac) {
     Ctx* cx = ac.cx;
     const DragPayload* drag = WindowActiveDrag(cx);
-    if (!drag || !base::StrEq(drag->kind, kDockPanelDrag) || !ac.r->dragPreview) {
+    if (!drag || !base::StrEq(drag->kind, kDockPanelDrag) ||
+        !ac.r->dragPreview) {
         return nullptr;
     }
     int panelIx = drag->ix;
@@ -22166,8 +22148,7 @@ const PaneNode* PaneTree::FindNode(NodeId id) const {
     return FindNodeRec(root, id);
 }
 
-static bool FindPanelNodeRec(const PaneNode* node, PanelId panel,
-                             NodeId* out) {
+static bool FindPanelNodeRec(const PaneNode* node, PanelId panel, NodeId* out) {
     if (!node) {
         return false;
     }
@@ -22269,8 +22250,7 @@ NodeId PaneTree::SetRootTiles(const TilePanel* values, int count) {
     return node->nodeId;
 }
 
-static bool AppendChild(PaneNode* parent, PaneNode* child,
-                        const float* size) {
+static bool AppendChild(PaneNode* parent, PaneNode* child, const float* size) {
     if (!parent || parent->paneKind != PaneKind::Split || !child) {
         return false;
     }
@@ -22430,8 +22410,7 @@ bool PaneTree::InsertBeside(NodeId at, PanelId panel, Placement placement,
     }
     PaneNode* group = PaneNode::Tabs(AllocateNodeId());
     VecAppend(group->panels, panel);
-    bool before = placement == Placement::Left ||
-                  placement == Placement::Top;
+    bool before = placement == Placement::Left || placement == Placement::Top;
     Axis axis = PlacementAxis(placement);
     PaneNode* parent = nullptr;
     int ix = -1;
@@ -22470,10 +22449,10 @@ bool PaneTree::InsertBeside(NodeId at, PanelId panel, Placement placement,
 static bool NormalizeNode(PaneNode* node) {
     bool changed = false;
     if (node->paneKind == PaneKind::Tabs) {
-        int clamped = node->panels.len > 0
-                          ? std::max(0, std::min(node->activeIx,
-                                               node->panels.len - 1))
-                          : 0;
+        int clamped =
+            node->panels.len > 0
+                ? std::max(0, std::min(node->activeIx, node->panels.len - 1))
+                : 0;
         if (node->activeIx != clamped) {
             node->activeIx = clamped;
             changed = true;
@@ -22520,8 +22499,8 @@ static bool NormalizeNode(PaneNode* node) {
     bool hasSameAxis = false;
     for (int i = 0; i < node->children.len; i++) {
         PaneNode* child = node->children[i];
-        hasSameAxis |= child->paneKind == PaneKind::Split &&
-                       child->axis == node->axis;
+        hasSameAxis |=
+            child->paneKind == PaneKind::Split && child->axis == node->axis;
     }
     if (hasSameAxis) {
         Vec<PaneNode*> children;
@@ -22670,8 +22649,7 @@ EditResult PaneTree::SetSizes(NodeId id, const float* values,
     bool changed = false;
     for (int i = 0; i < count; i++) {
         uint8_t isKnown = known ? known[i] : 1;
-        changed |= node->sizes[i] != values[i] ||
-                   node->sizeKnown[i] != isKnown;
+        changed |= node->sizes[i] != values[i] || node->sizeKnown[i] != isKnown;
         node->sizes[i] = values[i];
         node->sizeKnown[i] = isKnown;
     }
@@ -22795,10 +22773,10 @@ static PaneNode* BuildLayoutNode(PaneTree* tree, const DockLayout* layout,
     if (layout->kind == PaneKind::Split) {
         PaneNode* node = PaneNode::Split(id, layout->axis);
         for (int i = 0; i < layout->children.len; i++) {
-            PaneNode* child = BuildLayoutNode(tree, layout->children[i],
-                                              collected);
-            const float* size = layout->sizeKnown[i] ? &layout->sizes[i]
-                                                     : nullptr;
+            PaneNode* child =
+                BuildLayoutNode(tree, layout->children[i], collected);
+            const float* size =
+                layout->sizeKnown[i] ? &layout->sizes[i] : nullptr;
             AppendChild(node, child, size);
         }
         return node;
@@ -22816,8 +22794,8 @@ static PaneNode* BuildLayoutNode(PaneTree* tree, const DockLayout* layout,
     }
     PaneNode* node = PaneNode::Tiles(id);
     for (int i = 0; i < layout->panelIds.len; i++) {
-        Bounds bounds = i < layout->tileBounds.len ? layout->tileBounds[i]
-                                                   : Bounds{};
+        Bounds bounds =
+            i < layout->tileBounds.len ? layout->tileBounds[i] : Bounds{};
         VecAppend(node->tiles, TilePanel::New(layout->panelIds[i], bounds)
                                    .WithZIndex(i));
         if (collected && i < layout->panelViews.len) {
@@ -22835,8 +22813,8 @@ PaneTree* PaneTree::FromLayout(DockLayout* layout, RootKind kind,
     PaneTree* tree = new PaneTree(kind);
     PaneNode* built = BuildLayoutNode(tree, layout, panels);
     if (kind == RootKind::Split && built->paneKind != PaneKind::Split) {
-        PaneNode* wrapper = PaneNode::Split(tree->AllocateNodeId(),
-                                            Axis::Horizontal);
+        PaneNode* wrapper =
+            PaneNode::Split(tree->AllocateNodeId(), Axis::Horizontal);
         AppendChild(wrapper, built, nullptr);
         built = wrapper;
     }
@@ -22881,10 +22859,8 @@ void PanelRegistry::Register(Str panelName, PanelRegistryBuild build,
     VecAppend(items, entry);
 }
 
-bool PanelRegistry::BuildPanel(Str panelName,
-                               const PanelBuildContext* context,
-                               Window* win, App* app,
-                               DockPanelDef* out) const {
+bool PanelRegistry::BuildPanel(Str panelName, const PanelBuildContext* context,
+                               Window* win, App* app, DockPanelDef* out) const {
     if (!out) {
         return false;
     }
@@ -23231,8 +23207,7 @@ static int DumpNode(const DockState* s, DockAreaState* out, int node) {
         }
         out->nodes[leaf].kind = PanelInfoKind::Panel;
         if (s->panels[panelIx].dump) {
-            s->panels[panelIx].dump(s->panels[panelIx].data,
-                                    &out->nodes[leaf]);
+            s->panels[panelIx].dump(s->panels[panelIx].data, &out->nodes[leaf]);
         }
         VecAppend(children, leaf);
     }
@@ -23288,8 +23263,8 @@ static int PanelForName(DockState* s, const PanelStateNode* saved, Arena* a,
         context.info = &saved->kind;
         DockPanelDef built;
         PanelRegistry* registry = PanelRegistryGlobal(app);
-        if (registry &&
-            registry->BuildPanel(name, &context, win, app, &built)) {
+        if (registry && registry
+                            ->BuildPanel(name, &context, win, app, &built)) {
             return DockAddPanelDef(s, built);
         }
     }
@@ -23340,8 +23315,8 @@ static int LoadNode(DockState* s, const DockAreaState* st, int ix, Arena* a,
             if (leaf.kind != PanelInfoKind::Panel) {
                 continue;
             }
-            int panelIx = PanelForName(s, &leaf, a, invalidRender, app, win,
-                                       dockArea);
+            int panelIx =
+                PanelForName(s, &leaf, a, invalidRender, app, win, dockArea);
             if (panelIx >= 0) {
                 DockTabsAdd(s, node, panelIx);
             }
@@ -23366,15 +23341,14 @@ static void LoadSide(DockState* s, const DockAreaState* st,
         to->node = -1;
         return;
     }
-    to->node = LoadNode(s, st, from.node, a, invalidRender, app, win,
-                        dockArea);
+    to->node = LoadNode(s, st, from.node, a, invalidRender, app, win, dockArea);
     to->size = from.size > 0 ? from.size : to->size;
     to->open = from.open;
 }
 
 bool DockLoad(DockState* s, const DockAreaState* st, Arena* a,
-              El* (*invalidRender)(Ctx* cx, void* data), App* app,
-              Window* win, Entity<DockState> dockArea) {
+              El* (*invalidRender)(Ctx* cx, void* data), App* app, Window* win,
+              Entity<DockState> dockArea) {
     if (!s || !st || st->center < 0) {
         return false;
     }
@@ -23394,12 +23368,10 @@ bool DockLoad(DockState* s, const DockAreaState* st, Arena* a,
     s->left.node = -1;
     s->right.node = -1;
     s->bottom.node = -1;
-    s->center = LoadNode(s, st, st->center, a, invalidRender, app, win,
-                         dockArea);
-    LoadSide(s, st, st->left, a, invalidRender, &s->left, app, win,
-             dockArea);
-    LoadSide(s, st, st->right, a, invalidRender, &s->right, app, win,
-             dockArea);
+    s->center =
+        LoadNode(s, st, st->center, a, invalidRender, app, win, dockArea);
+    LoadSide(s, st, st->left, a, invalidRender, &s->left, app, win, dockArea);
+    LoadSide(s, st, st->right, a, invalidRender, &s->right, app, win, dockArea);
     LoadSide(s, st, st->bottom, a, invalidRender, &s->bottom, app, win,
              dockArea);
 
@@ -23620,8 +23592,7 @@ float DockSizing::Clamp(float value) const {
                                area.w - kDockPanelMinSize - oppositeDockSize);
             break;
         case DockPlacement::Bottom:
-            maxSize = std::max(kDockPanelMinSize,
-                               area.h - kDockPanelMinSize);
+            maxSize = std::max(kDockPanelMinSize, area.h - kDockPanelMinSize);
             break;
         case DockPlacement::Center:
             return value;
@@ -23652,8 +23623,7 @@ int DockPanelByName(const DockState* s, Str name) {
 int DockAddPanelDef(DockState* s, DockPanelDef def) {
     if (def.id.value == 0) {
         def.id = PanelId::FromU64(gNextDockPanelId++);
-        if (def.id.value == 0)
-            def.id = PanelId::FromU64(gNextDockPanelId++);
+        if (def.id.value == 0) def.id = PanelId::FromU64(gNextDockPanelId++);
     }
     VecAppend(s->panels, def);
     return s->panels.len - 1;
@@ -23970,9 +23940,8 @@ void DockSetActive(DockState* s, Ctx* cx, int node, int ix) {
     if (n.activeIx == ix) {
         return;
     }
-    int oldPanel = n.activeIx >= 0 && n.activeIx < n.panel.len
-                       ? n.panel[n.activeIx]
-                       : -1;
+    int oldPanel =
+        n.activeIx >= 0 && n.activeIx < n.panel.len ? n.panel[n.activeIx] : -1;
     int newPanel = n.panel[ix];
     n.activeIx = ix;
 
@@ -24345,9 +24314,8 @@ void DockResizeSide(DockState* s, Ctx* cx, DockPlacement p, float x, float y) {
             ? s->right.size
             : 0;
     float opposite = p == DockPlacement::Left ? rightSize : leftSize;
-    DockSizing sizing = DockSizing::New(p)
-                            .WithAreaBounds(b)
-                            .WithOppositeDockSize(opposite);
+    DockSizing sizing =
+        DockSizing::New(p).WithAreaBounds(b).WithOppositeDockSize(opposite);
     side->SetSize(sizing.Clamp(sizing.SizeFromPointer({x, y})));
     Notify(cx);
 }
@@ -24688,8 +24656,7 @@ static MenuRow* CopyMenuRows(Arena* a, const MenuRow* rows, int count) {
     for (int i = 0; i < count; i++) {
         copy[i] = rows[i];
         copy[i].label = StrDup(a, rows[i].label);
-        copy[i].submenu =
-            CopyMenuRows(a, rows[i].submenu, rows[i].submenuN);
+        copy[i].submenu = CopyMenuRows(a, rows[i].submenu, rows[i].submenuN);
     }
     return copy;
 }
@@ -24717,8 +24684,8 @@ void BaseSetAppMenus(App* app, const MenuDef* menus, int count) {
         for (int i = 0; i < count; i++) {
             MenuDef copy = menus[i];
             copy.name = StrDup(state->appMenuArena, menus[i].name);
-            copy.items = CopyMenuRows(state->appMenuArena, menus[i].items,
-                                      menus[i].n);
+            copy.items =
+                CopyMenuRows(state->appMenuArena, menus[i].items, menus[i].n);
             VecAppend(state->appMenus, copy);
         }
     }
@@ -24993,14 +24960,14 @@ EditorExtras EditorExtras::Of(const InputState* state) {
 }
 
 bool EditorExtras::HasDefinition() const {
-    return state && (state->definitionProvider ||
-                     state->hoverDef.lastLocations.len > 0);
+    return state &&
+           (state->definitionProvider || state->hoverDef.lastLocations.len > 0);
 }
 
 bool EditorExtras::HasCodeActions() const {
-    return state && (state->codeActionProvider ||
-                     state->codeActionProviders.len > 0 ||
-                     state->codeActions.items.len > 0);
+    return state &&
+           (state->codeActionProvider || state->codeActionProviders.len > 0 ||
+            state->codeActions.items.len > 0);
 }
 
 InputContextMenuCapabilities InputContextMenuCapabilities::Of(
@@ -25023,12 +24990,12 @@ InputContextMenuCapabilities InputContextMenuCapabilities::Of(
     return value;
 }
 
-#define GPUI_CAPABILITY_BUILDER(Method, Field)                              \
-    InputContextMenuCapabilities InputContextMenuCapabilities::Method(      \
-        bool value) const {                                                  \
-        InputContextMenuCapabilities copy = *this;                           \
-        copy.Field = value;                                                  \
-        return copy;                                                         \
+#define GPUI_CAPABILITY_BUILDER(Method, Field)                         \
+    InputContextMenuCapabilities InputContextMenuCapabilities::Method( \
+        bool value) const {                                            \
+        InputContextMenuCapabilities copy = *this;                     \
+        copy.Field = value;                                            \
+        return copy;                                                   \
     }
 
 GPUI_CAPABILITY_BUILDER(Disabled, disabled)
@@ -25074,8 +25041,7 @@ InputStyles& InputStyles::Disabled(const Style& style, uint32_t fields) {
     return *this;
 }
 
-void InputStyles::Apply(Style* style, bool isFocused,
-                        bool isDisabled) const {
+void InputStyles::Apply(Style* style, bool isFocused, bool isDisabled) const {
     if (!style) {
         return;
     }
@@ -25114,8 +25080,8 @@ NativeMenu& NativeMenu::MenuWithDisabled(Str label, bool disabled,
 }
 
 NativeMenu& NativeMenu::Separator() {
-    if (items.len > 0 &&
-        items[items.len - 1].kind != NativeMenuItemKind::Separator) {
+    if (items.len > 0 && items[items.len - 1]
+                                 .kind != NativeMenuItemKind::Separator) {
         VecAppend(items, NativeMenuItem{});
     }
     return *this;
@@ -25125,11 +25091,9 @@ void InputDefaultNativeMenu(const InputState* state, NativeMenu* out) {
     if (!out) {
         return;
     }
-    InputContextMenuCapabilities c =
-        InputContextMenuCapabilities::Of(state);
+    InputContextMenuCapabilities c = InputContextMenuCapabilities::Of(state);
     out->MenuWithDisabled(StrL("Copy"), !c.IsCopyable(), InputAction::Copy)
-        .MenuWithDisabled(StrL("Cut"),
-                          !c.IsEditable() || !c.IsCopyable(),
+        .MenuWithDisabled(StrL("Cut"), !c.IsEditable() || !c.IsCopyable(),
                           InputAction::Cut)
         .MenuWithDisabled(StrL("Paste"), !c.IsEditable(), InputAction::Paste)
         .Separator()
@@ -26292,8 +26256,7 @@ void CompletionProvider::Install(InputState* state,
 
 void CodeActionProvider::Install(InputState* state) const {
     if (state && codeActions) {
-        InputAddCodeActionProvider(state, codeActions, data,
-                                   performCodeAction);
+        InputAddCodeActionProvider(state, codeActions, data, performCodeAction);
     }
 }
 
@@ -26407,8 +26370,7 @@ Lsp& Lsp::DocumentColors(const DocumentColorProvider& provider) {
     return *this;
 }
 
-Lsp& Lsp::SemanticTokens(
-    const DocumentRangeSemanticTokensProvider& provider) {
+Lsp& Lsp::SemanticTokens(const DocumentRangeSemanticTokensProvider& provider) {
     semanticTokensProvider = provider;
     return *this;
 }
@@ -26459,7 +26421,8 @@ int Lsp::DocumentColorsForRange(Selection visible, DocumentColor* out,
     int total = 0;
     for (int i = 0; i < state->documentColors.len; i++) {
         const DocumentColor& color = state->documentColors[i];
-        if (color.range.start >= visible.end || color.range.end <= visible.start ||
+        if (color.range.start >= visible.end ||
+            color.range.end <= visible.start ||
             color.range.start >= color.range.end) {
             continue;
         }
@@ -26471,9 +26434,9 @@ int Lsp::DocumentColorsForRange(Selection visible, DocumentColor* out,
     return total;
 }
 
-int Lsp::SemanticTokensForRange(
-    Selection visible, const HighlightStyleResolver& resolver, TextSpan* out,
-    int cap) const {
+int Lsp::SemanticTokensForRange(Selection visible,
+                                const HighlightStyleResolver& resolver,
+                                TextSpan* out, int cap) const {
     if (!state || state->semanticTokens.len <= 0) {
         return 0;
     }
@@ -32782,8 +32745,7 @@ void ListSetQuery(ListState* s, Ctx* cx, Str query) {
     StartSearch(s, cx, query, false);
 }
 
-void ListState::OnQueryInput(ListState* self, Ctx* cx,
-                             const InputEvent* ev) {
+void ListState::OnQueryInput(ListState* self, Ctx* cx, const InputEvent* ev) {
     if (!self || !self->queryInput || !ev ||
         ev->kind != InputEventKind::Change) {
         return;
@@ -33486,11 +33448,8 @@ El* NumberInput::Compose(Ctx* cx, Str id, InputState* state, bool disabled,
         decrement->Flex1()->MinH(0);
         increment->Flex1()->MinH(0);
         root->Child(text->IntoEl())
-            ->Child(Div(a)
-                        ->FlexCol()
-                        ->H(kFill)
-                        ->Child(increment)
-                        ->Child(decrement));
+            ->Child(Div(a)->FlexCol()->H(kFill)->Child(increment)->Child(
+                decrement));
     } else {
         root->Child(decrement)->Child(text->IntoEl())->Child(increment);
     }
@@ -33800,8 +33759,8 @@ void PopoverSetOpenFocused(PopoverState* s, Ctx* cx, bool open) {
         s->previousFocus = {};
     }
     s->open = open;
-    BaseDeferredPopoverSet(cx->app,
-                           s->self.IsValid() ? s->self : cx->self, open);
+    BaseDeferredPopoverSet(cx->app, s->self.IsValid() ? s->self : cx->self,
+                           open);
     PopoverReportOpenChange(s, cx);
 }
 
@@ -34185,8 +34144,8 @@ void PopupMenuState::OnAction(PopupMenuState* self, Ctx* cx,
         act == PopupMenuAction::OpenSubmenu &&
         (self->selected < 0 || self->selected >= self->rows.len ||
          !self->rows[self->selected].submenu);
-    bool unhandledClose = act == PopupMenuAction::CloseSubmenu &&
-                          self->openSubmenu < 0;
+    bool unhandledClose =
+        act == PopupMenuAction::CloseSubmenu && self->openSubmenu < 0;
     if (root && (unhandledOpen || unhandledClose)) {
 
         const_cast<ActionEvent*>(ev)->propagate = true;
@@ -34308,8 +34267,7 @@ El* PopupPlaceContent(El* content, PopupAnchor anchor, float offsetY) {
         return content;
     }
 
-    return content
-        ->AnchorCorner(anchor, kPopupWindowMargin, offsetY)
+    return content->AnchorCorner(anchor, kPopupWindowMargin, offsetY)
         ->Deferred();
 }
 
@@ -34367,8 +34325,8 @@ ResolvedPosition PositionSide(Bounds trigger, Size popup, Size view,
                               float margin, const Placement* preferred,
                               Align align, float offset) {
     AnchoredPosition resolved = AnchoredSideResolve(
-        trigger, popup, view, margin,
-        preferred ? (int)*preferred : -1, (int)align, offset);
+        trigger, popup, view, margin, preferred ? (int)*preferred : -1,
+        (int)align, offset);
     ResolvedPosition out = {};
     out.bounds = resolved.bounds;
     out.placement = (Placement)resolved.placement;
@@ -34376,8 +34334,8 @@ ResolvedPosition PositionSide(Bounds trigger, Size popup, Size view,
     return out;
 }
 
-ResolvedPosition PositionCorner(Anchor anchor, Point at, Size popup,
-                                Size view, float margin) {
+ResolvedPosition PositionCorner(Anchor anchor, Point at, Size popup, Size view,
+                                float margin) {
     AnchoredPosition resolved =
         AnchoredCornerResolve(anchor, at, popup, view, margin);
     ResolvedPosition out = {};
@@ -34447,8 +34405,7 @@ El* Positioner::IntoEl() {
     s.positionerCorner = strategy == Strategy::Corner;
     s.positionerTrigger = trigger;
     s.positionerPoint = point;
-    s.positionerPlacement =
-        hasPlacement ? (int8_t)placement : (int8_t)-1;
+    s.positionerPlacement = hasPlacement ? (int8_t)placement : (int8_t)-1;
     s.positionerAlign = (uint8_t)align;
     s.anchor = anchor;
     s.anchorGap = offset;
@@ -34526,9 +34483,8 @@ RadioStyles& RadioStyles::Disabled(const StateStyle& style) {
     return *this;
 }
 
-El* Radio::New(Ctx* cx, Str id, bool checked, bool disabled,
-               Listener onChange, const RadioStyles* styles,
-               const StateStyle* instance) {
+El* Radio::New(Ctx* cx, Str id, bool checked, bool disabled, Listener onChange,
+               const RadioStyles* styles, const StateStyle* instance) {
     Arena* a = cx->a;
     El* e = Div(a)
                 ->PathClick(id)
@@ -36048,52 +36004,51 @@ struct ResolvedScrollbarThumb {
 
 static ResolvedScrollbarThumb ResolveThumb(
     const ScrollbarThumbStyle& state, const ScrollbarThumbStyle& local,
-    const ScrollbarThumbStyle& globalState,
-    const ScrollbarThumbStyle& global, Background defaultBackground,
-    float defaultWidth, float defaultInset, float defaultRadius) {
+    const ScrollbarThumbStyle& globalState, const ScrollbarThumbStyle& global,
+    Background defaultBackground, float defaultWidth, float defaultInset,
+    float defaultRadius) {
     ResolvedScrollbarThumb out;
-    out.background = state.hasBackground
-                         ? state.background
-                         : (local.hasBackground
-                                ? local.background
-                                : (globalState.hasBackground
-                                       ? globalState.background
-                                       : (global.hasBackground
-                                              ? global.background
-                                              : defaultBackground)));
-    out.width = state.hasWidth
-                    ? state.width
-                    : (local.hasWidth
-                           ? local.width
-                           : (globalState.hasWidth
-                                  ? globalState.width
-                                  : (global.hasWidth ? global.width
-                                                     : defaultWidth)));
-    out.inset = state.hasInset
-                    ? state.inset
-                    : (local.hasInset
-                           ? local.inset
-                           : (globalState.hasInset
-                                  ? globalState.inset
-                                  : (global.hasInset ? global.inset
-                                                     : defaultInset)));
-    out.radius = state.hasRadius
-                     ? state.radius
-                     : (local.hasRadius
-                            ? local.radius
-                            : (globalState.hasRadius
-                                   ? globalState.radius
-                                   : (global.hasRadius ? global.radius
-                                                       : defaultRadius)));
-    out.minLength = state.hasMinLength
-                        ? state.minLength
-                        : (local.hasMinLength
-                               ? local.minLength
-                               : (globalState.hasMinLength
-                                      ? globalState.minLength
-                                      : (global.hasMinLength
-                                             ? global.minLength
-                                             : 48.f)));
+    out.background =
+        state.hasBackground
+            ? state.background
+            : (local.hasBackground
+                   ? local.background
+                   : (globalState.hasBackground
+                          ? globalState.background
+                          : (global.hasBackground ? global.background
+                                                  : defaultBackground)));
+    out.width =
+        state.hasWidth
+            ? state.width
+            : (local.hasWidth
+                   ? local.width
+                   : (globalState.hasWidth
+                          ? globalState.width
+                          : (global.hasWidth ? global.width : defaultWidth)));
+    out.inset =
+        state.hasInset
+            ? state.inset
+            : (local.hasInset
+                   ? local.inset
+                   : (globalState.hasInset
+                          ? globalState.inset
+                          : (global.hasInset ? global.inset : defaultInset)));
+    out.radius =
+        state.hasRadius
+            ? state.radius
+            : (local.hasRadius ? local.radius
+                               : (globalState.hasRadius
+                                      ? globalState.radius
+                                      : (global.hasRadius ? global.radius
+                                                          : defaultRadius)));
+    out.minLength =
+        state.hasMinLength
+            ? state.minLength
+            : (local.hasMinLength
+                   ? local.minLength
+                   : (globalState.hasMinLength
+                          ? globalState.minLength
+                          : (global.hasMinLength ? global.minLength : 48.f)));
     return out;
 }
 
@@ -36101,34 +36056,34 @@ static void ResolveScrollbarStyles(El* box, const ScrollbarStyles& local,
                                    const ScrollbarStyles& global,
                                    Rgba foreground) {
     box->scrollThemeSet = true;
-    box->scrollTrack = ResolveTrackBackground(
-        local.track, local.track, global.track, global.track);
+    box->scrollTrack = ResolveTrackBackground(local.track, local.track,
+                                              global.track, global.track);
     box->scrollTrackHover = ResolveTrackBackground(
         local.trackHover, local.track, global.trackHover, global.track);
     box->scrollTrackActive = ResolveTrackBackground(
         local.trackActive, local.track, global.trackActive, global.track);
-    box->scrollTrackBorder = ResolveTrackBorder(
-        local.track, local.track, global.track, global.track);
+    box->scrollTrackBorder = ResolveTrackBorder(local.track, local.track,
+                                                global.track, global.track);
     box->scrollTrackHoverBorder = ResolveTrackBorder(
         local.trackHover, local.track, global.trackHover, global.track);
     box->scrollTrackActiveBorder = ResolveTrackBorder(
         local.trackActive, local.track, global.trackActive, global.track);
-    box->scrollTrackWidth = local.track.hasWidth
-                                ? local.track.width
-                                : (global.track.hasWidth ? global.track.width
-                                                         : 16.f);
+    box->scrollTrackWidth =
+        local.track.hasWidth
+            ? local.track.width
+            : (global.track.hasWidth ? global.track.width : 16.f);
 
     Background normalDefault(RgbaOpacity(foreground, 0.35f));
     Background activeDefault(RgbaOpacity(foreground, 0.55f));
     ResolvedScrollbarThumb normal =
         ResolveThumb(local.thumb, local.thumb, global.thumb, global.thumb,
                      normalDefault, 6, 4, 0);
-    ResolvedScrollbarThumb hover = ResolveThumb(
-        local.thumbHover, local.thumb, global.thumbHover, global.thumb,
-        activeDefault, 8, 4, 0);
-    ResolvedScrollbarThumb active = ResolveThumb(
-        local.thumbActive, local.thumb, global.thumbActive, global.thumb,
-        activeDefault, 8, 4, 0);
+    ResolvedScrollbarThumb hover =
+        ResolveThumb(local.thumbHover, local.thumb, global.thumbHover,
+                     global.thumb, activeDefault, 8, 4, 0);
+    ResolvedScrollbarThumb active =
+        ResolveThumb(local.thumbActive, local.thumb, global.thumbActive,
+                     global.thumb, activeDefault, 8, 4, 0);
     box->scrollThumb = normal.background;
     box->scrollThumbHover = hover.background;
     box->scrollThumbActive = active.background;
@@ -36202,9 +36157,9 @@ float ScrollbarThumbPos(float track, float thumb, float offset, float container,
     return ScrollbarThumbPos(track, thumb, offset, container, content, 0);
 }
 
-AxisPrepaintState ScrollbarPrepaintAxis(
-    Axis axis, Bounds track, float offset, float containerSize,
-    float contentSize, const ScrollbarThumbStyle& style) {
+AxisPrepaintState ScrollbarPrepaintAxis(Axis axis, Bounds track, float offset,
+                                        float containerSize, float contentSize,
+                                        const ScrollbarThumbStyle& style) {
     AxisPrepaintState out;
     out.axis = axis;
     out.barHitbox = track;
@@ -36318,17 +36273,16 @@ El* Scrollbar::New(Ctx* cx, Str id, float scrollY, float scrollX,
     return Apply(cx, Div(cx->a), id, scrollY, scrollX, onScroll, axis, mode);
 }
 
-El* Scrollbar::Apply(Ctx* cx, El* element, Str id, float scrollY,
-                     float scrollX, Listener onScroll, ScrollAxis axis) {
+El* Scrollbar::Apply(Ctx* cx, El* element, Str id, float scrollY, float scrollX,
+                     Listener onScroll, ScrollAxis axis) {
     const BaseTheme* theme = BaseThemeGlobal(cx->app);
     ScrollbarMode mode =
         theme ? theme->scrollbar.mode : ScrollbarMode::Scrolling;
     return Apply(cx, element, id, scrollY, scrollX, onScroll, axis, mode);
 }
 
-El* Scrollbar::Apply(Ctx* cx, El* element, Str id, float scrollY,
-                     float scrollX, Listener onScroll, ScrollAxis axis,
-                     ScrollbarMode mode) {
+El* Scrollbar::Apply(Ctx* cx, El* element, Str id, float scrollY, float scrollX,
+                     Listener onScroll, ScrollAxis axis, ScrollbarMode mode) {
     El* box = ApplyScrollbarTheme(cx, element ? element : Div(cx->a))
                   ->ScrollMode(mode);
 
@@ -36493,8 +36447,7 @@ void SheetState::OnOverlay(SheetState* self, Ctx* cx,
     }
 }
 
-void SheetState::OnAction(SheetState* self, Ctx* cx,
-                          const ActionEvent* ev) {
+void SheetState::OnAction(SheetState* self, Ctx* cx, const ActionEvent* ev) {
     if (!ev) {
         return;
     }
@@ -36589,14 +36542,14 @@ El* Sheet::IntoEl() {
         root->Child(overlay);
         if (overlayInteractive) {
 
-            El* capture = Div(cx->a)
-                              ->Absolute()
-                              ->Top(hasDismissBefore ? dismissBeforeY : 0)
-                              ->Left(0)
-                              ->Right(0)
-                              ->Bottom(0)
-                              ->OnMouseDown(
-                                  ListenTo(state, &SheetState::OnOverlay));
+            El* capture =
+                Div(cx->a)
+                    ->Absolute()
+                    ->Top(hasDismissBefore ? dismissBeforeY : 0)
+                    ->Left(0)
+                    ->Right(0)
+                    ->Bottom(0)
+                    ->OnMouseDown(ListenTo(state, &SheetState::OnOverlay));
             root->Child(capture);
         }
     }
@@ -37011,10 +36964,10 @@ static StateStyle ResolveSwitchStyle(bool checked, bool disabled,
     return StateStyleResolve(base, states, 2);
 }
 
-El* Switch::New(Ctx* cx, Str id, bool checked, bool disabled,
-                Listener onChange, const SwitchStyles* styles,
-                const StateStyle* instance, Str accessibilityLabel,
-                int tabIndex, bool tabStop, FocusHandle focus) {
+El* Switch::New(Ctx* cx, Str id, bool checked, bool disabled, Listener onChange,
+                const SwitchStyles* styles, const StateStyle* instance,
+                Str accessibilityLabel, int tabIndex, bool tabStop,
+                FocusHandle focus) {
     Arena* a = cx->a;
     El* e = Div(a)
                 ->PathClick(id)
@@ -37350,16 +37303,14 @@ static bool SamePoint(Point a, Point b) {
 static bool SameEndpoint(const TextSelectionEndpoint& a,
                          const TextSelectionEndpoint& b) {
     return a.entity == b.entity && a.hasEntity == b.hasEntity &&
-           SamePoint(a.point, b.point) &&
-           a.contentKey == b.contentKey &&
+           SamePoint(a.point, b.point) && a.contentKey == b.contentKey &&
            a.hasContentKey == b.hasContentKey;
 }
 
 static bool SameSnapshot(const TextSelectionSnapshot& a,
                          const TextSelectionSnapshot& b) {
     return SameEndpoint(a.anchor, b.anchor) &&
-           SameEndpoint(a.cursor, b.cursor) &&
-           a.selecting == b.selecting &&
+           SameEndpoint(a.cursor, b.cursor) && a.selecting == b.selecting &&
            a.hasWindowPoints == b.hasWindowPoints &&
            (!a.hasWindowPoints ||
             (SamePoint(a.windowPoints.anchor, b.windowPoints.anchor) &&
@@ -37486,9 +37437,8 @@ static bool ParticipantContains(const TextSelectionParticipantState* state,
             state->registration.bounds.Contains(point));
 }
 
-static TextSelectionParticipantState* ParticipantAt(Window* window,
-                                                     Point point,
-                                                     EntityId* outId) {
+static TextSelectionParticipantState* ParticipantAt(Window* window, Point point,
+                                                    EntityId* outId) {
     WindowSelection* selection = window ? window->sel : nullptr;
     if (!selection || !window->app) return nullptr;
     TextSelectionParticipantState* hit = nullptr;
@@ -37509,35 +37459,33 @@ static TextSelectionParticipantState* ParticipantAt(Window* window,
         Bounds bounds = state->registration.bounds;
         if (!first || bounds.y < first->registration.bounds.y ||
             (bounds.y == first->registration.bounds.y &&
-             state->registration.documentOrder <
-                 first->registration.documentOrder)) {
+             state->registration.documentOrder < first->registration
+                                                     .documentOrder)) {
             first = state;
             firstId = id;
         }
         if (bounds.y <= point.y &&
-            (!predecessor ||
-             bounds.y > predecessor->registration.bounds.y ||
+            (!predecessor || bounds.y > predecessor->registration.bounds.y ||
              (bounds.y == predecessor->registration.bounds.y &&
-              state->registration.documentOrder <
-                  predecessor->registration.documentOrder))) {
+              state->registration.documentOrder < predecessor->registration
+                                                      .documentOrder))) {
             predecessor = state;
             predecessorId = id;
         }
         if (ParticipantContains(state, point)) {
             float area = bounds.w * bounds.h;
             if (!hit || area < hitArea ||
-                (area == hitArea &&
-                 state->registration.documentOrder <
-                     hit->registration.documentOrder)) {
+                (area == hitArea && state->registration.documentOrder <
+                                        hit->registration.documentOrder)) {
                 hit = state;
                 hitId = id;
                 hitArea = area;
             }
         }
     }
-    TextSelectionParticipantState* result = hit ? hit : predecessor
-                                                        ? predecessor
-                                                        : first;
+    TextSelectionParticipantState* result = hit           ? hit
+                                            : predecessor ? predecessor
+                                                          : first;
     if (result && outId) {
         *outId = hit ? hitId : predecessor ? predecessorId : firstId;
     }
@@ -37563,16 +37511,14 @@ static TextSelectionEndpoint ParticipantEndpoint(
 }
 
 static bool ComputeParticipantSnapshot(TextSelectionParticipantState* receiver,
-                                       App* app,
-                                       TextSelectionSnapshot* out) {
+                                       App* app, TextSelectionSnapshot* out) {
     if (!receiver || !receiver->window || !receiver->window->sel ||
         !receiver->registered || !out) {
         return false;
     }
     WindowSelection* selection = receiver->window->sel;
-    if (!TextSelectionPublishes(&selection->gesture) ||
-        selection->anchor < 0 || selection->cursor < 0 ||
-        selection->anchor == selection->cursor ||
+    if (!TextSelectionPublishes(&selection->gesture) || selection->anchor < 0 ||
+        selection->cursor < 0 || selection->anchor == selection->cursor ||
         !selection->hasWindowPoints ||
         receiver->registration.scope != selection->activeScope) {
         return false;
@@ -37583,12 +37529,12 @@ static bool ComputeParticipantSnapshot(TextSelectionParticipantState* receiver,
     TextSelectionParticipantState* cursor =
         ParticipantAt(receiver->window, selection->cursorPoint, &cursorId);
     if (!anchor || !cursor) return false;
-    uint64_t first = anchor->registration.documentOrder <
-                             cursor->registration.documentOrder
+    uint64_t first = anchor->registration.documentOrder < cursor->registration
+                                                              .documentOrder
                          ? anchor->registration.documentOrder
                          : cursor->registration.documentOrder;
-    uint64_t last = anchor->registration.documentOrder >
-                            cursor->registration.documentOrder
+    uint64_t last = anchor->registration.documentOrder > cursor->registration
+                                                             .documentOrder
                         ? anchor->registration.documentOrder
                         : cursor->registration.documentOrder;
     uint64_t order = receiver->registration.documentOrder;
@@ -37599,8 +37545,8 @@ static bool ComputeParticipantSnapshot(TextSelectionParticipantState* receiver,
         if (receiver->self != anchorId && receiver->self != cursorId) {
             coverage = TextSelectionCoverage::Full;
         } else if ((receiver->self == anchorId) ==
-                   (anchor->registration.documentOrder <
-                    cursor->registration.documentOrder)) {
+                   (anchor->registration.documentOrder < cursor->registration
+                                                             .documentOrder)) {
             coverage = TextSelectionCoverage::ToEnd;
         } else {
             coverage = TextSelectionCoverage::FromStart;
@@ -37617,17 +37563,16 @@ static bool ComputeParticipantSnapshot(TextSelectionParticipantState* receiver,
     Point anchorPoint = selection->anchorPoint;
     Point cursorPoint = selection->cursorPoint;
     bool selecting = selection->gesture.selecting;
-    TextSelectionEndpoint anchorEndpoint = ParticipantEndpoint(
-        anchorRegistration, anchorResolver, anchorResolverUser, anchorId,
-        anchorPoint, app);
-    TextSelectionEndpoint cursorEndpoint = ParticipantEndpoint(
-        cursorRegistration, cursorResolver, cursorResolverUser, cursorId,
-        cursorPoint, app);
-    *out = TextSelectionSnapshot::New(
-               anchorEndpoint, cursorEndpoint)
+    TextSelectionEndpoint anchorEndpoint =
+        ParticipantEndpoint(anchorRegistration, anchorResolver,
+                            anchorResolverUser, anchorId, anchorPoint, app);
+    TextSelectionEndpoint cursorEndpoint =
+        ParticipantEndpoint(cursorRegistration, cursorResolver,
+                            cursorResolverUser, cursorId, cursorPoint, app);
+    *out = TextSelectionSnapshot::New(anchorEndpoint, cursorEndpoint)
                .WithSelecting(selecting)
-               .WithWindowPoints(TextSelectionWindowPoints::New(
-                   anchorPoint, cursorPoint))
+               .WithWindowPoints(
+                   TextSelectionWindowPoints::New(anchorPoint, cursorPoint))
                .WithCoverage(coverage);
     return true;
 }
@@ -37668,8 +37613,7 @@ static void WindowSelectionPublish(Window* window) {
             for (int j = 0; j < selection->participants.len; j++) {
                 if (selection->participants[j] != id) continue;
                 for (int k = j; k < selection->participants.len - 1; k++) {
-                    selection->participants[k] =
-                        selection->participants[k + 1];
+                    selection->participants[k] = selection->participants[k + 1];
                 }
                 selection->participants.len--;
                 break;
@@ -37686,8 +37630,7 @@ static void WindowSelectionPublish(Window* window) {
     selection->publishing = false;
 }
 
-static void ParticipantAutoScroll(Window* window, Point point,
-                                  bool stopping) {
+static void ParticipantAutoScroll(Window* window, Point point, bool stopping) {
     if (!window || !window->sel || !window->app ||
         !window->sel->hasWindowPoints) {
         return;
@@ -37697,9 +37640,8 @@ static void ParticipantAutoScroll(Window* window, Point point,
         ParticipantAt(window, window->sel->anchorPoint, &id);
     if (!state) return;
     float delta = 0;
-    bool has = !stopping &&
-               AutoScrollComputeDelta(point.y, state->registration.bounds,
-                                      &delta);
+    bool has = !stopping && AutoScrollComputeDelta(
+                                point.y, state->registration.bounds, &delta);
     TextSelectionEvent event;
     event.kind = TextSelectionEventKind::AutoScroll;
     event.autoScroll = delta;
@@ -37788,22 +37730,22 @@ static bool PointInSelectionBand(Point position, float charWidth,
         return x >= std::min(selectionStart.x, selectionEnd.x) &&
                x <= std::max(selectionStart.x, selectionEnd.x);
     }
-    Point topPoint = selectionStart.y < selectionEnd.y ? selectionStart
-                                                        : selectionEnd;
-    Point bottomPoint = selectionStart.y < selectionEnd.y ? selectionEnd
-                                                           : selectionStart;
+    Point topPoint =
+        selectionStart.y < selectionEnd.y ? selectionStart : selectionEnd;
+    Point bottomPoint =
+        selectionStart.y < selectionEnd.y ? selectionEnd : selectionStart;
     if (topPoint.y >= position.y && topPoint.y < position.y + lineHeight) {
         return x >= topPoint.x;
     }
-    if (bottomPoint.y >= position.y &&
-        bottomPoint.y < position.y + lineHeight) {
+    if (bottomPoint.y >= position.y && bottomPoint
+                                               .y < position.y + lineHeight) {
         return x <= bottomPoint.x;
     }
     return true;
 }
 
 static TextSelectionRange ProjectRun(const TextSelectionRun& run,
-    const TextSelectionSnapshot& snapshot) {
+                                     const TextSelectionSnapshot& snapshot) {
     TextSelectionRange out;
     if (!run.layout || run.text.len <= 0) return out;
     if (snapshot.coverage == TextSelectionCoverage::Full) {
@@ -37822,8 +37764,8 @@ static TextSelectionRange ProjectRun(const TextSelectionRun& run,
                                      rects, 2);
         bool selected = false;
         for (int i = 0; i < n; i++) {
-            Point position = {run.bounds.x + rects[i].x,
-                              run.bounds.y + rects[i].y};
+            Point position = {run.bounds.x + rects[i].x, run.bounds.y + rects[i]
+                                                                            .y};
             float width = rects[i].w > 0 ? rects[i].w : rects[i].h * 0.5f;
             float height = rects[i].h > 0 ? rects[i].h : run.bounds.h;
             if (PointInSelectionBand(position, width,
@@ -37869,9 +37811,8 @@ TextSelectionProjection TextSelectionHandle::UpdateRuns(
     for (int i = 0; i < count; i++) {
         if (!out.ranges[i].selected) continue;
         int insert = order.len;
-        while (insert > 0 &&
-               values[order[insert - 1]].documentOrder >
-                   values[i].documentOrder) {
+        while (insert > 0 && values[order[insert - 1]]
+                                     .documentOrder > values[i].documentOrder) {
             insert--;
         }
         VecAppend(order, 0);
@@ -37884,8 +37825,8 @@ TextSelectionProjection TextSelectionHandle::UpdateRuns(
     for (int i = 0; i < order.len; i++) {
         int ix = order[i];
         const TextSelectionRange& range = out.ranges[ix];
-        selected.Append(Str(values[ix].text.s + range.start,
-                            range.end - range.start));
+        selected.Append(
+            Str(values[ix].text.s + range.start, range.end - range.start));
     }
     VecReset(order);
     StrFree(participant->projectedCopyText);
@@ -37928,8 +37869,8 @@ void TextSelectionHandle::CopyWith(TextSelectionCopyFn fn, void* user,
     }
 }
 
-void TextSelectionHandle::ResolveContentKeyWith(
-    TextSelectionContentKeyFn fn, void* user, App* app) const {
+void TextSelectionHandle::ResolveContentKeyWith(TextSelectionContentKeyFn fn,
+                                                void* user, App* app) const {
     if (TextSelectionParticipantState* participant =
             ParticipantState(*this, app)) {
         participant->resolveContentKey = fn;
@@ -38015,8 +37956,8 @@ void WindowSelectionClear(Window* win) {
         }
         for (int i = 0; i < participants.len; i++) {
             TextSelectionParticipantState* participant =
-                (TextSelectionParticipantState*)EntityGet(
-                    win->app, participants[i]);
+                (TextSelectionParticipantState*)EntityGet(win->app,
+                                                          participants[i]);
             if (!participant) continue;
             TextSelectionClearFn clear = participant->clear;
             void* clearUser = participant->clearUser;
@@ -38030,8 +37971,7 @@ void WindowSelectionClear(Window* win) {
             EntityEmit(win->app, win, participant->self, &cleared);
             TextSelectionEvent selectionChanged;
             selectionChanged.kind = TextSelectionEventKind::SelectionChanged;
-            EntityEmit(win->app, win, participant->self,
-                       &selectionChanged);
+            EntityEmit(win->app, win, participant->self, &selectionChanged);
             if (clear) clear(clearUser, win->app);
         }
         VecReset(participants);
@@ -38076,9 +38016,8 @@ void WindowSelectionPress(Window* win, float x, float y, int clickCount,
     int scope = 0;
     int a = 0;
     int b = 0;
-    int activeScope = s->activeScope.raw != 0
-                          ? s->activeScope.RuntimeScope()
-                          : -1;
+    int activeScope =
+        s->activeScope.raw != 0 ? s->activeScope.RuntimeScope() : -1;
     if (TextMultiClickRangeIn(ctx, x, y, clickCount, activeScope, &a, &b,
                               &scope)) {
         s->scope = scope;
@@ -38193,8 +38132,8 @@ int WindowSelectionTextForEntity(Window* win, EntityId owner, char* out,
     if (!WindowSelectionHasEntity(win, owner)) return 0;
     WindowSelection* selection = win->sel;
     return CopyTextHitsInEntity(&win->paint, selection->anchor,
-                                selection->cursor, selection->scope, owner,
-                                out, cap, fmt);
+                                selection->cursor, selection->scope, owner, out,
+                                cap, fmt);
 }
 
 void WindowSelectionSelectAll(Window* win, EntityId owner) {
@@ -38229,8 +38168,7 @@ void WindowSelectionSelectAll(Window* win, EntityId owner) {
     if (!found || first == last) return;
     selection->scope = scope;
     if (selection->activeScope.raw == 0) {
-        selection->activeScope =
-            TextSelectionScopeId::FromRaw((uint64_t)scope);
+        selection->activeScope = TextSelectionScopeId::FromRaw((uint64_t)scope);
     }
     selection->anchor = first;
     selection->cursor = last;
@@ -38294,8 +38232,8 @@ int TextSelection::SelectedText(Window* window, App* app, char* out, int cap) {
                                ? participant->projectedCopyText
                                : participant->fallbackCopyText);
         int insert = active.len;
-        while (insert > 0 &&
-               active[insert - 1].documentOrder > item.documentOrder) {
+        while (insert > 0 && active[insert - 1]
+                                     .documentOrder > item.documentOrder) {
             insert--;
         }
         VecAppend(active, {});
@@ -38418,15 +38356,13 @@ void WindowSelectionFinishFrame(Window* win) {
         TextSelectionParticipantState* participant =
             (TextSelectionParticipantState*)EntityGet(win->app, id);
         if (participant && participant->window == win &&
-            participant->registrationGeneration ==
-                selection->frameGeneration) {
+            participant->registrationGeneration == selection->frameGeneration) {
             continue;
         }
         for (int j = 0; j < selection->participants.len; j++) {
             if (selection->participants[j] != id) continue;
             for (int k = j; k < selection->participants.len - 1; k++) {
-                selection->participants[k] =
-                    selection->participants[k + 1];
+                selection->participants[k] = selection->participants[k + 1];
             }
             selection->participants.len--;
             break;
@@ -39134,8 +39070,8 @@ void TileContext::BringToFront() const {
 void TileContext::ToggleZoom() const {
     const TileItem* item = Item();
     if (state && item) {
-        state->zoomedPanel = state->zoomedPanel == item->panel ? -1
-                                                               : item->panel;
+        state->zoomedPanel =
+            state->zoomedPanel == item->panel ? -1 : item->panel;
     }
 }
 
@@ -39150,8 +39086,8 @@ void TileContext::Close() const {
     TilesRemove(state, ix);
 }
 
-bool snap_edge(float edge, const float* candidates, int count,
-               float threshold, float* out) {
+bool snap_edge(float edge, const float* candidates, int count, float threshold,
+               float* out) {
     return TileSnapEdge(edge, candidates, count, threshold, out);
 }
 
@@ -39444,8 +39380,8 @@ El* ToastStack::IntoEl() {
         state->heights.len--;
     }
     if (state->bounds.w > 0 && cx->win) {
-        state->hovered = state->bounds.Contains({cx->win->mouseX,
-                                                cx->win->mouseY});
+        state->hovered = state->bounds
+                             .Contains({cx->win->mouseX, cx->win->mouseY});
     }
     state->focused = hasFocus && FocusHandleContainsFocused(cx->win, focus);
     bool expanded = state->IsExpanded();
@@ -39460,11 +39396,10 @@ El* ToastStack::IntoEl() {
     for (int i = 0; i < count; i++) {
         ToastMeasurement* measured =
             ToastStackMeasurement(state, children[i].key, true);
-        heights[i] = measured && measured->bounds.h > 0
-                         ? measured->bounds.h
-                         : children[i].child->style.height > 0
-                               ? children[i].child->style.height
-                               : 0;
+        heights[i] = measured && measured->bounds.h > 0 ? measured->bounds.h
+                     : children[i].child->style.height > 0
+                         ? children[i].child->style.height
+                         : 0;
     }
     float expandedHeight = 0;
     float collapsedHeight = ToastStackGeometry(
@@ -39473,9 +39408,9 @@ El* ToastStack::IntoEl() {
     Spring geometry = SpringNew((float)motion.durationMs);
     geometry.epsilon = 0.1f;
     Spring fade = SpringNew((float)motion.durationMs);
-    float stackHeight = SpringValue(
-        cx, MotionId(id, StrL("height")),
-        expanded ? expandedHeight : collapsedHeight, geometry);
+    float stackHeight =
+        SpringValue(cx, MotionId(id, StrL("height")),
+                    expanded ? expandedHeight : collapsedHeight, geometry);
 
     El* root = Div(arena)
                    ->Id(id)
@@ -39486,26 +39421,24 @@ El* ToastStack::IntoEl() {
         root->TrackFocus(focus);
     }
     float stackWidth = state->bounds.w;
-    int visibleLayers = motion.collapsedVisible > 0
-                            ? motion.collapsedVisible
-                            : 1;
+    int visibleLayers =
+        motion.collapsedVisible > 0 ? motion.collapsedVisible : 1;
     for (int i = 0; i < count; i++) {
         const ToastStackItem& item = children[i];
         int rank = count - 1 - i;
         Str key = StrDup(arena, fmt("%u", item.key));
-        float offset = SpringValue(
-            cx, MotionId(key, StrL("offset")),
-            expanded ? expandedOffsets[i] : collapsed[i], geometry);
+        float offset =
+            SpringValue(cx, MotionId(key, StrL("offset")),
+                        expanded ? expandedOffsets[i] : collapsed[i], geometry);
         int visibleRank = rank < visibleLayers ? rank : visibleLayers - 1;
-        float targetInset = expanded
-                                ? 0.f
-                                : stackWidth * motion.collapsedScaleStep *
-                                      (float)visibleRank / 2.f;
-        float inset = SpringValue(cx, MotionId(key, StrL("inset")),
-                                  targetInset, geometry);
-        float opacity = SpringValue(
-            cx, MotionId(key, StrL("visibility")),
-            (expanded || rank < visibleLayers) ? 1.f : 0.f, fade);
+        float targetInset = expanded ? 0.f
+                                     : stackWidth * motion.collapsedScaleStep *
+                                           (float)visibleRank / 2.f;
+        float inset = SpringValue(cx, MotionId(key, StrL("inset")), targetInset,
+                                  geometry);
+        float opacity =
+            SpringValue(cx, MotionId(key, StrL("visibility")),
+                        (expanded || rank < visibleLayers) ? 1.f : 0.f, fade);
         if (opacity <= 0.001f) {
             continue;
         }
@@ -39586,9 +39519,8 @@ ToggleStyles& ToggleStyles::Disabled(const StateStyle& style) {
     return *this;
 }
 
-El* Toggle::New(Ctx* cx, Str id, bool pressed, bool disabled,
-                Listener onChange, const ToggleStyles* styles,
-                const StateStyle* instance) {
+El* Toggle::New(Ctx* cx, Str id, bool pressed, bool disabled, Listener onChange,
+                const ToggleStyles* styles, const StateStyle* instance) {
     Arena* a = cx->a;
     El* e = Div(a)
 
@@ -39599,7 +39531,7 @@ El* Toggle::New(Ctx* cx, Str id, bool pressed, bool disabled,
                 ->PathClick(id)
                 ->Role(AccessibilityRole::Button)
                 ->AriaToggled(pressed ? AccessibilityToggled::True
-                                     : AccessibilityToggled::False)
+                                      : AccessibilityToggled::False)
                 ->AriaDisabled(disabled);
     if (styles || instance) {
         StateStyle base = instance ? *instance : StateStyle{};
@@ -39787,8 +39719,7 @@ void TooltipOverlay::Hide(Ctx* cx) {
     }
 }
 
-void TooltipOverlay::OnShow(TooltipOverlay* self, Ctx* cx,
-                            const TickEvent*) {
+void TooltipOverlay::OnShow(TooltipOverlay* self, Ctx* cx, const TickEvent*) {
     self->showTask = 0;
     if (!self->hasPending) {
         return;
@@ -39802,8 +39733,7 @@ void TooltipOverlay::OnShow(TooltipOverlay* self, Ctx* cx,
     Notify(cx);
 }
 
-void TooltipOverlay::OnHide(TooltipOverlay* self, Ctx* cx,
-                            const TickEvent*) {
+void TooltipOverlay::OnHide(TooltipOverlay* self, Ctx* cx, const TickEvent*) {
     self->hideTask = 0;
     TooltipRequestClear(&self->content);
     self->hasContent = false;
@@ -39846,10 +39776,9 @@ El* TooltipOverlay::Render(TooltipOverlay* self, Ctx* cx) {
                                         self->previousBounds,
                                         self->content.triggerBounds)
             : TooltipTransition::Enter(self->animationEpoch);
-    El* rendered = self->renderer
-                       ? self->renderer(cx, view, transition,
-                                        self->rendererData)
-                       : Div(cx->a)->Child(view);
+    El* rendered = self->renderer ? self->renderer(cx, view, transition,
+                                                   self->rendererData)
+                                  : Div(cx->a)->Child(view);
     TooltipPositioner* positioner =
         TooltipPositioner::New(cx, self->content.triggerBounds);
     if (self->content.hasPreferredPlacement) {
@@ -39862,8 +39791,8 @@ El* TooltipOverlay::Render(TooltipOverlay* self, Ctx* cx) {
 
 TooltipPositioner* TooltipPositioner::New(Ctx* cx, Bounds triggerBounds) {
     TooltipPositioner* out = ArenaNew<TooltipPositioner>(cx->a);
-    out->positioner =
-        Positioner::Side(cx, triggerBounds)->Margin(kTooltipWindowMargin);
+    out->positioner = Positioner::Side(cx, triggerBounds)
+                          ->Margin(kTooltipWindowMargin);
     return out;
 }
 
@@ -40630,8 +40559,7 @@ VirtualRange VirtualListHandleRange(const VirtualListScrollHandle* h,
 
 void ItemSizeLayoutBuild(ItemSizeLayout* layout, Axis axis,
                          const float* itemSizes, int count,
-                         float uniformItemSize, float gap,
-                         float crossSize) {
+                         float uniformItemSize, float gap, float crossSize) {
     if (!layout) {
         return;
     }
@@ -40659,13 +40587,11 @@ El* VirtualList::New(Ctx* cx, Str id, const VirtualListOpts& o) {
     Arena* a = cx->a;
     VirtualListFrameState frame;
     float viewport = o.layoutAxis == Axis::Horizontal ? o.viewW : o.viewH;
-    float crossSize =
-        o.layoutAxis == Axis::Horizontal ? o.viewH : o.viewW;
+    float crossSize = o.layoutAxis == Axis::Horizontal ? o.viewH : o.viewW;
     ItemSizeLayoutBuild(&frame.sizeLayout, o.layoutAxis, o.sizes, o.count,
                         o.rowH, o.gap, crossSize);
 
-    float offset =
-        o.layoutAxis == Axis::Horizontal ? o.scrollX : o.scrollY;
+    float offset = o.layoutAxis == Axis::Horizontal ? o.scrollX : o.scrollY;
     if (o.handle) {
         o.handle->axis = o.layoutAxis;
         const float* sizes =
@@ -40676,8 +40602,8 @@ El* VirtualList::New(Ctx* cx, Str id, const VirtualListOpts& o) {
 
     const float* layoutSizes =
         frame.sizeLayout.sizes.len ? frame.sizeLayout.sizes.els : nullptr;
-    frame.visible = VirtualListVisibleRange(layoutSizes, o.count, offset,
-                                            viewport);
+    frame.visible =
+        VirtualListVisibleRange(layoutSizes, o.count, offset, viewport);
     El* list = Div(a);
     if (o.layoutAxis == Axis::Horizontal) {
         list->FlexRow();
@@ -40739,13 +40665,9 @@ El* VirtualList::New(Ctx* cx, Str id, const VirtualListOpts& o) {
     frame.scrollOffset = offset;
     El* e = New(cx, id)->ClipY()->ClipX();
     if (o.layoutAxis == Axis::Horizontal) {
-        e->W(o.viewW + o.pad * 2)
-            ->ScrollX(offset)
-            ->ScrollY(o.scrollY);
+        e->W(o.viewW + o.pad * 2)->ScrollX(offset)->ScrollY(o.scrollY);
     } else {
-        e->H(o.viewH + o.pad * 2)
-            ->ScrollY(offset)
-            ->ScrollX(o.scrollX);
+        e->H(o.viewH + o.pad * 2)->ScrollY(offset)->ScrollX(o.scrollX);
     }
     if (o.pad > 0) {
         e->Pad(o.pad);
@@ -40766,8 +40688,7 @@ El* VirtualList::New(Ctx* cx, Str id) {
     return Div(a)->Id(id);
 }
 
-El* virtual_list(Ctx* cx, Str id, Axis axis,
-                 const VirtualListOpts& opts) {
+El* virtual_list(Ctx* cx, Str id, Axis axis, const VirtualListOpts& opts) {
     VirtualListOpts copy = opts;
     copy.layoutAxis = axis;
     return VirtualList::New(cx, id, copy);
@@ -41427,8 +41348,8 @@ El* AvatarGroup::IntoEl() {
     int shown = avatars.len < limit ? avatars.len : limit;
     bool more = ellipsis && avatars.len > limit;
     float chipLeft = (float)shown * step + 4;
-    float w = more ? chipLeft + sz
-                   : sz + (shown > 0 ? (float)(shown - 1) * step : 0);
+    float w =
+        more ? chipLeft + sz : sz + (shown > 0 ? (float)(shown - 1) * step : 0);
     El* box = Div(a)->H(sz)->W(w);
 
     if (more) {
@@ -41441,8 +41362,8 @@ El* AvatarGroup::IntoEl() {
                        ->Left(chipLeft));
     }
     for (int i = shown - 1; i >= 0; i--) {
-        box->Child(
-            avatars[i]->WithSize(size)->IntoEl()->Absolute()->Left((float)i * step));
+        box->Child(avatars[i]->WithSize(size)->IntoEl()->Absolute()->Left(
+            (float)i * step));
     }
     return box;
 }
@@ -41592,8 +41513,8 @@ El* BreadcrumbItem::IntoEl() {
                                   : AccessibilityRole::ListItem)
                  ->AriaLabel(label)
                  ->AriaDisabled(disabled)
-                 ->Child(TextEl(a, label)->Font(14)->Fg(
-                     lit ? th.foreground : th.mutedFg));
+                 ->Child(TextEl(a, label)->Font(14)->Fg(lit ? th.foreground
+                                                            : th.mutedFg));
     if (clickable) {
 
         el->Cursor(CursorKind::Pointer);
@@ -41754,7 +41675,8 @@ El* ButtonIcon::IntoEl() {
     if (loading && variant == ButtonIconVariant::Icon) {
         Spinner* wait = Spinner::New(cx)->Size(px);
         if (loadingIcon) {
-            if (loadingIcon->name != IconName::None) wait->Icon(loadingIcon->name);
+            if (loadingIcon->name != IconName::None)
+                wait->Icon(loadingIcon->name);
             if (loadingIcon->hasColor) wait->Color(loadingIcon->color);
         } else if (loadingIconName != IconName::None) {
             wait->Icon(loadingIconName);
@@ -41762,7 +41684,8 @@ El* ButtonIcon::IntoEl() {
         return wait->IntoEl();
     }
     if (variant == ButtonIconVariant::Spinner) {
-        return spinner ? spinner->Size(px)->IntoEl() : Spinner::New(cx)->Size(px)->IntoEl();
+        return spinner ? spinner->Size(px)->IntoEl()
+                       : Spinner::New(cx)->Size(px)->IntoEl();
     }
     if (variant == ButtonIconVariant::Progress) {
         return progress ? progress->Size(px)->IntoEl() : nullptr;
@@ -42111,8 +42034,7 @@ El* Button::IntoEl() {
     }
     if (hasCustom) {
         fg = customVariant.foreground;
-        bd = outline ? RgbaMixOklab(customVariant.color, transparentWhite,
-                                    0.4f)
+        bd = outline ? RgbaMixOklab(customVariant.color, transparentWhite, 0.4f)
                      : customVariant.color;
         bg = RgbaMixOklab(customVariant.color, clear, 0.2f);
         hover = customVariant.hover;
@@ -42257,16 +42179,19 @@ El* Button::IntoEl() {
 
     bool interactive = !(disabled || loading);
     float rounding = th.radius;
-    if (rounded == ButtonRounded::None) rounding = 0;
-    else if (rounded == ButtonRounded::Small) rounding = th.radius * 0.5f;
-    else if (rounded == ButtonRounded::Large) rounding = th.radius * 2.f;
-    else if (rounded == ButtonRounded::Size) rounding = roundedPx;
+    if (rounded == ButtonRounded::None)
+        rounding = 0;
+    else if (rounded == ButtonRounded::Small)
+        rounding = th.radius * 0.5f;
+    else if (rounded == ButtonRounded::Large)
+        rounding = th.radius * 2.f;
+    else if (rounded == ButtonRounded::Size)
+        rounding = roundedPx;
     if (resolved.Has(StateFieldRadius)) rounding = resolved.style.radius;
-    AccessibilityRole role =
-        hasAccessibilityRole
-            ? accessibilityRole
-            : variant == ButtonVariant::Link ? AccessibilityRole::Link
-                                             : AccessibilityRole::Button;
+    AccessibilityRole role = hasAccessibilityRole ? accessibilityRole
+                             : variant == ButtonVariant::Link
+                                 ? AccessibilityRole::Link
+                                 : AccessibilityRole::Button;
     El* e = gpui::Button::New(cx, id, !interactive)
                 ->Role(role)
                 ->AriaDisabled(!interactive)
@@ -42278,16 +42203,14 @@ El* Button::IntoEl() {
                 ->ItemsCenter()
                 ->JustifyCenter()
                 ->Gap(gap)
-                ->Corners(cornerTL ? rounding : 0.f,
-                          cornerTR ? rounding : 0.f,
-                          cornerBR ? rounding : 0.f,
-                          cornerBL ? rounding : 0.f);
+                ->Corners(cornerTL ? rounding : 0.f, cornerTR ? rounding : 0.f,
+                          cornerBR ? rounding : 0.f, cornerBL ? rounding : 0.f);
     if (accessibilityId.s) {
         e->AccessibilityId(accessibilityId);
     }
     if (hasAccessibilityToggled) {
         e->AriaToggled(accessibilityToggled ? AccessibilityToggled::True
-                                           : AccessibilityToggled::False);
+                                            : AccessibilityToggled::False);
     }
     if (accessibilityLabel.s) {
         e->AriaLabel(accessibilityLabel);
@@ -42514,13 +42437,9 @@ El* Toggle::IntoEl() {
         pad = 12.f;
         font = 18.f;
     }
-    root->MinW(h)
-        ->H(h)
-        ->PadX(pad)
-        ->Corners(cornerTL ? th.radius : 0.f,
-                  cornerTR ? th.radius : 0.f,
-                  cornerBR ? th.radius : 0.f,
-                  cornerBL ? th.radius : 0.f);
+    root->MinW(h)->H(h)->PadX(pad)->Corners(
+        cornerTL ? th.radius : 0.f, cornerTR ? th.radius : 0.f,
+        cornerBR ? th.radius : 0.f, cornerBL ? th.radius : 0.f);
     if (!disabled && !checked) {
         root->HoverBg(th.tokens.accent)->HoverFg(th.accentFg);
     }
@@ -42589,8 +42508,8 @@ struct ToggleGroupState {
 
     ~ToggleGroupState() { VecReset(checked); }
 
-    static void OnChildClick(ToggleGroupState* self, Ctx* cx,
-                             const ClickEvent*, intptr_t ix) {
+    static void OnChildClick(ToggleGroupState* self, Ctx* cx, const ClickEvent*,
+                             intptr_t ix) {
         if (ix < 0 || ix >= self->checked.len) return;
         self->checked[(int)ix] = !self->checked[(int)ix];
         ToggleGroupEvent event{self->checked.els, self->checked.len};
@@ -42758,8 +42677,10 @@ El* DropdownButton::IntoEl() {
         button->Selected(isSelected)
             ->Disabled(disabled || button->disabled)
             ->WithSize(sz);
-        if (v == ButtonVariant::Custom) button->Custom(customValue);
-        else button->WithVariant(v);
+        if (v == ButtonVariant::Custom)
+            button->Custom(customValue);
+        else
+            button->WithVariant(v);
         if (outline) {
             button->Outline();
         }
@@ -42779,8 +42700,10 @@ El* DropdownButton::IntoEl() {
                             ->Selected(isSelected)
                             ->Disabled(disabled)
                             ->WithSize(sz);
-        if (v == ButtonVariant::Custom) caret->Custom(customValue);
-        else caret->WithVariant(v);
+        if (v == ButtonVariant::Custom)
+            caret->Custom(customValue);
+        else
+            caret->WithVariant(v);
         if (outline) {
             caret->Outline();
         }
@@ -42905,8 +42828,8 @@ struct ButtonGroupState {
     bool disabled = false;
     Listener onClick;
 
-    static void OnChildClick(ButtonGroupState* self, Ctx* cx,
-                             const ClickEvent*, intptr_t childIndex) {
+    static void OnChildClick(ButtonGroupState* self, Ctx* cx, const ClickEvent*,
+                             intptr_t childIndex) {
         if (self->disabled) return;
         Vec<int> next = self->selected;
         int at = -1;
@@ -42969,8 +42892,10 @@ El* ButtonGroup::IntoEl() {
             b->WithSize(size);
         }
         if (hasVariant) {
-            if (variant == ButtonVariant::Custom) b->Custom(customVariant);
-            else b->WithVariant(variant);
+            if (variant == ButtonVariant::Custom)
+                b->Custom(customVariant);
+            else
+                b->WithVariant(variant);
         }
         if (compact) {
             b->Compact();
@@ -43375,8 +43300,7 @@ static void PaintRadarLabels(PaintCtx* ctx, El* e, void* user) {
     float labelRadius = radius + c->labelGap;
     float centerX = e->x + e->w * 0.5f;
     float centerY = e->y + e->h * 0.5f;
-    Rgba color = c->hasLabelColor ? c->labelColor
-                                  : ThemeNow(ctx->app).mutedFg;
+    Rgba color = c->hasLabelColor ? c->labelColor : ThemeNow(ctx->app).mutedFg;
     for (int i = 0; i < c->n; i++) {
         float angle = -1.5707963f + 6.2831853f * (float)i / (float)c->n;
         float dx = cosf(angle);
@@ -43387,8 +43311,7 @@ static void PaintRadarLabels(PaintCtx* ctx, El* e, void* user) {
         if (label.kind == RadarLabel::Kind::Element) {
             El* child = label.element;
             if (child) {
-                MoveRadarLabel(child,
-                               anchorX + (dx - 1.f) * child->w * 0.5f,
+                MoveRadarLabel(child, anchorX + (dx - 1.f) * child->w * 0.5f,
                                anchorY + (dy - 1.f) * child->h * 0.5f);
             }
             continue;
@@ -43433,8 +43356,7 @@ RadarChart* RadarChart::Labels(const char* const* l) {
         labels = nullptr;
         return this;
     }
-    RadarLabel* converted =
-        (RadarLabel*)Alloc(a, (int)sizeof(RadarLabel) * n);
+    RadarLabel* converted = (RadarLabel*)Alloc(a, (int)sizeof(RadarLabel) * n);
     for (int i = 0; i < n; i++) {
         converted[i] = RadarLabel::Text(Str(l[i]));
     }
@@ -43489,8 +43411,8 @@ El* RadarChart::IntoEl() {
         e->customPaint = PaintRadarLabels;
         e->customUser = this;
         for (int i = 0; i < n; i++) {
-            if (labels[i].kind == RadarLabel::Kind::Element &&
-                labels[i].element) {
+            if (labels[i].kind == RadarLabel::Kind::Element && labels[i]
+                                                                   .element) {
                 e->Child(labels[i].element->Absolute());
             }
         }
@@ -43593,8 +43515,8 @@ static void PaintPieLabels(PaintCtx* ctx, PieChart* p, float cx, float cy,
     const Theme& th = ThemeNow(ctx->app);
     Rgba color = p->hasLabelColor ? p->labelColor : th.foreground;
     float labelR = p->outerRadius + p->labelGap;
-    ArenaVec<PieLabelLayout> right {};
-    ArenaVec<PieLabelLayout> left {};
+    ArenaVec<PieLabelLayout> right{};
+    ArenaVec<PieLabelLayout> left{};
     float angle = -kPi * 0.5f;
     for (int i = 0; i < p->slices.len; i++) {
         const PieSlice& s = p->slices[i];
@@ -43724,8 +43646,7 @@ static int SankeyNodeLineCount(const SankeyChartNode& node, Str value) {
     if (node.hasCustomLabels) {
         return node.labels.len;
     }
-    return (value.s ? 1 : 0) + (node.note.s ? 1 : 0) +
-           (node.label.s ? 1 : 0);
+    return (value.s ? 1 : 0) + (node.note.s ? 1 : 0) + (node.label.s ? 1 : 0);
 }
 
 static SankeyLabel SankeyNodeLine(const SankeyChartNode& node, Str value,
@@ -43857,8 +43778,8 @@ static void PaintSankey(PaintCtx* ctx, El* e, void* user) {
             int lineCount = SankeyNodeLineCount(node, values[i]);
             for (int k = 0; k < lineCount; k++) {
                 SankeyLabel line = SankeyNodeLine(node, values[i], k, th);
-                float fontSize = line.fontSize > 0 ? line.fontSize
-                                                   : kPlotTextSize;
+                float fontSize =
+                    line.fontSize > 0 ? line.fontSize : kPlotTextSize;
                 Size sz = MeasureText(ctx, line.text, fontSize, 0);
                 if (sz.w > labelW) {
                     labelW = sz.w;
@@ -44008,8 +43929,8 @@ static void PaintSankey(PaintCtx* ctx, El* e, void* user) {
             SankeyLabel line = SankeyNodeLine(chartNode, value, k, th);
             float fontSize = line.fontSize > 0 ? line.fontSize : kPlotTextSize;
             Rgba lineColor = line.hasColor ? line.color : th.foreground;
-            SankeyLabelLine(ctx, line.text, e->x + x, e->y + y, maxW,
-                            fontSize, lineColor, align);
+            SankeyLabelLine(ctx, line.text, e->x + x, e->y + y, maxW, fontSize,
+                            lineColor, align);
             y += line.LineHeight();
         }
     }
@@ -44446,9 +44367,8 @@ ColorPicker* ColorPicker::New(Ctx* cx, Str id) {
     return c;
 }
 ColorPicker* ColorPicker::New(Ctx* cx, Entity<ColorPickerState> state) {
-    ColorPicker* c = New(
-        cx, StrDup(cx->a, fmt("color-picker-%d-%u", state.id.index,
-                             state.id.gen)));
+    ColorPicker* c = New(cx, StrDup(cx->a, fmt("color-picker-%d-%u",
+                                               state.id.index, state.id.gen)));
     c->state = state;
     return c;
 }
@@ -44727,11 +44647,11 @@ El* ColorPicker::IntoEl() {
     }
 
     El* root = gpui::ColorPicker::New(
-                   cx, id, s->open, false, label,
-                   AccessibilityRole::Button,
+                   cx, id, s->open, false, label, AccessibilityRole::Button,
                    ListenTo(st, &ColorPickerState::OnOpenChange), s->focus)
-                   ->Child(
-        Popup::New(cx, StrL("popover"), trigger)->Content(pop)->IntoEl());
+                   ->Child(Popup::New(cx, StrL("popover"), trigger)
+                               ->Content(pop)
+                               ->IntoEl());
     return root;
 }
 
@@ -44761,9 +44681,8 @@ int ComboboxTriggerContext::SelectionCount() const {
 }
 
 int ComboboxTriggerContext::SelectionIndex(int at) const {
-    return state && at >= 0 && at < state->selected.len
-               ? state->selected[at]
-               : -1;
+    return state && at >= 0 && at < state->selected.len ? state->selected[at]
+                                                        : -1;
 }
 
 const SearchableListItem* ComboboxTriggerContext::SelectionItem(int at) const {
@@ -44795,8 +44714,7 @@ Entity<ComboboxState> ComboboxState::New(App* app) {
 
 ComboboxState* ComboboxState::Multiple(bool value) {
     multiple = value;
-    state.mode = value ? SearchableListMode::Multi
-                       : SearchableListMode::Single;
+    state.mode = value ? SearchableListMode::Multi : SearchableListMode::Single;
     state.closeOnSelect = !value;
     return this;
 }
@@ -44834,8 +44752,7 @@ void ComboboxState::SyncSnapshot() {
     }
 }
 
-void ComboboxState::SetSelectedValues(const Str* values, int nValues,
-                                      Ctx* cx) {
+void ComboboxState::SetSelectedValues(const Str* values, int nValues, Ctx* cx) {
     InputSetValue(&queryInput, Str{});
     SearchableListSearch(&state, state.items, state.nItems, Str{});
     VecClear(state.selected);
@@ -44967,8 +44884,8 @@ void ComboboxState::OnListChange(ComboboxState* self, Ctx* cx,
     if (!self || !event || event->kind != ListEventKind::Confirm) {
         return;
     }
-    bool changed = !SameSelection(self->selectionSnapshot,
-                                  self->state.selected);
+    bool changed =
+        !SameSelection(self->selectionSnapshot, self->state.selected);
     self->SyncSnapshot();
     if (changed) {
         self->Emit(cx, ComboboxEventKind::Change);
@@ -44997,8 +44914,7 @@ void ComboboxState::OnListChange(ComboboxState* self, Ctx* cx,
     }
 }
 
-void ComboboxState::OnToggle(ComboboxState* self, Ctx* cx,
-                             const ClickEvent*) {
+void ComboboxState::OnToggle(ComboboxState* self, Ctx* cx, const ClickEvent*) {
     if (!self) {
         return;
     }
@@ -45010,8 +44926,7 @@ void ComboboxState::OnToggle(ComboboxState* self, Ctx* cx,
     }
 }
 
-void ComboboxState::OnClear(ComboboxState* self, Ctx* cx,
-                            const ClickEvent*) {
+void ComboboxState::OnClear(ComboboxState* self, Ctx* cx, const ClickEvent*) {
     if (self) {
         self->ClearSelection(cx);
     }
@@ -45041,8 +44956,7 @@ Combobox* Combobox::New(Ctx* cx, Str id, Entity<SearchableListState> state,
 }
 Combobox* Combobox::New(Ctx* cx, Str id, Entity<ComboboxState> state) {
     ComboboxState* owner = state.Get(cx);
-    Combobox* out =
-        Combobox::New(cx, id, ComboboxListEntity(state), nullptr);
+    Combobox* out = Combobox::New(cx, id, ComboboxListEntity(state), nullptr);
     out->comboboxState = state;
     if (owner) {
         owner->self = state.id;
@@ -45143,9 +45057,8 @@ Combobox* Combobox::Trigger(El* e) {
     return this;
 }
 Combobox* Combobox::RenderTrigger(
-    void* value,
-    El* (*fn)(Ctx* cx, void* data,
-              const ComboboxTriggerContext* triggerContext)) {
+    void* value, El* (*fn)(Ctx* cx, void* data,
+                           const ComboboxTriggerContext* triggerContext)) {
     triggerData = value;
     renderTrigger = fn;
     return this;
@@ -45154,14 +45067,12 @@ Combobox* Combobox::Footer(El* e) {
     footer = e;
     return this;
 }
-Combobox* Combobox::RenderFooter(void* value,
-                                 El* (*fn)(Ctx* cx, void* data)) {
+Combobox* Combobox::RenderFooter(void* value, El* (*fn)(Ctx* cx, void* data)) {
     footerData = value;
     renderFooter = fn;
     return this;
 }
-Combobox* Combobox::RenderEmpty(void* value,
-                                El* (*fn)(Ctx* cx, void* data)) {
+Combobox* Combobox::RenderEmpty(void* value, El* (*fn)(Ctx* cx, void* data)) {
     emptyData = value;
     renderEmpty = fn;
     return this;
@@ -45206,8 +45117,8 @@ El* Combobox::IntoEl() {
         }
         if (renderTrigger) {
             ComboboxTriggerContext triggerContext = {
-                &owner->state, placeholder, placeholder.s != nullptr,
-                owner->state.open, disabled, size};
+                &owner->state,     placeholder, placeholder.s != nullptr,
+                owner->state.open, disabled,    size};
             trigger = renderTrigger(cx, triggerData, &triggerContext);
         }
         if (renderFooter) {
@@ -46224,8 +46135,8 @@ El* DescriptionList::IntoEl() {
         padX = 12;
         padY = 6;
     }
-    float baseGap = size == UiSize::Large ? 8.f :
-                    (size == UiSize::Medium ? 4.f : 2.f);
+    float baseGap =
+        size == UiSize::Large ? 8.f : (size == UiSize::Medium ? 4.f : 2.f);
     float gap = bordered ? 0.f : baseGap;
     if (!bordered) {
         padX = 0;
@@ -46237,8 +46148,7 @@ El* DescriptionList::IntoEl() {
         root->Border(1, th.border)->Radius(th.radius);
     }
 
-    int* rowCounts =
-        (int*)Alloc(a, (int)sizeof(int) * (items.len + 1));
+    int* rowCounts = (int*)Alloc(a, (int)sizeof(int) * (items.len + 1));
     DescriptionItem* flatItems = items.Flatten(a);
     int rows = DescriptionGroupRows(flatItems, items.len, columns, rowCounts,
                                     items.len + 1);
@@ -46287,12 +46197,8 @@ El* DescriptionList::IntoEl() {
                     }
                 }
             }
-            El* value = Div(a)
-                            ->Flex1()
-                            ->PadX(padX)
-                            ->PadY(padY)
-                            ->ClipX()
-                            ->ClipY();
+            El* value =
+                Div(a)->Flex1()->PadX(padX)->PadY(padY)->ClipX()->ClipY();
             value->Child(it.value.IntoEl(cx));
             cell->Child(label)->Child(value);
             row->Child(cell);
@@ -46395,21 +46301,18 @@ El* DialogButtonProps::RenderOk(Ctx* cx, Str id, bool outline) const {
     return button->IntoEl();
 }
 El* DialogButtonProps::RenderCancel(Ctx* cx, Str id) const {
-    Button* button = Button::New(cx, id)
-                         ->Label(cancelText.s ? cancelText
-                                             : Tr("Dialog.cancel"))
-                         ->OnClickAction(action::Cancel());
+    Button* button =
+        Button::New(cx, id)
+            ->Label(cancelText.s ? cancelText : Tr("Dialog.cancel"))
+            ->OnClickAction(action::Cancel());
     ApplyDialogButtonVariant(button, cancelVariant);
     return button->IntoEl();
 }
 
 DialogContent* DialogContent::New(Ctx* cx) {
     DialogContent* part = ArenaNew<DialogContent>(cx->a);
-    part->root = Div(cx->a)
-                     ->FlexCol()
-                     ->W(kFill)
-                     ->Flex1()
-                     ->Radius(ThemeNow(cx->app).radiusLg);
+    part->root = Div(cx->a)->FlexCol()->W(kFill)->Flex1()->Radius(
+        ThemeNow(cx->app).radiusLg);
     return part;
 }
 DialogContent* DialogContent::Child(El* child) {
@@ -46435,10 +46338,8 @@ El* DialogHeader::IntoEl() {
 
 DialogTitle* DialogTitle::New(Ctx* cx) {
     DialogTitle* part = ArenaNew<DialogTitle>(cx->a);
-    part->root = gpui::DialogTitle::New(cx)
-                     ->Font(16)
-                     ->Semibold()
-                     ->LineHeight(1.f);
+    part->root =
+        gpui::DialogTitle::New(cx)->Font(16)->Semibold()->LineHeight(1.f);
     return part;
 }
 DialogTitle* DialogTitle::Child(El* child) {
@@ -46467,12 +46368,9 @@ El* DialogDescription::IntoEl() {
 DialogFooter* DialogFooter::New(Ctx* cx) {
     DialogFooter* part = ArenaNew<DialogFooter>(cx->a);
     float radius = ThemeNow(cx->app).radiusLg;
-    part->root = Div(cx->a)
-                     ->FlexRow()
-                     ->Gap(8)
-                     ->JustifyEnd()
-                     ->LineHeight(1.f)
-                     ->Corners(0, 0, radius, radius);
+    part->root =
+        Div(cx->a)->FlexRow()->Gap(8)->JustifyEnd()->LineHeight(1.f)->Corners(
+            0, 0, radius, radius);
     return part;
 }
 DialogFooter* DialogFooter::Child(El* child) {
@@ -46685,14 +46583,13 @@ El* Dialog::Header() {
         head->Child(ic);
     }
     if (description.s && description.len > 0) {
-        head->Child(
-            DialogDescription::New(cx)
-                ->Child(TextEl(a, description)
-                            ->Font(14)
-                            ->Fg(th.mutedFg)
-                            ->Wrap()
-                            ->W(kFill))
-                ->IntoEl());
+        head->Child(DialogDescription::New(cx)
+                        ->Child(TextEl(a, description)
+                                    ->Font(14)
+                                    ->Fg(th.mutedFg)
+                                    ->Wrap()
+                                    ->W(kFill))
+                        ->IntoEl());
     }
     if (body) {
         head->Child(body);
@@ -46725,11 +46622,9 @@ El* Dialog::Actions() {
 
     El* cancel = nullptr;
     if (buttonProps.showCancel) {
-        cancel = buttonProps.RenderCancel(
-            cx, LayerId(StrL("dialog-cancel")));
+        cancel = buttonProps.RenderCancel(cx, LayerId(StrL("dialog-cancel")));
     }
-    El* ok = buttonProps.RenderOk(cx, LayerId(StrL("dialog-ok")),
-                                  okOutline);
+    El* ok = buttonProps.RenderOk(cx, LayerId(StrL("dialog-ok")), okOutline);
 
     if (footerVertical) {
         row->Child(ok->W(kFill));
@@ -46816,13 +46711,13 @@ El* Dialog::IntoEl(WinSize size) {
                     ->H(viewH)
                     ->FlexCol()
                     ->ItemsCenter()
-                     ->PadT((viewH * 0.1f + (float)layerIx * 16.f) * delta)
+                    ->PadT((viewH * 0.1f + (float)layerIx * 16.f) * delta)
                     ->Child(panel);
     Str trap = StrDup(a, fmt("dialog-%d", layerIx));
 
     if (keyboard) {
-        DialogBindKeys(cx, popup, trap, buttonProps.onCancel,
-                       buttonProps.onOk, buttonProps.onClose);
+        DialogBindKeys(cx, popup, trap, buttonProps.onCancel, buttonProps.onOk,
+                       buttonProps.onClose);
     }
     El* host = nullptr;
     if (alertHost) {
@@ -47108,13 +47003,12 @@ static El* PanelTitle(Ctx* cx, const PanelView* panel, Rgba fallback) {
     return TextEl(cx->a, title)->Fg(fallback);
 }
 
-static bool PanelTitleStyle(Ctx* cx, const PanelView* panel,
-                            TitleStyle* out) {
+static bool PanelTitleStyle(Ctx* cx, const PanelView* panel, TitleStyle* out) {
     if (!panel || !panel->titleStyle || !out) {
         return false;
     }
-    return panel->titleStyle(cx, panel->data, &out->background,
-                             &out->foreground);
+    return panel
+        ->titleStyle(cx, panel->data, &out->background, &out->foreground);
 }
 
 DragPanelPreview* DragPanelPreview::New(Ctx* cx, const PanelView* panel) {
@@ -47283,12 +47177,13 @@ static El* RenderTitleRow(const DockTabGroup* g) {
     }
 
     Rgba titleColor = hasTitleStyle ? titleStyle.foreground : th.foreground;
-    El* title = Div(a)
-                    ->Flex1()
-                    ->MinW(64)
-                    ->ClipX()
-                    ->Fg(titleColor)
-                    ->Child(PanelTitle(cx, def, titleColor)->Font(14)->Truncate());
+    El* title =
+        Div(a)
+            ->Flex1()
+            ->MinW(64)
+            ->ClipX()
+            ->Fg(titleColor)
+            ->Child(PanelTitle(cx, def, titleColor)->Font(14)->Truncate());
     row->Child(DockBindTitleDrag(g, activeIx, title));
     if (!g->collapsed && def->titleSuffix) {
         if (El* suffix = def->titleSuffix(cx, def->data)) {
@@ -47369,8 +47264,9 @@ static El* ui_dock_SkinTabBar(Ctx* cx, void*, const DockTabGroup* g) {
                            ->Fg(labelColor)
                            ->LineHeight(1.f));
         } else {
-            tab->Fg(labelColor)->Child(
-                PanelTitle(cx, def, labelColor)->Font(14)->LineHeight(1.f));
+            tab->Fg(labelColor)
+                ->Child(
+                    PanelTitle(cx, def, labelColor)->Font(14)->LineHeight(1.f));
         }
         if (def->closable && !DockIsLastPanel(s, g->node) &&
             !DockNodeLocked(s, g->node)) {
@@ -47466,7 +47362,8 @@ static El* ui_dock_SkinDock(Ctx* cx, void*, const DockCtx* d, El* content) {
 }
 
 static El* ui_dock_SkinDropIndicator(Ctx* cx, void*, Bounds) {
-    return Div(cx->a)->Bg(BackgroundOpacity(ThemeNow(cx->app).tokens.primary, 0.2f));
+    return Div(cx->a)
+        ->Bg(BackgroundOpacity(ThemeNow(cx->app).tokens.primary, 0.2f));
 }
 
 static El* SkinDragPreview(Ctx* cx, void*, const DockPanelDef* def) {
@@ -47474,17 +47371,10 @@ static El* SkinDragPreview(Ctx* cx, void*, const DockPanelDef* def) {
 }
 
 static const DockRenderer& ThemedRenderer() {
-    static const DockRenderer r = {nullptr,
-                                   SkinFrame,
-                                   nullptr,
-                                   nullptr,
-                                   SkinSplitHandle,
-                                   ui_dock_SkinDock,
-                                   nullptr,
-                                   SkinTabContent,
-                                   ui_dock_SkinTabBar,
-                                   ui_dock_SkinDropIndicator,
-                                   SkinDragPreview};
+    static const DockRenderer r = {
+        nullptr,         SkinFrame,         nullptr,        nullptr,
+        SkinSplitHandle, ui_dock_SkinDock,          nullptr,        SkinTabContent,
+        ui_dock_SkinTabBar,      ui_dock_SkinDropIndicator, SkinDragPreview};
     return r;
 }
 
@@ -47663,21 +47553,15 @@ Form* Form::LabelWidth(float w) {
 El* Form::IntoEl() {
     const Theme& th = ThemeNow(cx->app);
 
-    float formGap = size == UiSize::Large
-                        ? 12.f
-                        : (size == UiSize::XSmall || size == UiSize::Small)
-                              ? 6.f
-                              : 8.f;
+    float formGap = size == UiSize::Large                               ? 12.f
+                    : (size == UiSize::XSmall || size == UiSize::Small) ? 6.f
+                                                                        : 8.f;
     float fieldGap = size == UiSize::Large ? 8.f : 4.f;
     float inner = horizontal ? fieldGap : fieldGap * 0.5f;
     float labelFont = labelTextSize > 0 ? labelTextSize : 14.f;
     float lw = labelWidth > 0 ? labelWidth : 140.f;
 
-    El* col = Div(a)
-                  ->FlexCol()
-                  ->W(kFill)
-                  ->GapX(formGap * 3.f)
-                  ->GapY(formGap);
+    El* col = Div(a)->FlexCol()->W(kFill)->GapX(formGap * 3.f)->GapY(formGap);
     El* row = nullptr;
     int inRow = 0;
     for (int i = 0; i < fields.len; i++) {
@@ -47738,10 +47622,9 @@ El* Form::IntoEl() {
             if (fld.description.kind == FieldBuilderKind::Element) {
                 desc->Child(fld.description.element);
             } else {
-                desc->Child(
-                    TextEl(a, fld.description.string)
-                        ->Font(12)
-                        ->Fg(th.mutedFg));
+                desc->Child(TextEl(a, fld.description.string)
+                                ->Font(12)
+                                ->Fg(th.mutedFg));
             }
         }
         f->Child(desc);
@@ -47766,11 +47649,7 @@ El* Form::IntoEl() {
             inRow = 0;
         }
         if (!row) {
-            row = Div(a)
-                      ->FlexRow()
-                      ->W(kFill)
-                      ->Gap(formGap * 3.f)
-                      ->ItemsStart();
+            row = Div(a)->FlexRow()->W(kFill)->Gap(formGap * 3.f)->ItemsStart();
             col->Child(row);
             inRow = 0;
         }
@@ -48013,11 +47892,7 @@ El* GroupBox::IntoEl() {
         }
         box->Child(titleBox);
     }
-    El* content = Div(a)
-                      ->FlexCol()
-                      ->W(kFill)
-                      ->Gap(16)
-                      ->Fg(th.groupBoxFg);
+    El* content = Div(a)->FlexCol()->W(kFill)->Gap(16)->Fg(th.groupBoxFg);
     content->Radius(contentRadius >= 0 ? contentRadius : th.radius);
     if (variant == GroupBoxVariant::Fill) {
         content->Bg(th.groupBox);
@@ -49265,8 +49140,7 @@ Str Minifier::Minify(Arena* a, Str source) {
     bool whitespace = precedingWhitespace;
     Str raw = {};
     while (at < source.len) {
-        if (base::StrStartsWithI(Str(source.s + at, source.len - at),
-                                 "<!--")) {
+        if (base::StrStartsWithI(Str(source.s + at, source.len - at), "<!--")) {
             int end = at + 4;
             while (end + 2 < source.len &&
                    !(source.s[end] == '-' && source.s[end + 1] == '-' &&
@@ -49312,10 +49186,9 @@ Str Minifier::Minify(Arena* a, Str source) {
                 nameEnd++;
             }
             Str name(source.s + nameAt, nameEnd - nameAt);
-            if (!close && (base::StrEqI(name, "pre") ||
-                           base::StrEqI(name, "textarea") ||
-                           base::StrEqI(name, "script") ||
-                           base::StrEqI(name, "style"))) {
+            if (!close &&
+                (base::StrEqI(name, "pre") || base::StrEqI(name, "textarea") ||
+                 base::StrEqI(name, "script") || base::StrEqI(name, "style"))) {
                 raw = name;
             } else if (close && raw.s && base::StrEqI(name, raw)) {
                 raw = {};
@@ -49503,8 +49376,7 @@ static Str HtmlAttrRaw(Str attrs, const char* name) {
             at++;
             continue;
         }
-        bool match = nl == nameLen &&
-                     base::StrEqI(Str(attrs.s + ns, nl), name);
+        bool match = nl == nameLen && base::StrEqI(Str(attrs.s + ns, nl), name);
         while (at < attrs.len && HtmlIsSpace(attrs.s[at])) {
             at++;
         }
@@ -49600,8 +49472,8 @@ static bool HtmlBlockKind(Str n, MdKind* kind, uint8_t* level) {
         base::StrEqI(n, "dd") || base::StrEqI(n, "summary") ||
         base::StrEqI(n, "figcaption")) {
         *kind = MdKind::Paragraph;
-    } else if (n.len == 2 && base::StrStartsWithI(n, "h") &&
-               n.s[1] >= '1' && n.s[1] <= '6') {
+    } else if (n.len == 2 && base::StrStartsWithI(n, "h") && n.s[1] >= '1' &&
+               n.s[1] <= '6') {
         *kind = MdKind::Heading;
         *level = (uint8_t)(n.s[1] - '0');
     } else if (base::StrEqI(n, "blockquote")) {
@@ -49795,7 +49667,7 @@ struct HtmlBuild {
     bool inHead = false;
     bool raw = false;
 
-    ArenaVec<HtmlOpen> stack {};
+    ArenaVec<HtmlOpen> stack{};
 };
 
 static MdNode* HtmlNewNode(HtmlBuild* b, MdKind k) {
@@ -50666,8 +50538,8 @@ static const float kInputPadY = 8;
 static const float kInputGap = 6;
 static const float kInputTextSize = 14;
 
-static AccessibilityRole InputAccessibilityRole(
-    bool hasContentType, InputContentType contentType) {
+static AccessibilityRole InputAccessibilityRole(bool hasContentType,
+                                                InputContentType contentType) {
     if (!hasContentType) {
         return AccessibilityRole::TextInput;
     }
@@ -50692,63 +50564,99 @@ static AccessibilityRole InputAccessibilityRole(
 
 static bool InputContentIsSecret(bool hasContentType,
                                  InputContentType contentType) {
-    return hasContentType &&
-           (contentType == InputContentType::Password ||
-            contentType == InputContentType::NewPassword);
+    return hasContentType && (contentType == InputContentType::Password ||
+                              contentType == InputContentType::NewPassword);
 }
 
 static Str InputNativeContentType(bool present, InputContentType value) {
     if (!present) return {};
     switch (value) {
-        case InputContentType::Name: return StrL("name");
-        case InputContentType::NamePrefix: return StrL("honorific-prefix");
-        case InputContentType::GivenName: return StrL("given-name");
-        case InputContentType::MiddleName: return StrL("additional-name");
-        case InputContentType::FamilyName: return StrL("family-name");
-        case InputContentType::NameSuffix: return StrL("honorific-suffix");
-        case InputContentType::Nickname: return StrL("nickname");
-        case InputContentType::JobTitle: return StrL("organization-title");
-        case InputContentType::OrganizationName: return StrL("organization");
-        case InputContentType::Location: return StrL("location");
-        case InputContentType::FullStreetAddress: return StrL("street-address");
-        case InputContentType::StreetAddressLine1: return StrL("address-line1");
-        case InputContentType::StreetAddressLine2: return StrL("address-line2");
-        case InputContentType::AddressCity: return StrL("address-level2");
-        case InputContentType::AddressState: return StrL("address-level1");
+        case InputContentType::Name:
+            return StrL("name");
+        case InputContentType::NamePrefix:
+            return StrL("honorific-prefix");
+        case InputContentType::GivenName:
+            return StrL("given-name");
+        case InputContentType::MiddleName:
+            return StrL("additional-name");
+        case InputContentType::FamilyName:
+            return StrL("family-name");
+        case InputContentType::NameSuffix:
+            return StrL("honorific-suffix");
+        case InputContentType::Nickname:
+            return StrL("nickname");
+        case InputContentType::JobTitle:
+            return StrL("organization-title");
+        case InputContentType::OrganizationName:
+            return StrL("organization");
+        case InputContentType::Location:
+            return StrL("location");
+        case InputContentType::FullStreetAddress:
+            return StrL("street-address");
+        case InputContentType::StreetAddressLine1:
+            return StrL("address-line1");
+        case InputContentType::StreetAddressLine2:
+            return StrL("address-line2");
+        case InputContentType::AddressCity:
+            return StrL("address-level2");
+        case InputContentType::AddressState:
+            return StrL("address-level1");
         case InputContentType::AddressCityAndState:
             return StrL("address-level1+2");
-        case InputContentType::Sublocality: return StrL("address-level3");
-        case InputContentType::CountryName: return StrL("country-name");
-        case InputContentType::PostalCode: return StrL("postal-code");
-        case InputContentType::TelephoneNumber: return StrL("tel");
-        case InputContentType::EmailAddress: return StrL("email");
-        case InputContentType::Url: return StrL("url");
-        case InputContentType::CreditCardNumber: return StrL("cc-number");
-        case InputContentType::CreditCardName: return StrL("cc-name");
-        case InputContentType::CreditCardGivenName: return StrL("cc-given-name");
+        case InputContentType::Sublocality:
+            return StrL("address-level3");
+        case InputContentType::CountryName:
+            return StrL("country-name");
+        case InputContentType::PostalCode:
+            return StrL("postal-code");
+        case InputContentType::TelephoneNumber:
+            return StrL("tel");
+        case InputContentType::EmailAddress:
+            return StrL("email");
+        case InputContentType::Url:
+            return StrL("url");
+        case InputContentType::CreditCardNumber:
+            return StrL("cc-number");
+        case InputContentType::CreditCardName:
+            return StrL("cc-name");
+        case InputContentType::CreditCardGivenName:
+            return StrL("cc-given-name");
         case InputContentType::CreditCardMiddleName:
             return StrL("cc-additional-name");
         case InputContentType::CreditCardFamilyName:
             return StrL("cc-family-name");
-        case InputContentType::CreditCardSecurityCode: return StrL("cc-csc");
-        case InputContentType::CreditCardExpiration: return StrL("cc-exp");
+        case InputContentType::CreditCardSecurityCode:
+            return StrL("cc-csc");
+        case InputContentType::CreditCardExpiration:
+            return StrL("cc-exp");
         case InputContentType::CreditCardExpirationMonth:
             return StrL("cc-exp-month");
         case InputContentType::CreditCardExpirationYear:
             return StrL("cc-exp-year");
-        case InputContentType::CreditCardType: return StrL("cc-type");
-        case InputContentType::Username: return StrL("username");
-        case InputContentType::Password: return StrL("password");
-        case InputContentType::NewPassword: return StrL("new-password");
-        case InputContentType::OneTimeCode: return StrL("one-time-code");
+        case InputContentType::CreditCardType:
+            return StrL("cc-type");
+        case InputContentType::Username:
+            return StrL("username");
+        case InputContentType::Password:
+            return StrL("password");
+        case InputContentType::NewPassword:
+            return StrL("new-password");
+        case InputContentType::OneTimeCode:
+            return StrL("one-time-code");
         case InputContentType::ShipmentTrackingNumber:
             return StrL("shipment-tracking-number");
-        case InputContentType::FlightNumber: return StrL("flight-number");
-        case InputContentType::DateTime: return StrL("date-time");
-        case InputContentType::Birthdate: return StrL("bday");
-        case InputContentType::BirthdateDay: return StrL("bday-day");
-        case InputContentType::BirthdateMonth: return StrL("bday-month");
-        case InputContentType::BirthdateYear: return StrL("bday-year");
+        case InputContentType::FlightNumber:
+            return StrL("flight-number");
+        case InputContentType::DateTime:
+            return StrL("date-time");
+        case InputContentType::Birthdate:
+            return StrL("bday");
+        case InputContentType::BirthdateDay:
+            return StrL("bday-day");
+        case InputContentType::BirthdateMonth:
+            return StrL("bday-month");
+        case InputContentType::BirthdateYear:
+            return StrL("bday-year");
         case InputContentType::CellularEid:
         case InputContentType::CellularImei:
             return {};
@@ -50805,12 +50713,11 @@ El* Input::IntoEl() {
         hasAccessibilityRole
             ? accessibilityRole
             : InputAccessibilityRole(hasContentType, contentType);
-    El* field = InputBase::New(
-                    cx, id, !disabled,
-                    password && !hasAccessibilityRole
-                        ? AccessibilityRole::PasswordInput
-                        : role)
-                     ->BindInput(disabled ? nullptr : state)
+    El* field = InputBase::New(cx, id, !disabled,
+                               password && !hasAccessibilityRole
+                                   ? AccessibilityRole::PasswordInput
+                                   : role)
+                    ->BindInput(disabled ? nullptr : state)
                     ->FlexRow()
                     ->W(col ? kFill : width)
                     ->H(h)
@@ -50819,7 +50726,7 @@ El* Input::IntoEl() {
                     ->Gap(kInputGap)
                     ->ItemsCenter()
 
-                     ->ClipX();
+                    ->ClipX();
     if (state) {
         if (state->placeholder.s) {
             field->AriaPlaceholder(state->placeholder);
@@ -50961,7 +50868,7 @@ El* Textarea::IntoEl() {
     }
     bool interactive = state && !state->disabled;
     El* box = InputBase::New(cx, id, interactive, accessibilityRole)
-                   ->BindInput(state)
+                  ->BindInput(state)
                   ->W(kFill)
                   ->H(h)
                   ->Pad(8)
@@ -50973,7 +50880,7 @@ El* Textarea::IntoEl() {
                   ->ScrollY(state ? state->scrollY : 0)
 
                   ->ScrollFromPath()
-                   ->Child(gpui::Textarea::New(cx, state, editor));
+                  ->Child(gpui::Textarea::New(cx, state, editor));
     if (state) {
         box->AriaValue(InputValue(state));
         if (state->placeholder.s) {
@@ -51103,12 +51010,12 @@ El* NumberInput::IntoEl() {
     bool focused = state && state->focused && !disabled;
     Str base = id.s ? id : StrL("number");
     const NumberStep* policy = hasNumberStep ? &numberStep : nullptr;
-    Func0 decDirect = NumberInputStepCallback(
-        cx, state, StepAction::Decrement, policy, hasMin, min, hasMax, max,
-        disabled, onStep);
-    Func0 incDirect = NumberInputStepCallback(
-        cx, state, StepAction::Increment, policy, hasMin, min, hasMax, max,
-        disabled, onStep);
+    Func0 decDirect =
+        NumberInputStepCallback(cx, state, StepAction::Decrement, policy,
+                                hasMin, min, hasMax, max, disabled, onStep);
+    Func0 incDirect =
+        NumberInputStepCallback(cx, state, StepAction::Increment, policy,
+                                hasMin, min, hasMax, max, disabled, onStep);
 
     El* frame = Div(a)->FlexRow()->W(width)->H(h);
     if (appearance) {
@@ -51132,7 +51039,7 @@ El* NumberInput::IntoEl() {
     Rgba stepFg = disabled ? RgbaOpacity(th.secondaryFg, 0.5f) : th.secondaryFg;
 
     El* dec = gpui::Button::New(cx, StrL("decrement"), disabled, onDec, false)
-                   ->AriaLabel(Tr("Input.Decrement"))
+                  ->AriaLabel(Tr("Input.Decrement"))
                   ->W(btn)
                   ->H(kFill)
                   ->Corners(stepR, 0, 0, stepR)
@@ -51140,7 +51047,7 @@ El* NumberInput::IntoEl() {
                   ->JustifyCenter()
                   ->Child(IconEl(a, IconName::Minus, font)->Fg(stepFg));
     El* inc = gpui::Button::New(cx, StrL("increment"), disabled, onInc, false)
-                   ->AriaLabel(Tr("Input.Increment"))
+                  ->AriaLabel(Tr("Input.Increment"))
                   ->W(btn)
                   ->H(kFill)
                   ->Corners(0, stepR, stepR, 0)
@@ -52371,8 +52278,7 @@ static uint32_t LabelLower(uint32_t c) {
     if (c >= 'A' && c <= 'Z') {
         return c + 0x20;
     }
-    if ((c >= 0x00c0 && c <= 0x00d6) ||
-        (c >= 0x00d8 && c <= 0x00de)) {
+    if ((c >= 0x00c0 && c <= 0x00d6) || (c >= 0x00d8 && c <= 0x00de)) {
         return c + 0x20;
     }
 
@@ -52469,8 +52375,7 @@ static int LabelHighlightRanges(const Label* label, Str full, int totalLength,
         append(match, match + needle.len);
 
         search = match + 1;
-        while (search < full.len &&
-               ((uint8_t)full.s[search] & 0xc0) == 0x80) {
+        while (search < full.len && ((uint8_t)full.s[search] & 0xc0) == 0x80) {
             search++;
         }
         if (search >= full.len) {
@@ -52580,8 +52485,7 @@ El* Label::IntoEl() {
     Str shown = masked ? LabelMasked(a, full) : full;
 
     int spanCap = shown.len + 1;
-    TextSpan* spans =
-        (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * spanCap);
+    TextSpan* spans = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * spanCap);
     int nSpans = LabelSpans(this, full, shown, th, spans, spanCap);
     El* styled = TextEl(a, shown);
     if (nSpans > 0) {
@@ -52747,8 +52651,7 @@ El* ListItem::IntoEl(Str id, Listener onClick, Listener onMouseDown) {
 
         ListActiveStyle st =
             ListActiveStyleOf(ListSettingsNow(cx->app), th.tokens.listActive,
-                              th.listActiveBorder,
-                              th.tokens.accent, selected);
+                              th.listActiveBorder, th.tokens.accent, selected);
         if (!secondarySelected) {
             row->Bg(st.bg);
         }
@@ -52941,11 +52844,11 @@ El* List::IntoEl() {
             s->loading = delegate.isLoading
                              ? delegate.isLoading(cx, delegate.data)
                              : false;
-            s->hasMore = delegate.hasMore
-                             ? delegate.hasMore(cx, delegate.data)
-                             : false;
+            s->hasMore =
+                delegate.hasMore ? delegate.hasMore(cx, delegate.data) : false;
             s->loadMoreThreshold = delegate.loadMoreThreshold
-                                       ? delegate.loadMoreThreshold(delegate.data)
+                                       ? delegate
+                                             .loadMoreThreshold(delegate.data)
                                        : 20;
             if (s->loadMoreThreshold < 0) {
                 s->loadMoreThreshold = 0;
@@ -53019,8 +52922,8 @@ El* List::IntoEl() {
             measureEntry = 0;
         }
         ListRow m = ListRowAt(s, ListRowOfEntry(s, measureEntry));
-        ListItem* probe = delegate.renderItem(cx, delegate.data, m.section,
-                                              m.row, m.entry);
+        ListItem* probe =
+            delegate.renderItem(cx, delegate.data, m.section, m.row, m.entry);
         if (probe) {
             float got = MeasureEl(cx->win ? &cx->win->paint : nullptr,
                                   probe->IntoEl(StrL("list-measure"), {}, {}))
@@ -53032,18 +52935,20 @@ El* List::IntoEl() {
     }
     float headerH = s->sectionHeaders ? s->headerH : 0;
     if (s->sectionHeaders && delegate.renderSectionHeader) {
-        float got = MeasureEl(cx->win ? &cx->win->paint : nullptr,
-                              delegate.renderSectionHeader(cx, delegate.data, 0))
-                        .h;
+        float got =
+            MeasureEl(cx->win ? &cx->win->paint : nullptr,
+                      delegate.renderSectionHeader(cx, delegate.data, 0))
+                .h;
         if (got > 0) {
             headerH = got;
         }
     }
     float footerH = s->sectionFooters ? s->footerH : 0;
     if (s->sectionFooters && delegate.renderSectionFooter) {
-        float got = MeasureEl(cx->win ? &cx->win->paint : nullptr,
-                              delegate.renderSectionFooter(cx, delegate.data, 0))
-                        .h;
+        float got =
+            MeasureEl(cx->win ? &cx->win->paint : nullptr,
+                      delegate.renderSectionFooter(cx, delegate.data, 0))
+                .h;
         if (got > 0) {
             footerH = got;
         }
@@ -53081,13 +52986,13 @@ El* List::IntoEl() {
         El* el = nullptr;
         if (row.kind == ListRowKind::SectionHeader) {
             el = delegate.renderSectionHeader
-                     ? delegate.renderSectionHeader(cx, delegate.data,
-                                                    row.section)
+                     ? delegate
+                           .renderSectionHeader(cx, delegate.data, row.section)
                      : nullptr;
         } else if (row.kind == ListRowKind::SectionFooter) {
             el = delegate.renderSectionFooter
-                     ? delegate.renderSectionFooter(cx, delegate.data,
-                                                    row.section)
+                     ? delegate
+                           .renderSectionFooter(cx, delegate.data, row.section)
                      : nullptr;
         } else if (delegate.renderItem) {
             ListItem* it = delegate.renderItem(cx, delegate.data, row.section,
@@ -53099,8 +53004,7 @@ El* List::IntoEl() {
                 el = it->IntoEl(StrDup(a, IndexPathIdStr(a, row.Path())),
                                 ListenerArg(click, row.entry),
                                 ListenerArg(down, row.entry));
-                el->AriaPositionInSet(row.row + 1)
-                    ->AriaSizeOfSet(s->count);
+                el->AriaPositionInSet(row.row + 1)->AriaSizeOfSet(s->count);
             }
         }
 
@@ -53340,10 +53244,14 @@ namespace gpui {
 namespace component {
 
 namespace popup_menu {
-void init() { PopupMenuInitKeys(); }
+void init() {
+    PopupMenuInitKeys();
+}
 }
 
-Str AppMenuBarContext() { return StrL("AppMenuBar"); }
+Str AppMenuBarContext() {
+    return StrL("AppMenuBar");
+}
 
 namespace app_menu_bar {
 void init() {
@@ -53582,11 +53490,7 @@ El* PopupMenu::IntoEl() {
     float radius = size == UiSize::Small ? th.radius * 0.5f : th.radius;
 
     El* root = PopoverSurface(
-        cx, Div(a)
-                ->Id(id)
-                ->Role(AccessibilityRole::Menu)
-                ->FlexCol()
-                ->W(menuW));
+        cx, Div(a)->Id(id)->Role(AccessibilityRole::Menu)->FlexCol()->W(menuW));
 
     root->Id(id);
 
@@ -53649,22 +53553,21 @@ El* PopupMenu::IntoEl() {
             continue;
         }
         bool lit =
-            selected == i && !it.disabled &&
-            it.kind != PopupMenuItem::Label;
-        El* row = Div(a)
-                      ->Role(AccessibilityRole::MenuItem)
-                      ->AriaLabel(it.label)
-                      ->AriaSelected(lit)
-                      ->AriaDisabled(it.disabled ||
-                                    it.kind == MenuItemKind::Label)
-                      ->FlexRow()
-                      ->W(kFill)
-                      ->MinH(itemH)
-                      ->PadX(8)
-                      ->Gap(4)
-                      ->ItemsCenter()
-                      ->JustifyBetween()
-                      ->Radius(radius);
+            selected == i && !it.disabled && it.kind != PopupMenuItem::Label;
+        El* row =
+            Div(a)
+                ->Role(AccessibilityRole::MenuItem)
+                ->AriaLabel(it.label)
+                ->AriaSelected(lit)
+                ->AriaDisabled(it.disabled || it.kind == MenuItemKind::Label)
+                ->FlexRow()
+                ->W(kFill)
+                ->MinH(itemH)
+                ->PadX(8)
+                ->Gap(4)
+                ->ItemsCenter()
+                ->JustifyBetween()
+                ->Radius(radius);
         if (lit) {
             row->Bg(th.tokens.accent);
         }
@@ -53822,8 +53725,8 @@ DropdownMenuPopover* DropdownMenuPopover::New(Ctx* cx, Str id) {
 }
 
 DropdownMenuPopover* DropdownMenuPopover::Anchor(gpui::Anchor value) {
-    anchorRight = value == gpui::Anchor::TopRight ||
-                  value == gpui::Anchor::BottomRight;
+    anchorRight =
+        value == gpui::Anchor::TopRight || value == gpui::Anchor::BottomRight;
     return this;
 }
 
@@ -53866,8 +53769,7 @@ void ContextMenuState::OnMouseDown(ContextMenuState* self, Ctx* cx,
     PopupMenuOpen(menu, cx);
 }
 
-ContextMenu* ContextMenuExt::Wrap(Ctx* cx, Str id, El* child,
-                                  PopupMenu* menu) {
+ContextMenu* ContextMenuExt::Wrap(Ctx* cx, Str id, El* child, PopupMenu* menu) {
     return ContextMenu::New(cx, id)->Child(child)->Menu(menu);
 }
 
@@ -54229,7 +54131,9 @@ namespace gpui {
 
 namespace component {
 
-Notification Notification::New() { return {}; }
+Notification Notification::New() {
+    return {};
+}
 
 Notification Notification::Info(Str value) {
     Notification n;
@@ -54460,8 +54364,7 @@ int NotificationSystemCount() {
 }
 
 int NotificationSystemCount(const App* app) {
-    NotificationSystemState* state =
-        AppGlobalGet<NotificationSystemState>(app);
+    NotificationSystemState* state = AppGlobalGet<NotificationSystemState>(app);
     return state ? state->entries.len : 0;
 }
 
@@ -54533,8 +54436,8 @@ void NotificationSystemDismissByType(NotificationTypeId type, Window* win) {
     NotificationSystemDismissIdentity(type, false, 0, win);
 }
 
-void NotificationSystemDismissByTypeKey(NotificationTypeId type,
-                                         uint32_t key, Window* win) {
+void NotificationSystemDismissByTypeKey(NotificationTypeId type, uint32_t key,
+                                        Window* win) {
     NotificationSystemDismissIdentity(type, true, key, win);
 }
 
@@ -54595,8 +54498,8 @@ void NotificationListState::OnSystemResponse(NotificationListState* self,
     NotificationSystemState* state = SysState(cx->app);
     if (state) {
         for (int i = 0; i < state->entries.len; i++) {
-            if (state->entries[i].id == id &&
-                state->entries[i].win == cx->win) {
+            if (state->entries[i].id == id && state->entries[i]
+                                                      .win == cx->win) {
                 onClick = state->entries[i].onClick;
                 SysEntryRemoveAt(state, i);
                 break;
@@ -54792,9 +54695,9 @@ static void NotificationDismissIdentity(NotificationListState* s, Ctx* cx,
     }
     for (int i = 0; i < s->items.len; i++) {
         const NotificationItem& item = s->items[i];
-        bool matches = item.identityType == type &&
-                       (!hasKey || (item.identityHasKey &&
-                                    item.identityKey == key));
+        bool matches =
+            item.identityType == type &&
+            (!hasKey || (item.identityHasKey && item.identityKey == key));
         if (!matches) {
             continue;
         }
@@ -54834,8 +54737,8 @@ static bool NotificationAdvanceImpl(NotificationListState* s, Ctx* cx,
 
     bool animating = false;
     for (int i = 0; i < s->stack.entries.len; i++) {
-        animating = animating ||
-                    s->stack.entries[i].status != ToastStatus::Present;
+        animating = animating || s->stack.entries[i]
+                                         .status != ToastStatus::Present;
     }
 
     for (int i = s->items.len - 1; i >= 0; i--) {
@@ -54966,7 +54869,7 @@ El* NotificationList::IntoEl() {
         return Div(a);
     }
 
-    ArenaVec<int> groups[8] {};
+    ArenaVec<int> groups[8]{};
     int groupOrder[8] = {};
     int groupCount = 0;
     bool present[8] = {};
@@ -55012,18 +54915,16 @@ El* NotificationList::IntoEl() {
         bool expanded = s->stackHovered[aix] || s->stackFocused[aix];
 
         float* heights = (float*)Alloc(a, (int)sizeof(float) * group.len);
-        float* collapsedOff =
-            (float*)Alloc(a, (int)sizeof(float) * group.len);
-        float* expandedOff =
-            (float*)Alloc(a, (int)sizeof(float) * group.len);
+        float* collapsedOff = (float*)Alloc(a, (int)sizeof(float) * group.len);
+        float* expandedOff = (float*)Alloc(a, (int)sizeof(float) * group.len);
         for (int i = 0; i < group.len; i++) {
             const Notification& item = s->items[group[i]];
             heights[i] = item.measured.h > 0 ? item.measured.h : s->itemH;
         }
         float expandedH = 0;
         float collapsedH = ToastStackGeometry(
-            heights, group.len, kToastCollapsedPeek, kToastExpandedGap,
-            bottom, collapsedOff, expandedOff, &expandedH);
+            heights, group.len, kToastCollapsedPeek, kToastExpandedGap, bottom,
+            collapsedOff, expandedOff, &expandedH);
         Str anchorKey = StrDup(a, fmt("%d", aix));
         float stackH = SpringValue(
             cx, MotionId(StrL("notification-stack-height"), anchorKey),
@@ -55045,8 +54946,8 @@ El* NotificationList::IntoEl() {
         bool right = anchor == Anchor::TopRight ||
                      anchor == Anchor::RightCenter ||
                      anchor == Anchor::BottomRight;
-        bool center = anchor == Anchor::TopCenter ||
-                      anchor == Anchor::BottomCenter;
+        bool center =
+            anchor == Anchor::TopCenter || anchor == Anchor::BottomCenter;
         float left = right ? win.dipW - settings.width - settings.margins.right
                            : (center ? (win.dipW - settings.width) * 0.5f
                                      : settings.margins.left);
@@ -55066,15 +54967,14 @@ El* NotificationList::IntoEl() {
             Str key = StrDup(a, fmt("%d", item.id));
             float visible = SpringValue(
                 cx, MotionId(StrL("toast-visibility"), key),
-                (expanded || rank < kToastCollapsedVisible) ? 1.f : 0.f,
-                fade);
+                (expanded || rank < kToastCollapsedVisible) ? 1.f : 0.f, fade);
             if (visible <= 0.01f) {
                 continue;
             }
 
-            float off = SpringValue(
-                cx, MotionId(StrL("toast-offset"), key),
-                expanded ? expandedOff[i] : collapsedOff[i], geometry);
+            float off = SpringValue(cx, MotionId(StrL("toast-offset"), key),
+                                    expanded ? expandedOff[i] : collapsedOff[i],
+                                    geometry);
             float shrink = SpringValue(
                 cx, MotionId(StrL("toast-inset"), key),
                 expanded ? 0.f
@@ -55087,7 +54987,8 @@ El* NotificationList::IntoEl() {
             float transitionOpacity = 1.f;
             float transitionY = 0.f;
             if (entry.status == ToastStatus::Starting) {
-                float delta = (float)entry.elapsedMs / (float)kToastTransitionMs;
+                float delta =
+                    (float)entry.elapsedMs / (float)kToastTransitionMs;
                 if (delta > 1.f) delta = 1.f;
                 transitionOpacity = delta;
                 transitionY = (bottom ? 1.f : -1.f) * 96.f * (1.f - delta);
@@ -55099,11 +55000,9 @@ El* NotificationList::IntoEl() {
             }
 
             Listener close = ListenTo(
-                state, &NotificationListState::OnCloseClick,
-                (intptr_t)item.id);
+                state, &NotificationListState::OnCloseClick, (intptr_t)item.id);
             Listener click = ListenTo(
-                state, &NotificationListState::OnItemClick,
-                (intptr_t)item.id);
+                state, &NotificationListState::OnItemClick, (intptr_t)item.id);
             El* card = gpui::Toast::New(cx, StrL("notification"))
                            ->TransitionStatus(entry.status)
                            ->IntoEl()
@@ -57055,11 +56954,7 @@ El* DropdownPlaceContent(El* content, float gap) {
         return content;
     }
 
-    content->AnchorBelow(gap)
-        ->Left(0)
-        ->Fixed()
-        ->Deferred()
-        ->AnchorFlip();
+    content->AnchorBelow(gap)->Left(0)->Fixed()->Deferred()->AnchorFlip();
     content->style.anchorMargin = kPopupWindowMargin;
     return content;
 }
@@ -57224,9 +57119,9 @@ El* Progress::IntoEl() {
                               MotionNew(kProgressMotionMs));
         indicator->WFrac(v / 100.f);
     }
-    El* root = gpui::Progress::New(cx, id.s ? id : StrL("progress"), value,
-                                   loading)
-                   ->W(w);
+    El* root =
+        gpui::Progress::New(cx, id.s ? id : StrL("progress"), value, loading)
+            ->W(w);
     return root->Child(gpui::ProgressTrack::New(cx)
                            ->W(w)
                            ->H(h)
@@ -57522,9 +57417,8 @@ El* RadioGroup::IntoEl() {
         if (onClick.IsValid()) {
             r->OnClick(ListenerArg(onClick, i));
         }
-        base->Child(r->IntoEl()
-                        ->AriaPositionInSet(i + 1)
-                        ->AriaSizeOfSet(radios.len));
+        base->Child(
+            r->IntoEl()->AriaPositionInSet(i + 1)->AriaSizeOfSet(radios.len));
     }
     return group;
 }
@@ -57603,8 +57497,7 @@ Rating* Rating::OnClick(Listener fn) {
 
 El* Rating::IntoEl() {
     const Theme& th = ThemeNow(cx->app);
-    Entity<RatingState> st =
-        KeyedEntity<RatingState>(cx, KeyedName(cx, id));
+    Entity<RatingState> st = KeyedEntity<RatingState>(cx, KeyedName(cx, id));
     RatingState* s = st.Get(cx);
     int shown = value;
     if (s) {
@@ -57885,8 +57778,7 @@ El* ScrollableElement::VerticalScrollbar(Ctx* cx, El* element, Str id,
 }
 
 El* ScrollableElement::HorizontalScrollbar(Ctx* cx, El* element, Str id,
-                                           float scrollX,
-                                           Listener onScroll) {
+                                           float scrollX, Listener onScroll) {
     return Scrollbar(cx, element, id, 0, scrollX, onScroll,
                      ScrollbarAxis::Horizontal);
 }
@@ -58056,26 +57948,28 @@ El* SearchableListDelegate::RenderSectionHeader(Ctx* cx, int section) const {
                                : nullptr;
 }
 
-bool SearchableListDelegate::IsItemEnabled(
-    IndexPath path, const SearchableListItem* value, const App* app) const {
+bool SearchableListDelegate::IsItemEnabled(IndexPath path,
+                                           const SearchableListItem* value,
+                                           const App* app) const {
     return isItemEnabled ? isItemEnabled(user, path, value, app)
                          : value && !value->disabled && !value->pinned;
 }
 
-bool SearchableListDelegate::IsItemChecked(
-    IndexPath path, const SearchableListItem* value,
-    const SearchableListState* state, const App* app) const {
+bool SearchableListDelegate::IsItemChecked(IndexPath path,
+                                           const SearchableListItem* value,
+                                           const SearchableListState* state,
+                                           const App* app) const {
     if (isItemChecked) {
         return isItemChecked(user, path, value, state, app);
     }
-    return value && state && SearchableListIsChecked(
-                                 state, state->items, state->nItems,
-                                 SearchableFlatIndex(state, path));
+    return value && state &&
+           SearchableListIsChecked(state, state->items, state->nItems,
+                                   SearchableFlatIndex(state, path));
 }
 
-void SearchableListDelegate::OnWillChange(
-    SearchableListState* state, const SearchableListChange* changes,
-    int n) const {
+void SearchableListDelegate::OnWillChange(SearchableListState* state,
+                                          const SearchableListChange* changes,
+                                          int n) const {
     if (onWillChange) {
         onWillChange(user, state, changes, n);
         return;
@@ -58084,8 +57978,7 @@ void SearchableListDelegate::OnWillChange(
 }
 
 void SearchableListDelegate::OnConfirm(const SearchableListState* state,
-                                       IndexPath path,
-                                       bool secondary) const {
+                                       IndexPath path, bool secondary) const {
     if (onConfirm) {
         onConfirm(user, state, path, secondary);
     }
@@ -58122,8 +58015,7 @@ bool SearchableGroup::Matches(Str query) const {
     return false;
 }
 
-SearchableVec* SearchableVec::New(const SearchableListItem* values,
-                                  int count) {
+SearchableVec* SearchableVec::New(const SearchableListItem* values, int count) {
     SearchableVec* out = new SearchableVec();
     for (int i = 0; i < count; i++) {
         VecAppend(out->items, values[i]);
@@ -58171,8 +58063,7 @@ bool SearchableVec::Position(Str value, IndexPath* out) const {
 
 SearchableListItemElement* SearchableListItemElement::New(Ctx* cx,
                                                           size_t index) {
-    SearchableListItemElement* out =
-        ArenaNew<SearchableListItemElement>(cx->a);
+    SearchableListItemElement* out = ArenaNew<SearchableListItemElement>(cx->a);
     out->cx = cx;
     out->index = index;
     return out;
@@ -58215,8 +58106,8 @@ SearchableListItemElement* SearchableListItemElement::Child(El* child) {
     return this;
 }
 
-SearchableListItemElement* SearchableListItemElement::Refine(
-    const Style& value, uint32_t fields) {
+SearchableListItemElement* SearchableListItemElement::Refine(const Style& value,
+                                                             uint32_t fields) {
     style = value;
     styleSet = fields;
     return this;
@@ -58225,16 +58116,17 @@ SearchableListItemElement* SearchableListItemElement::Refine(
 El* SearchableListItemElement::IntoEl() {
     Arena* a = cx->a;
     const Theme& th = ThemeNow(cx->app);
-    El* row = Div(a)
-                  ->PathId(StrDup(a, fmt("searchable-list-item-%d", (int)index)))
-                  ->FlexRow()
-                  ->Gap(4)
-                  ->PadY(4)
-                  ->PadX(8)
-                  ->Radius(th.radius)
-                  ->Fg(disabled ? th.mutedFg : th.foreground)
-                  ->ItemsCenter()
-                  ->JustifyBetween();
+    El* row =
+        Div(a)
+            ->PathId(StrDup(a, fmt("searchable-list-item-%d", (int)index)))
+            ->FlexRow()
+            ->Gap(4)
+            ->PadY(4)
+            ->PadX(8)
+            ->Radius(th.radius)
+            ->Fg(disabled ? th.mutedFg : th.foreground)
+            ->ItemsCenter()
+            ->JustifyBetween();
     UiListSize(row, size);
     if (!disabled && !selected) {
         row->HoverBg(BackgroundOpacity(th.tokens.accent, 0.7f));
@@ -58266,8 +58158,7 @@ El* SearchableListItemElement::IntoEl() {
     return row;
 }
 
-static int SearchableFlatIndex(const SearchableListState* s,
-                               IndexPath path) {
+static int SearchableFlatIndex(const SearchableListState* s, IndexPath path) {
     if (!s || !s->items || path.section < 0 || path.row < 0) {
         return -1;
     }
@@ -58401,8 +58292,8 @@ bool SearchableListIsChecked(const SearchableListState* s,
         return true;
     }
     if (s->hasDelegate && s->delegate.isItemChecked) {
-        return s->delegate.IsItemChecked(SearchablePath(s, index),
-                                         &items[index], s, nullptr);
+        return s->delegate
+            .IsItemChecked(SearchablePath(s, index), &items[index], s, nullptr);
     }
     return SelectionIndexOfValue(s, items, nItems, items[index].value) >= 0;
 }
@@ -58414,8 +58305,8 @@ bool SearchableListIsEnabled(const SearchableListState* s,
         return false;
     }
     if (s->hasDelegate && s->delegate.isItemEnabled &&
-        !s->delegate.IsItemEnabled(SearchablePath(s, index), &items[index],
-                                   nullptr)) {
+        !s->delegate
+             .IsItemEnabled(SearchablePath(s, index), &items[index], nullptr)) {
         return false;
     }
     if (items[index].disabled || items[index].pinned) {
@@ -58584,8 +58475,7 @@ SearchableList* SearchableList::WithSize(UiSize value) {
     size = value;
     return this;
 }
-SearchableList* SearchableList::Delegate(
-    const SearchableListDelegate& value) {
+SearchableList* SearchableList::Delegate(const SearchableListDelegate& value) {
     delegate = value;
     hasDelegate = true;
     return this;
@@ -58613,10 +58503,10 @@ El* SearchableList::IntoEl() {
         for (int section = 0; section < sectionCount; section++) {
             total += delegate.ItemsCount(section);
         }
-        SearchableListItem* flat = total > 0
-                                       ? (SearchableListItem*)Alloc(
-                                             a, total * (int)sizeof(*flat))
-                                       : nullptr;
+        SearchableListItem* flat =
+            total > 0
+                ? (SearchableListItem*)Alloc(a, total * (int)sizeof(*flat))
+                : nullptr;
         Str* titles = sectionCount > 0
                           ? (Str*)Alloc(a, sectionCount * (int)sizeof(*titles))
                           : nullptr;
@@ -58703,8 +58593,7 @@ El* SearchableList::IntoEl() {
             checked = delegate.IsItemChecked(path, &it, s, cx->app);
         }
         if (hasDelegate && delegate.isItemEnabled) {
-            enabled = enabled &&
-                      delegate.IsItemEnabled(path, &it, cx->app);
+            enabled = enabled && delegate.IsItemEnabled(path, &it, cx->app);
         }
 
         El* label = Div(a)->FlexRow()->Gap(8)->ItemsCenter()->MinW(0);
@@ -58712,10 +58601,14 @@ El* SearchableList::IntoEl() {
             label->Child(IconEl(a, it.icon, UiIconPx(UiSize::Small))
                              ->Fg(th.mutedFg));
         }
-        label->Child(TextEl(a, it.title)->Fg(
-            enabled || checked ? th.foreground : th.mutedFg));
-        El* content =
-            Div(a)->FlexRow()->W(kFill)->Gap(4)->ItemsCenter()->JustifyBetween();
+        label->Child(TextEl(a, it.title)
+                         ->Fg(enabled || checked ? th.foreground : th.mutedFg));
+        El* content = Div(a)
+                          ->FlexRow()
+                          ->W(kFill)
+                          ->Gap(4)
+                          ->ItemsCenter()
+                          ->JustifyBetween();
         content->Child(label);
 
         if (it.badge.s) {
@@ -58728,9 +58621,8 @@ El* SearchableList::IntoEl() {
                                            ->Fg(th.primaryFg)
                                            ->LineHeight(1.4f)));
         }
-        El* row = hasDelegate
-                      ? delegate.RenderItem(cx, path, &it, checked)
-                      : nullptr;
+        El* row =
+            hasDelegate ? delegate.RenderItem(cx, path, &it, checked) : nullptr;
         if (!row) {
             row = SearchableListItemElement::New(cx, (size_t)m)
                       ->Checked(checked)
@@ -58742,12 +58634,12 @@ El* SearchableList::IntoEl() {
                       ->IntoEl();
         }
         row->Role(AccessibilityRole::ListBoxOption)
-                      ->AriaLabel(it.title)
-                      ->AriaSelected(checked)
-                      ->AriaPositionInSet(m + 1)
-                      ->AriaSizeOfSet(s->matches.len)
-                      ->AriaDisabled(!enabled)
-                      ->Shrink0();
+            ->AriaLabel(it.title)
+            ->AriaSelected(checked)
+            ->AriaPositionInSet(m + 1)
+            ->AriaSizeOfSet(s->matches.len)
+            ->AriaDisabled(!enabled)
+            ->Shrink0();
         if (enabled) {
             BindPathClick(row, StrDup(a, fmt("row-%d", ix)),
                           ListenerArg(click, m));
@@ -59368,8 +59260,7 @@ El* Select::IntoEl() {
             SearchableList::New(cx, StrL("list"), state, query)
                 ->InSelect(true)
                 ->Items(items, nItems)
-                ->W(menuWidth > 0 ? menuWidth
-                                  : (width > 0 ? width + 2 : 242))
+                ->W(menuWidth > 0 ? menuWidth : (width > 0 ? width + 2 : 242))
                 ->CheckIcon(checkIcon)
                 ->WithSize(size);
         if (sections) {
@@ -59526,7 +59417,9 @@ namespace gpui {
 
 namespace component {
 
-RenderOptions RenderOptions::New() { return {}; }
+RenderOptions RenderOptions::New() {
+    return {};
+}
 
 RenderOptions RenderOptions::WithPageIx(int value) const {
     RenderOptions out = *this;
@@ -59990,8 +59883,7 @@ struct FieldEl {
 };
 
 static FieldEl RenderField(Ctx* cx, Settings* s, const SettingItem& it, Str id,
-                           bool pageResettable,
-                           const RenderOptions& options) {
+                           bool pageResettable, const RenderOptions& options) {
     FieldEl out;
     SettingsState* st = s->state.Get(cx);
     if (it.field == SettingFieldKind::Element || !st) {
@@ -60034,9 +59926,9 @@ static FieldEl RenderField(Ctx* cx, Settings* s, const SettingItem& it, Str id,
 
     Listener click = ListenTo(s->state, &SettingsState::OnFieldClick, ix);
 
-    float w = it.fieldW > 0 ? it.fieldW
-                            : (options.layout == Axis::Horizontal ? 128.f
-                                                                 : kFill);
+    float w = it.fieldW > 0
+                  ? it.fieldW
+                  : (options.layout == Axis::Horizontal ? 128.f : kFill);
     switch (it.field) {
         case SettingFieldKind::Switch:
             out.el = Switch::New(cx, id)
@@ -60136,8 +60028,7 @@ static El* RenderItem(Ctx* cx, Settings* s, const SettingItem& it, Str id,
                                           : GroupBoxVariant::Normal)
             .WithLayout(it.layout)
             .WithDisabled(it.disabled);
-    FieldEl f =
-        RenderField(cx, s, it, StrL("field"), pageResettable, options);
+    FieldEl f = RenderField(cx, s, it, StrL("field"), pageResettable, options);
     if (f.dirty && f.resettable && f.onReset.IsValid()) {
         *anyDirty = true;
     }
@@ -60174,8 +60065,8 @@ El* Settings::IntoEl() {
 
     IdScope scope(cx, id);
     El* row = Div(a)->Id(id)->FlexRow()->W(kFill)->H(h)->ItemsStart();
-    float sideWidth = std::max(sidebarMinWidth,
-                               std::min(sidebarWidth, sidebarMaxWidth));
+    float sideWidth =
+        std::max(sidebarMinWidth, std::min(sidebarWidth, sidebarMaxWidth));
 
     El* side = Div(a)
                    ->FlexCol()
@@ -60220,12 +60111,11 @@ El* Settings::IntoEl() {
         if (p.icon != IconName::None) {
             item->Child(IconEl(a, p.icon, 16)->Fg(th.foreground));
         }
-        item->Child(
-            Div(a)->Flex1()->ClipY()->Child(TextEl(a, p.title)
-                                                ->Font(16)
-                                                ->Fg(th.foreground)
-                                                ->MaxW(sideWidth - 80)
-                                                ->Truncate()));
+        item->Child(Div(a)->Flex1()->ClipY()->Child(TextEl(a, p.title)
+                                                        ->Font(16)
+                                                        ->Fg(th.foreground)
+                                                        ->MaxW(sideWidth - 80)
+                                                        ->Truncate()));
         if (p.groups.len > 0) {
             item->Child(
                 IconEl(a,
@@ -60259,8 +60149,8 @@ El* Settings::IntoEl() {
             }
             sub->Child(TextEl(a, group.title)->Font(16)->Fg(th.foreground));
             BindClick(sub, StrDup(a, fmt("group-%d-%d", i, g)),
-                       ListenTo(state, &SettingsState::OnGroupClick,
-                                (intptr_t)i * 64 + (intptr_t)g));
+                      ListenTo(state, &SettingsState::OnGroupClick,
+                               (intptr_t)i * 64 + (intptr_t)g));
             side->Child(sub);
         }
     }
@@ -60294,11 +60184,10 @@ El* Settings::IntoEl() {
                 if (!SettingItemMatches(&it, query)) {
                     continue;
                 }
-                card->Child(
-                    RenderItem(cx, this, it,
-                               StrDup(a, fmt("%d-%d-%d", selected, g, itemIx)),
-                               selected, g, itemIx, shown == 0, p.resettable,
-                               &anyDirty));
+                card->Child(RenderItem(
+                    cx, this, it,
+                    StrDup(a, fmt("%d-%d-%d", selected, g, itemIx)), selected,
+                    g, itemIx, shown == 0, p.resettable, &anyDirty));
                 shown++;
             }
             body->Child(card);
@@ -60432,9 +60321,8 @@ El* Sheet::IntoEl(WinSize win) {
     bool horizontal =
         placement == SheetPlacement::Left || placement == SheetPlacement::Right;
 
-    float marginTop = placement == SheetPlacement::Bottom
-                          ? 0.f
-                          : th.sheet.marginTop;
+    float marginTop =
+        placement == SheetPlacement::Bottom ? 0.f : th.sheet.marginTop;
     El* surface = Div(a)
                       ->Absolute()
                       ->FlexCol()
@@ -60473,9 +60361,9 @@ El* Sheet::IntoEl(WinSize win) {
                    ->PadY(8)
                    ->ItemsCenter()
                    ->JustifyBetween();
-    head->Child(titleEl ? titleEl
-                        : TextEl(a, title)->Font(16)->Semibold()->Fg(
-                              th.foreground));
+    head->Child(
+        titleEl ? titleEl
+                : TextEl(a, title)->Font(16)->Semibold()->Fg(th.foreground));
     head->Child(Button::New(cx, StrL("sheet-close"))
                     ->Ghost()
                     ->WithSize(UiSize::Small)
@@ -60520,9 +60408,8 @@ El* Sheet::IntoEl(WinSize win) {
     }
     El* backdrop = nullptr;
     if (overlay) {
-        backdrop =
-            Div(a)->Absolute()->Top(0)->Left(0)->W(viewW)->H(viewH)->Bg(
-                th.overlay);
+        backdrop = Div(a)->Absolute()->Top(0)->Left(0)->W(viewW)->H(viewH)->Bg(
+            th.overlay);
     }
     return gpui::Sheet::New(cx)
         ->Overlay(backdrop)
@@ -60847,8 +60734,8 @@ El* SidebarGroup::IntoEl(Str id) {
     }
     El* inner = Div(a)->FlexCol()->W(kFill)->Gap(8);
     for (int i = 0; i < children.len; i++) {
-        inner->Child(children[i].Render(cx, StrDup(a, fmt("%d", i)),
-                                        collapsed));
+        inner
+            ->Child(children[i].Render(cx, StrDup(a, fmt("%d", i)), collapsed));
     }
     col->Child(inner);
     return col;
@@ -60909,8 +60796,8 @@ SidebarHeader* SidebarHeader::Refine(const Style& v, uint32_t fields) {
     return this;
 }
 El* SidebarHeader::IntoEl() {
-    return SidebarBand(cx, children, selected, onClick,
-                       StrL("sidebar-header"), style, styleSet);
+    return SidebarBand(cx, children, selected, onClick, StrL("sidebar-header"),
+                       style, styleSet);
 }
 
 SidebarFooter* SidebarFooter::New(Ctx* cx) {
@@ -61105,9 +60992,9 @@ SidebarLayout SidebarLayoutFor(SidebarCollapsible collapsible, bool collapsed,
 El* Sidebar::IntoEl() {
     const Theme& th = ThemeNow(cx->app);
 
-    float expandedWidth =
-        (styleSet & StyleFieldWidth) ? (style.width > 0 ? style.width : 0.f)
-                                     : width;
+    float expandedWidth = (styleSet & StyleFieldWidth)
+                              ? (style.width > 0 ? style.width : 0.f)
+                              : width;
     SidebarLayout layout =
         SidebarLayoutFor(collapsible, collapsed, expandedWidth, side);
     bool iconCollapsed = layout.iconCollapsed;
@@ -61182,13 +61069,13 @@ El* Sidebar::IntoEl() {
     Entity<SidebarScrollState> scrollState = KeyedEntity<SidebarScrollState>(
         cx, KeyedName(cx, StrL("sidebar-content-scroll")));
     SidebarScrollState* scroll = scrollState.Get(cx);
-    El* viewport = gpui::Scrollbar::Vertical(
-                       cx, StrL("sidebar-content-scroll"),
-                       scroll ? scroll->y : 0,
-                       ListenTo(scrollState, &SidebarScrollState::OnScroll))
-                       ->W(kFill)
-                       ->H(kFill)
-                       ->Child(inner);
+    El* viewport =
+        gpui::Scrollbar::Vertical(
+            cx, StrL("sidebar-content-scroll"), scroll ? scroll->y : 0,
+            ListenTo(scrollState, &SidebarScrollState::OnScroll))
+            ->W(kFill)
+            ->H(kFill)
+            ->Child(inner);
     body->Child(viewport);
     root->Child(body);
     if (footer) {
@@ -61966,15 +61853,14 @@ El* Switch::IntoEl() {
     SwitchTrackStyles trackStyles;
     trackStyles.Checked(StateStyle().Bg(on));
     if (checked) {
-        trackStyles.Disabled(
-            StateStyle().Bg(BackgroundOpacity(on, 0.5f)));
+        trackStyles.Disabled(StateStyle().Bg(BackgroundOpacity(on, 0.5f)));
     }
     SwitchThumbStyles thumbStyles;
-    thumbStyles.Disabled(StateStyle().Bg(
-        BackgroundOpacity(th.tokens.switchThumb, 0.35f)));
+    thumbStyles.Disabled(
+        StateStyle().Bg(BackgroundOpacity(th.tokens.switchThumb, 0.35f)));
 
-    El* track = SwitchTrack::New(cx, StrDup(a, fmt("%s-track", id)),
-                                 checked, disabled, &trackStyles)
+    El* track = SwitchTrack::New(cx, StrDup(a, fmt("%s-track", id)), checked,
+                                 disabled, &trackStyles)
                     ->W(trackW)
                     ->H(trackH)
                     ->Pad(2)
@@ -62006,8 +61892,8 @@ El* Switch::IntoEl() {
     }
     track->Child(thumbEl);
 
-    El* root = gpui::Switch::New(cx, id, checked, disabled, onClick,
-                                 nullptr, nullptr, label)
+    El* root = gpui::Switch::New(cx, id, checked, disabled, onClick, nullptr,
+                                 nullptr, label)
                    ->FlexRow()
                    ->ItemsCenter()
                    ->Gap(8);
@@ -63417,13 +63303,12 @@ El* TabBar::IntoEl() {
             st.fg = TabSelected(variant, th).fg;
         }
         Str tabId = StrDup(a, fmt("%d", i));
-        Listener click = onChange.IsValid() ? ListenerArg(onChange, i)
-                                            : item.onClick;
-        El* tab = gpui::Tab::New(
-                      cx, tabId, item.disabled,
-                      item.disabled ? Listener{} : click,
-                      on, item.ariaLabel.s ? item.ariaLabel : item.label,
-                      i + 1, items.len)
+        Listener click =
+            onChange.IsValid() ? ListenerArg(onChange, i) : item.onClick;
+        El* tab = gpui::Tab::New(cx, tabId, item.disabled,
+                                 item.disabled ? Listener{} : click, on,
+                                 item.ariaLabel.s ? item.ariaLabel : item.label,
+                                 i + 1, items.len)
                       ->FlexRow()
                       ->ItemsCenter()
                       ->JustifyCenter()
@@ -63443,8 +63328,7 @@ El* TabBar::IntoEl() {
             tab->Border(st.borderT, st.borderColor);
         } else {
             if (st.borderL > 0 &&
-                !(i == 0 && variant == TabVariant::Tab &&
-                  !item.tabBarPrefix)) {
+                !(i == 0 && variant == TabVariant::Tab && !item.tabBarPrefix)) {
                 tab->BorderL(st.borderL, st.borderColor);
             }
             if (st.borderR > 0) {
@@ -64260,12 +64144,11 @@ El* DataTable::BuildEl() {
         nColumns = delegate.columnsCount ? delegate.columnsCount(cx, data) : 0;
         nRows = delegate.rowsCount ? delegate.rowsCount(cx, data) : 0;
         if (nColumns > 0) {
-            TableColumn* generated = (TableColumn*)Alloc(
-                a, nColumns * (int)sizeof(TableColumn));
+            TableColumn* generated =
+                (TableColumn*)Alloc(a, nColumns * (int)sizeof(TableColumn));
             for (int c = 0; c < nColumns; c++) {
-                generated[c] = delegate.column
-                                   ? delegate.column(cx, data, c)
-                                   : TableColumn{};
+                generated[c] = delegate.column ? delegate.column(cx, data, c)
+                                               : TableColumn{};
             }
             columns = generated;
         } else {
@@ -64377,10 +64260,10 @@ El* DataTable::BuildEl() {
             }
             bool last = i == groupHeaders[g].n - 1;
 
-            El* band = hasDelegate && delegate.renderGroupTh
-                           ? delegate.renderGroupTh(cx, data, cells[i].label,
-                                                    span, w)
-                           : nullptr;
+            El* band =
+                hasDelegate && delegate.renderGroupTh
+                    ? delegate.renderGroupTh(cx, data, cells[i].label, span, w)
+                    : nullptr;
             if (!band) {
                 band = GroupBand(cx, cells[i].label, w, last);
             } else {
@@ -64451,11 +64334,8 @@ El* DataTable::BuildEl() {
             th_->Bg(th.tokens.accent);
         }
 
-        El* content = Div(a)
-                          ->FlexRow()
-                          ->Flex1()
-                          ->ItemsCenter()
-                          ->JustifyBetween();
+        El* content =
+            Div(a)->FlexRow()->Flex1()->ItemsCenter()->JustifyBetween();
         TableColumnPadding(content, col);
         if (!col.sortable) {
             if (col.center) {
@@ -64508,15 +64388,15 @@ El* DataTable::BuildEl() {
                                 : nullptr;
         scrollPane->Child(
             delegateEmpty ? delegateEmpty
-            : empty ? empty
-                  : Div(a)
-                        ->FlexCol()
-                        ->W(kFill)
-                        ->H(h > 0 ? h : 160)
-                        ->ItemsCenter()
-                        ->JustifyCenter()
-                        ->Child(IconEl(a, IconName::Inbox, 48)
-                                    ->Fg(RgbaOpacity(th.mutedFg, 0.6f))));
+            : empty       ? empty
+                    : Div(a)
+                          ->FlexCol()
+                          ->W(kFill)
+                          ->H(h > 0 ? h : 160)
+                          ->ItemsCenter()
+                          ->JustifyCenter()
+                          ->Child(IconEl(a, IconName::Inbox, 48)
+                                      ->Fg(RgbaOpacity(th.mutedFg, 0.6f))));
         return box;
     }
 
@@ -64575,8 +64455,8 @@ El* DataTable::BuildEl() {
                             ? delegate.renderTr(cx, data, r)
                             : nullptr;
         if (!rowScroll) {
-            rowScroll = gpui::TableRow::New(
-                cx, StrDup(a, fmt("row-%d", r)), r + 1);
+            rowScroll =
+                gpui::TableRow::New(cx, StrDup(a, fmt("row-%d", r)), r + 1);
         }
         rowScroll->PathClick(StrDup(a, fmt("row-%d", r)))
             ->Role(AccessibilityRole::Row)
@@ -64655,10 +64535,10 @@ El* DataTable::BuildEl() {
             }
             if (cellEl) {
 
-                float padding = columns[c].hasPaddings
-                                    ? columns[c].paddings.left +
-                                          columns[c].paddings.right
-                                    : 16.f;
+                float padding =
+                    columns[c].hasPaddings
+                        ? columns[c].paddings.left + columns[c].paddings.right
+                        : 16.f;
                 float inner = ColWidth(s, c) - padding;
                 cellEl->MaxW(inner > 1 ? inner : 1)->Truncate();
                 td->Child(cellEl);
@@ -65098,8 +64978,7 @@ static bool StyleFieldsEqual(const gpui::Style& a, const gpui::Style& b,
     if ((fields & StyleFieldPad) && !TextEdgesEq(a.pad, b.pad)) return false;
     if ((fields & StyleFieldMargin) && !TextEdgesEq(a.margin, b.margin))
         return false;
-    if ((fields & StyleFieldGap) &&
-        (a.gapX != b.gapX || a.gapY != b.gapY))
+    if ((fields & StyleFieldGap) && (a.gapX != b.gapX || a.gapY != b.gapY))
         return false;
     if ((fields & StyleFieldRadius) && a.radius != b.radius) return false;
     if ((fields & StyleFieldBorder) && a.border != b.border) return false;
@@ -65111,8 +64990,7 @@ static bool StyleFieldsEqual(const gpui::Style& a, const gpui::Style& b,
     if ((fields & StyleFieldWidth) && a.width != b.width) return false;
     if ((fields & StyleFieldHeight) && a.height != b.height) return false;
     if ((fields & StyleFieldOpacity) && a.opacity != b.opacity) return false;
-    if ((fields & StyleFieldHoverBg) &&
-        !TextBackgroundEq(a.hoverBg, b.hoverBg))
+    if ((fields & StyleFieldHoverBg) && !TextBackgroundEq(a.hoverBg, b.hoverBg))
         return false;
     if ((fields & StyleFieldHoverFg) && !TextRgbaEq(a.hoverFg, b.hoverFg))
         return false;
@@ -65295,7 +65173,7 @@ struct MdBuild {
 
     uint8_t marks = 0;
     Str href = {};
-    ArenaVec<MdDef> defs {};
+    ArenaVec<MdDef> defs{};
 };
 
 static Str V(MdBuild* b, const md::Node* n, md::NodeStrKind k) {
@@ -66639,8 +66517,8 @@ El* TextView::ScrollTable(MdNode* n) {
             if (paint) {
                 for (MdRun* run = c->runFirst; run; run = run->next) {
 
-                    Size sz = MeasureText(paint, run->text, baseFont, 0, false,
-                                          0);
+                    Size sz =
+                        MeasureText(paint, run->text, baseFont, 0, false, 0);
                     w += sz.w;
                 }
             } else {
@@ -66687,8 +66565,8 @@ El* TextView::ScrollTable(MdNode* n) {
         if (r->head) {
             row->Bg(th.tokens.tableHead)->Fg(th.tableHeadFg);
             if (textViewStyle.tableHeadFields) {
-                row->Refine(textViewStyle.tableHead,
-                            textViewStyle.tableHeadFields);
+                row->Refine(textViewStyle.tableHead, textViewStyle
+                                                         .tableHeadFields);
             }
         }
         int ix = 0;
@@ -66714,8 +66592,8 @@ El* TextView::ScrollTable(MdNode* n) {
                 align = colAlign[col];
             }
             SrcCell(r, c, nCols, colAlign);
-            cell->Child(Inline(c, baseFont,
-                               r->head ? kInheritFg : BlockFg(), 0, align));
+            cell->Child(Inline(c, baseFont, r->head ? kInheritFg : BlockFg(), 0,
+                               align));
             row->Child(cell);
         }
         track->Child(row);
@@ -66805,8 +66683,8 @@ El* TextView::Table(MdNode* n) {
         if (r->head) {
             row->Bg(th.tokens.tableHead)->Fg(th.tableHeadFg);
             if (textViewStyle.tableHeadFields) {
-                row->Refine(textViewStyle.tableHead,
-                            textViewStyle.tableHeadFields);
+                row->Refine(textViewStyle.tableHead, textViewStyle
+                                                         .tableHeadFields);
             }
         }
         int ix = 0;
@@ -66825,8 +66703,8 @@ El* TextView::Table(MdNode* n) {
                 align = colAlign[ix];
             }
             SrcCell(r, c, nCols, colAlign);
-            cell->Child(Inline(c, baseFont,
-                               r->head ? kInheritFg : BlockFg(), 0, align));
+            cell->Child(Inline(c, baseFont, r->head ? kInheritFg : BlockFg(), 0,
+                               align));
             row->Child(cell);
         }
         table->Child(row);
@@ -67122,9 +67000,8 @@ El* TextView::IntoEl() {
     if (!scrollable && maxLines >= 0) {
         float cap = baseFont * kLineHeight * (float)maxLines;
         element->LineClamp(
-            cap, state.IsValid()
-                     ? ListenTo(state, &TextViewState::OnLineClamp)
-                     : Listener{});
+            cap, state.IsValid() ? ListenTo(state, &TextViewState::OnLineClamp)
+                                 : Listener{});
     }
 
     if (scrollable && cx->win && managed) {
@@ -67132,24 +67009,23 @@ El* TextView::IntoEl() {
                         (uint32_t)(state.id.gen + 1);
         uint32_t key =
             KeyedKey(name, (uint32_t)HashClickId(StrL("TextViewScrollState")));
-        element =
-            Div(a)
-                ->FlexCol()
-                ->W(kFill)
-                ->H(kFill)
-                ->ClipY()
-                ->ScrollY(managed->scrollY)
-                ->ScrollId((int)key)
-                ->OnScroll(ListenTo(state, &TextViewState::OnScroll))
-                ->Child(element);
+        element = Div(a)
+                      ->FlexCol()
+                      ->W(kFill)
+                      ->H(kFill)
+                      ->ClipY()
+                      ->ScrollY(managed->scrollY)
+                      ->ScrollId((int)key)
+                      ->OnScroll(ListenTo(state, &TextViewState::OnScroll))
+                      ->Child(element);
     }
     if (outerStyleFields) {
         element->Refine(outerStyle, outerStyleFields);
     }
     if (selectable && state.IsValid()) {
         TextViewInitKeys();
-        int focus = HashClickId(StrDup(
-            a, fmt("text-view-%d-%u", state.id.index, state.id.gen)));
+        int focus = HashClickId(
+            StrDup(a, fmt("text-view-%d-%u", state.id.index, state.id.gen)));
         Listener onAction = ListenTo(state, &TextViewState::OnAction);
         element->KeyContext(StrL("TextView"))
             ->FocusId(focus)
@@ -68635,9 +68511,8 @@ void ThemeSyncBase(App* app) {
     }
     const Theme& ui = ThemeNow(app);
     BaseTheme base;
-    base.appearance = ui.mode == ThemeMode::Dark
-                          ? BaseThemeAppearance::Dark
-                          : BaseThemeAppearance::Light;
+    base.appearance = ui.mode == ThemeMode::Dark ? BaseThemeAppearance::Dark
+                                                 : BaseThemeAppearance::Light;
     base.tokens = ThemeSemanticTokens(ui, ThemeFontSize(app));
     base.scrollbar.mode = ScrollbarModeNow(app);
     base.scrollbar.motion = ScrollbarMotionFor(base.scrollbar.mode);
@@ -68854,46 +68729,65 @@ bool ThemeParseColor(Str s, Rgba* out) {
 }
 
 static const ColorName kPublicColorNames[] = {
-    ColorName::Neutral, ColorName::Gray,    ColorName::Red,
-    ColorName::Orange,  ColorName::Amber,   ColorName::Yellow,
-    ColorName::Lime,    ColorName::Green,   ColorName::Emerald,
-    ColorName::Teal,    ColorName::Cyan,    ColorName::Sky,
-    ColorName::Blue,    ColorName::Indigo,  ColorName::Violet,
-    ColorName::Purple,  ColorName::Fuchsia, ColorName::Pink,
-    ColorName::Rose,
+    ColorName::Neutral, ColorName::Gray,   ColorName::Red,    ColorName::Orange,
+    ColorName::Amber,   ColorName::Yellow, ColorName::Lime,   ColorName::Green,
+    ColorName::Emerald, ColorName::Teal,   ColorName::Cyan,   ColorName::Sky,
+    ColorName::Blue,    ColorName::Indigo, ColorName::Violet, ColorName::Purple,
+    ColorName::Fuchsia, ColorName::Pink,   ColorName::Rose,
 };
 
 static const char* ColorNameText(ColorName name) {
     switch (name) {
-        case ColorName::White: return "white";
-        case ColorName::Black: return "black";
-        case ColorName::Neutral: return "neutral";
-        case ColorName::Gray: return "gray";
-        case ColorName::Red: return "red";
-        case ColorName::Orange: return "orange";
-        case ColorName::Amber: return "amber";
-        case ColorName::Yellow: return "yellow";
-        case ColorName::Lime: return "lime";
-        case ColorName::Green: return "green";
-        case ColorName::Emerald: return "emerald";
-        case ColorName::Teal: return "teal";
-        case ColorName::Cyan: return "cyan";
-        case ColorName::Sky: return "sky";
-        case ColorName::Blue: return "blue";
-        case ColorName::Indigo: return "indigo";
-        case ColorName::Violet: return "violet";
-        case ColorName::Purple: return "purple";
-        case ColorName::Fuchsia: return "fuchsia";
-        case ColorName::Pink: return "pink";
-        case ColorName::Rose: return "rose";
+        case ColorName::White:
+            return "white";
+        case ColorName::Black:
+            return "black";
+        case ColorName::Neutral:
+            return "neutral";
+        case ColorName::Gray:
+            return "gray";
+        case ColorName::Red:
+            return "red";
+        case ColorName::Orange:
+            return "orange";
+        case ColorName::Amber:
+            return "amber";
+        case ColorName::Yellow:
+            return "yellow";
+        case ColorName::Lime:
+            return "lime";
+        case ColorName::Green:
+            return "green";
+        case ColorName::Emerald:
+            return "emerald";
+        case ColorName::Teal:
+            return "teal";
+        case ColorName::Cyan:
+            return "cyan";
+        case ColorName::Sky:
+            return "sky";
+        case ColorName::Blue:
+            return "blue";
+        case ColorName::Indigo:
+            return "indigo";
+        case ColorName::Violet:
+            return "violet";
+        case ColorName::Purple:
+            return "purple";
+        case ColorName::Fuchsia:
+            return "fuchsia";
+        case ColorName::Pink:
+            return "pink";
+        case ColorName::Rose:
+            return "rose";
     }
     return "black";
 }
 
 const ColorName* ColorNameAll(int* count) {
     if (count) {
-        *count = (int)(sizeof(kPublicColorNames) /
-                       sizeof(kPublicColorNames[0]));
+        *count =
+            (int)(sizeof(kPublicColorNames) / sizeof(kPublicColorNames[0]));
     }
     return kPublicColorNames;
 }
@@ -68908,8 +68802,9 @@ bool ColorNameParse(Str value, ColorName* out) {
         *out = ColorName::Black;
         return true;
     }
-    for (int i = 0; i < (int)(sizeof(kPublicColorNames) /
-                              sizeof(kPublicColorNames[0])); i++) {
+    for (int i = 0;
+         i < (int)(sizeof(kPublicColorNames) / sizeof(kPublicColorNames[0]));
+         i++) {
         ColorName candidate = kPublicColorNames[i];
         if (base::StrEqI(value, ColorNameText(candidate))) {
             *out = candidate;
@@ -69024,8 +68919,7 @@ static bool ParseGradientDirection(Str dir, float* out) {
 
 static bool ParseGradientAngle(Str angle, float* out) {
     angle = base::StrTrimAscii(angle);
-    if (angle.len > 3 &&
-        base::StrEqI(Str(angle.s + angle.len - 3, 3), "deg")) {
+    if (angle.len > 3 && base::StrEqI(Str(angle.s + angle.len - 3, 3), "deg")) {
         Str num = base::StrTrimAscii(Str(angle.s, angle.len - 3));
         float deg = ParseFloatOr(num.s, num.len, 1e30f);
         if (deg >= 1e29f) {
@@ -69040,8 +68934,8 @@ static bool ParseGradientAngle(Str angle, float* out) {
         return true;
     }
     if (base::StrStartsWithI(angle, "to ")) {
-        return ParseGradientDirection(base::StrTrimAscii(Str(angle.s + 3, angle.len - 3)),
-                                      out);
+        return ParseGradientDirection(
+            base::StrTrimAscii(Str(angle.s + 3, angle.len - 3)), out);
     }
     return false;
 }
@@ -69079,8 +68973,7 @@ static bool ParseColorStop(Str stop, float defaultPct, ColorStop* out) {
 
 static bool ParseLinearGradient(Str s, Background* out) {
     s = base::StrTrimAscii(s);
-    if (!base::StrStartsWithI(s, "linear-gradient(") ||
-        s.s[s.len - 1] != ')') {
+    if (!base::StrStartsWithI(s, "linear-gradient(") || s.s[s.len - 1] != ')') {
         return false;
     }
     const int kPrefix = 16;
@@ -69662,8 +69555,7 @@ int ThemeRegistryLoadStr(App* app, Str json) {
         cfg.colors = JsonGet(t, "colors");
         cfg.fontSize = JsonFloatOr(t, "font.size", 0);
         cfg.fontFamily = JsonString(JsonGet(t, "font.family"));
-        cfg.monoFontFamily =
-            JsonString(JsonGet(t, "mono_font.family"));
+        cfg.monoFontFamily = JsonString(JsonGet(t, "mono_font.family"));
         cfg.monoFontSize = JsonFloatOr(t, "mono_font.size", 0);
         cfg.radius = JsonFloatOr(t, "radius", -1);
         cfg.radiusLg = JsonFloatOr(t, "radius.lg", -1);
@@ -69749,9 +69641,8 @@ static void ApplyShadowLevel(const JsonValue* obj, const char* key,
     for (; item; item = v->kind == JsonKind::Array ? item->next : nullptr) {
         if (item->kind != JsonKind::Object) continue;
         if (v->kind == JsonKind::Array) VecAppend(*level, BoxShadow{});
-        BoxShadow* out = v->kind == JsonKind::Array
-                             ? &(*level)[level->len - 1]
-                             : &(*level)[0];
+        BoxShadow* out = v->kind == JsonKind::Array ? &(*level)[level->len - 1]
+                                                    : &(*level)[0];
         ApplyFloatField(item, "x", &out->x);
         ApplyFloatField(item, "y", &out->y);
         ApplyFloatField(item, "blur", &out->blur);
@@ -69815,8 +69706,7 @@ bool SemanticThemeConfigParse(const JsonValue* value,
         ParseStringOption(colors, "accent", &out->colors.accent);
         ParseStringOption(colors, "accent_foreground",
                           &out->colors.accentForeground);
-        ParseStringOption(colors, "destructive",
-                          &out->colors.destructive);
+        ParseStringOption(colors, "destructive", &out->colors.destructive);
         ParseStringOption(colors, "destructive_foreground",
                           &out->colors.destructiveForeground);
         ParseStringOption(colors, "border", &out->colors.border);
@@ -69848,8 +69738,7 @@ bool SemanticThemeConfigParse(const JsonValue* value,
         ParseTextStyleConfig(typography, "md", &out->typography.md);
         ParseTextStyleConfig(typography, "lg", &out->typography.lg);
         ParseTextStyleConfig(typography, "xl", &out->typography.xl);
-        ParseTextStyleConfig(typography, "mono_md",
-                             &out->typography.monoMd);
+        ParseTextStyleConfig(typography, "mono_md", &out->typography.monoMd);
     }
     if (const JsonValue* shadow = JsonGet(value, "shadow")) {
         out->shadow.sm = JsonGet(shadow, "sm");
@@ -69880,8 +69769,7 @@ static void ApplyConfiguredTextStyle(const SemanticTextStyleConfig& value,
     if (value.weight.has) out->weight = value.weight.value;
 }
 
-static void ApplyConfiguredShadow(const JsonValue* value,
-                                  Vec<BoxShadow>* out) {
+static void ApplyConfiguredShadow(const JsonValue* value, Vec<BoxShadow>* out) {
     if (!value) return;
     JsonValue wrapper;
     wrapper.kind = JsonKind::Object;
@@ -69898,20 +69786,19 @@ bool SemanticThemeConfig::ApplyTo(SemanticThemeTokens* out) const {
     ApplyConfiguredColor(colors.background, &out->colors.background);
     ApplyConfiguredColor(colors.foreground, &out->colors.foreground);
     ApplyConfiguredColor(colors.surface, &out->colors.surface);
-    ApplyConfiguredColor(colors.surfaceForeground,
-                         &out->colors.surfaceForeground);
+    ApplyConfiguredColor(colors.surfaceForeground, &out->colors
+                                                        .surfaceForeground);
     ApplyConfiguredColor(colors.primary, &out->colors.primary);
-    ApplyConfiguredColor(colors.primaryForeground,
-                         &out->colors.primaryForeground);
+    ApplyConfiguredColor(colors.primaryForeground, &out->colors
+                                                        .primaryForeground);
     ApplyConfiguredColor(colors.secondary, &out->colors.secondary);
-    ApplyConfiguredColor(colors.secondaryForeground,
-                         &out->colors.secondaryForeground);
+    ApplyConfiguredColor(colors.secondaryForeground, &out->colors
+                                                          .secondaryForeground);
     ApplyConfiguredColor(colors.muted, &out->colors.muted);
-    ApplyConfiguredColor(colors.mutedForeground,
-                         &out->colors.mutedForeground);
+    ApplyConfiguredColor(colors.mutedForeground, &out->colors.mutedForeground);
     ApplyConfiguredColor(colors.accent, &out->colors.accent);
-    ApplyConfiguredColor(colors.accentForeground,
-                         &out->colors.accentForeground);
+    ApplyConfiguredColor(colors.accentForeground, &out->colors
+                                                       .accentForeground);
     ApplyConfiguredColor(colors.destructive, &out->colors.destructive);
     ApplyConfiguredColor(colors.destructiveForeground,
                          &out->colors.destructiveForeground);
@@ -70030,10 +69917,10 @@ bool ThemeApplySemanticConfigStr(App* app, ThemeMode mode, Str json,
     bool ok = doc && ThemeSemanticConfigApply(doc, &tokens);
 
     if (ok && registry && registry->arena) {
-        tokens.typography.sans =
-            StrDup(registry->arena, tokens.typography.sans);
-        tokens.typography.mono =
-            StrDup(registry->arena, tokens.typography.mono);
+        tokens.typography
+            .sans = StrDup(registry->arena, tokens.typography.sans);
+        tokens.typography
+            .mono = StrDup(registry->arena, tokens.typography.mono);
     }
     ArenaDelete(a);
     if (!ok) {
@@ -70239,8 +70126,8 @@ static bool TilePanelTitleStyle(Ctx* cx, const TilePanelDef& panel,
     if (!panel.hasView || !panel.view.titleStyle || !out) {
         return false;
     }
-    return panel.view.titleStyle(cx, panel.view.data, &out->background,
-                                 &out->foreground);
+    return panel.view
+        .titleStyle(cx, panel.view.data, &out->background, &out->foreground);
 }
 
 static El* ui_tiles_ResizeHandle(Ctx* cx, Entity<TilesState> st, int ix, int panel,
@@ -70356,13 +70243,13 @@ El* Tiles::IntoEl() {
             if (hasStyle) {
                 bar->Bg(titleStyle.background)->Fg(titleStyle.foreground);
             }
-            bar->Child(Div(a)
-                           ->Flex1()
-                           ->MinW(64)
-                           ->ClipX()
-                           ->Fg(titleColor)
-                           ->Child(TilePanelTitle(cx, panel, titleColor)
-                                       ->Truncate()));
+            bar->Child(
+                Div(a)
+                    ->Flex1()
+                    ->MinW(64)
+                    ->ClipX()
+                    ->Fg(titleColor)
+                    ->Child(TilePanelTitle(cx, panel, titleColor)->Truncate()));
         }
         El* suffix = nullptr;
         if (p >= 0 && p < panels.len) {
@@ -70378,8 +70265,8 @@ El* Tiles::IntoEl() {
         }
         if (p >= 0 && p < panels.len && panels[p].hasView &&
             panels[p].view.toolbarButtons) {
-            if (El* tools = panels[p].view.toolbarButtons(
-                    cx, panels[p].view.data)) {
+            if (El* tools = panels[p]
+                                .view.toolbarButtons(cx, panels[p].view.data)) {
                 bar->Child(tools->Shrink0());
             }
         }
@@ -70666,8 +70553,8 @@ static El* ThemedCalendarItem(void* user, Ctx* cx, El* item,
 El* Calendar::IntoEl() {
     const Theme& th = ThemeNow(cx->app);
 
-    float width = (CalendarWidth(size) - (bare ? 24.f : 0.f)) *
-                  (float)numberOfMonths;
+    float width =
+        (CalendarWidth(size) - (bare ? 24.f : 0.f)) * (float)numberOfMonths;
 
     if (state.IsValid()) {
         gpui::Calendar* calendar =
@@ -70744,7 +70631,7 @@ DateRangePresetValue DateRangePresetValue::Range(LocalDate start,
 
 Date DateRangePresetValue::IntoDate() const {
     return kind == DateRangePresetValueKind::Range ? Date::Range(start, end)
-                                                    : Date::Single(start);
+                                                   : Date::Single(start);
 }
 
 DateRangePreset DateRangePreset::Single(Str label, LocalDate date,
@@ -70791,9 +70678,10 @@ static void AppendDateNumber(Arena* a, StrBuilder* out, int value, int digits) {
 
 static void AppendDateNumeric(Arena* a, StrBuilder* out, int value, int digits,
                               char defaultPad, char modifier) {
-    char pad = modifier == '-' ? 0 : modifier == '_' ? ' '
-                               : modifier == '0'     ? '0'
-                                                     : defaultPad;
+    char pad = modifier == '-'   ? 0
+               : modifier == '_' ? ' '
+               : modifier == '0' ? '0'
+                                 : defaultPad;
     if (!pad || digits <= 1) {
         AppendDateNumber(a, out, value, 1);
         return;
@@ -70832,13 +70720,13 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     };
     static const char* longMonths[] = {
-        "",          "January",   "February", "March",    "April",
-        "May",       "June",      "July",     "August",   "September",
-        "October",   "November",  "December",
+        "",        "January",  "February", "March",  "April",
+        "May",     "June",     "July",     "August", "September",
+        "October", "November", "December",
     };
     static const char* shortDays[] = {"Sun", "Mon", "Tue", "Wed",
                                       "Thu", "Fri", "Sat"};
-    static const char* longDays[] = {"Sunday",   "Monday", "Tuesday",
+    static const char* longDays[] = {"Sunday",    "Monday",   "Tuesday",
                                      "Wednesday", "Thursday", "Friday",
                                      "Saturday"};
     StrBuilder out;
@@ -70860,7 +70748,9 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
             directive = pattern.s[++i];
         }
         switch (directive) {
-            case '%': StrBuilderAppendChar(a, out, '%'); break;
+            case '%':
+                StrBuilderAppendChar(a, out, '%');
+                break;
             case 'Y':
                 AppendDateNumeric(a, &out, date.year, 4, '0', modifier);
                 break;
@@ -70896,7 +70786,9 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
             case 'a':
                 StrBuilderAppend(a, out, Str(shortDays[weekday]));
                 break;
-            case 'A': StrBuilderAppend(a, out, Str(longDays[weekday])); break;
+            case 'A':
+                StrBuilderAppend(a, out, Str(longDays[weekday]));
+                break;
             case 'w':
                 AppendDateNumeric(a, &out, weekday, 1, 0, modifier);
                 break;
@@ -70905,15 +70797,14 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
                                   modifier);
                 break;
             case 'U':
-                AppendDateNumeric(a, &out,
-                                  (yearDay - 1 + 7 - weekday) / 7, 2, '0',
-                                  modifier);
+                AppendDateNumeric(a, &out, (yearDay - 1 + 7 - weekday) / 7, 2,
+                                  '0', modifier);
                 break;
             case 'W': {
                 int mondayWeekday = (weekday + 6) % 7;
                 AppendDateNumeric(a, &out,
-                                  (yearDay - 1 + 7 - mondayWeekday) / 7, 2,
-                                  '0', modifier);
+                                  (yearDay - 1 + 7 - mondayWeekday) / 7, 2, '0',
+                                  modifier);
                 break;
             }
             case 'G':
@@ -70926,9 +70817,9 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
                 AppendDateNumeric(a, &out, isoWeek, 2, '0', modifier);
                 break;
             case 'F':
-                StrBuilderAppend(a, out,
-                                 fmt("%04d-%02d-%02d", date.year, date.month,
-                                     date.day));
+                StrBuilderAppend(
+                    a, out,
+                    fmt("%04d-%02d-%02d", date.year, date.month, date.day));
                 break;
             case 'D':
             case 'x':
@@ -70943,8 +70834,12 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
                 StrBuilderAppendChar(a, out, '-');
                 AppendDateNumeric(a, &out, date.year, 4, '0', modifier);
                 break;
-            case 't': StrBuilderAppendChar(a, out, '\t'); break;
-            case 'n': StrBuilderAppendChar(a, out, '\n'); break;
+            case 't':
+                StrBuilderAppendChar(a, out, '\t');
+                break;
+            case 'n':
+                StrBuilderAppendChar(a, out, '\n');
+                break;
             default:
 
                 StrBuilderAppendChar(a, out, '%');
@@ -70991,8 +70886,8 @@ Entity<DatePickerState> DatePickerStateNew(Ctx* cx, bool range) {
     state->date = range ? Date::Range() : Date::Single();
     state->dateFormat = StrDup(StrL("%Y/%m/%d"));
     state->calendar = CalendarStateNew(cx, state->date);
-    state->calendarSubscription = SubscribeTo(
-        cx->app, state->calendar, out, &DatePickerState::OnCalendar);
+    state->calendarSubscription = SubscribeTo(cx->app, state->calendar, out,
+                                              &DatePickerState::OnCalendar);
     return out;
 }
 
@@ -71015,8 +70910,7 @@ void DatePickerStateSetDate(DatePickerState* state, Date date, Ctx* cx,
     NotifyDatePicker(state, cx);
 }
 
-void DatePickerStateSetDateFormat(DatePickerState* state, Str format,
-                                  Ctx* cx) {
+void DatePickerStateSetDateFormat(DatePickerState* state, Str format, Ctx* cx) {
     if (!state) {
         return;
     }
@@ -71049,8 +70943,8 @@ void DatePickerStateSetFirstDayOfWeek(DatePickerState* state, int weekday,
     NotifyDatePicker(state, cx);
 }
 
-void DatePickerStateSetDisabledMatcher(DatePickerState* state,
-                                       Matcher matcher, Ctx* cx) {
+void DatePickerStateSetDisabledMatcher(DatePickerState* state, Matcher matcher,
+                                       Ctx* cx) {
     if (!state) {
         return;
     }
@@ -71127,8 +71021,8 @@ void DatePickerState::OnDismiss(DatePickerState* self, Ctx* cx,
 void DatePickerState::OnClear(DatePickerState* self, Ctx* cx,
                               const ClickEvent*) {
     WindowStopPropagation(cx);
-    Date empty = self->date.kind == DateKind::Range ? Date::Range()
-                                                     : Date::Single();
+    Date empty =
+        self->date.kind == DateKind::Range ? Date::Range() : Date::Single();
     DatePickerStateSetDate(self, empty, cx, true);
 }
 
@@ -71143,8 +71037,8 @@ DatePicker* DatePicker::New(Ctx* cx) {
 DatePicker* DatePicker::New(Ctx* cx, Entity<DatePickerState> state) {
     DatePicker* d = New(cx);
     d->state = state;
-    d->id = StrDup(cx->a, fmt("date-picker-%d-%u", state.id.index,
-                              state.id.gen));
+    d->id =
+        StrDup(cx->a, fmt("date-picker-%d-%u", state.id.index, state.id.gen));
     if (DatePickerState* retained = state.Get(cx)) {
         d->numberOfMonths = retained->numberOfMonths;
     }
@@ -71297,8 +71191,7 @@ struct DatePresetAction {
     Entity<DatePickerState> picker = {};
     Date value = {};
 
-    static void OnClick(DatePresetAction* self, Ctx* cx,
-                        const ClickEvent*) {
+    static void OnClick(DatePresetAction* self, Ctx* cx, const ClickEvent*) {
         if (!self) {
             return;
         }
@@ -71329,8 +71222,7 @@ static El* RetainedDatePickerIntoEl(DatePicker* self) {
                                     : Tr("DatePicker.placeholder");
     }
     Listener toggle = ListenTo(self->state, &DatePickerState::OnToggle);
-    Listener setOpen = ListenTo(self->state,
-                                &DatePickerState::OnOpenChange);
+    Listener setOpen = ListenTo(self->state, &DatePickerState::OnOpenChange);
     Listener clear = ListenTo(self->state, &DatePickerState::OnClear);
 
     float height = 32, padX = 10, font = 14;
@@ -71394,8 +71286,8 @@ static El* RetainedDatePickerIntoEl(DatePicker* self) {
                                   ->IntoEl()
                                   ->StopClick());
         } else {
-            triggerRow->Child(
-                IconEl(a, IconName::Calendar, 12)->Fg(th.mutedFg));
+            triggerRow
+                ->Child(IconEl(a, IconName::Calendar, 12)->Fg(th.mutedFg));
         }
     }
     trigger->Child(triggerRow);
@@ -71424,24 +71316,22 @@ static El* RetainedDatePickerIntoEl(DatePicker* self) {
                     astate->picker = self->state;
                     astate->value = PresetDate(preset);
                 }
-                list->Child(Button::New(
-                                cx, StrDup(a, fmt("date-preset-%d", i)))
-                                ->WithSize(UiSize::Small)
-                                ->Ghost()
-                                ->TabStop(false)
-                                ->Label(preset.label)
-                                ->OnClick(
-                                    ListenTo(action, &DatePresetAction::OnClick))
-                                ->IntoEl());
+                list->Child(
+                    Button::New(cx, StrDup(a, fmt("date-preset-%d", i)))
+                        ->WithSize(UiSize::Small)
+                        ->Ghost()
+                        ->TabStop(false)
+                        ->Label(preset.label)
+                        ->OnClick(ListenTo(action, &DatePresetAction::OnClick))
+                        ->IntoEl());
             }
             content->Child(list);
         }
-        Calendar* calendar =
-            Calendar::New(cx, state->calendar)
-                ->WithSize(self->size)
-                ->NumberOfMonths(self->numberOfMonths)
-                ->FirstDayOfWeek(state->firstDayOfWeek)
-                ->Bare();
+        Calendar* calendar = Calendar::New(cx, state->calendar)
+                                 ->WithSize(self->size)
+                                 ->NumberOfMonths(self->numberOfMonths)
+                                 ->FirstDayOfWeek(state->firstDayOfWeek)
+                                 ->Bare();
         content->Child(calendar->IntoEl());
         popup = Div(a)
                     ->Pad(12)
@@ -71454,8 +71344,8 @@ static El* RetainedDatePickerIntoEl(DatePicker* self) {
                     ->Child(content);
     }
 
-    El* root = gpui::DatePicker::New(cx, self->id, self->disabled,
-                                     state->open, setOpen)
+    El* root = gpui::DatePicker::New(cx, self->id, self->disabled, state->open,
+                                     setOpen)
                    ->TrackFocus(state->focus)
                    ->TabStop(!self->disabled)
                    ->FlexNone()
@@ -71742,8 +71632,8 @@ Tree* Tree::Icons(bool v) {
     return this;
 }
 
-static El* TreeRow(void* user, Ctx* cx, int,
-                   const TreeEntry& entry, TreeEntryState entryState) {
+static El* TreeRow(void* user, Ctx* cx, int, const TreeEntry& entry,
+                   TreeEntryState entryState) {
     Tree* self = (Tree*)user;
     const Theme& th = ThemeNow(cx->app);
     TreeState* s = self->state.Get(cx);
@@ -71878,7 +71768,7 @@ static El* ThemedDefaultRow(void* user, Ctx* cx, int ix) {
 }
 
 static El* CallerRow(void* user, Ctx* cx, int ix) {
-    auto fn = (El* (*)(Ctx*, int))user;
+    auto fn = (El * (*)(Ctx*, int)) user;
     return fn(cx, ix);
 }
 
@@ -71940,8 +71830,8 @@ Edges WindowPaddings(Window* window) {
     if (!window || !WindowClientDecorated(window)) {
         return {};
     }
-    float shadow = window->clientInset >= 0 ? window->clientInset
-                                             : kWindowShadowSize;
+    float shadow =
+        window->clientInset >= 0 ? window->clientInset : kWindowShadowSize;
     return WindowBorderInsets(shadow, window->tiling);
 }
 
@@ -72045,12 +71935,8 @@ El* WindowBorder::IntoEl() {
     float visualShadow = effectiveTiling.AllTiled() ? 0.f : shadowSize;
     Edges insets = WindowBorderInsets(visualShadow, effectiveTiling);
 
-    El* backdrop = Div(a)
-                       ->FlexCol()
-                       ->SizeFull()
-                       ->ClipX()
-                       ->ClipY()
-                       ->Bg(Rgba8(0, 0, 0, 0));
+    El* backdrop =
+        Div(a)->FlexCol()->SizeFull()->ClipX()->ClipY()->Bg(Rgba8(0, 0, 0, 0));
     if (insets.top > 0) {
         backdrop->PadT(insets.top);
     }
@@ -72074,8 +71960,8 @@ El* WindowBorder::IntoEl() {
                     ->ClipY()
                     ->Bg(Rgba8(0, 0, 0, 0));
 
-    Rgba border = th.mode == ThemeMode::Dark ? Rgb(51, 51, 51)
-                                              : Rgb(204, 204, 204);
+    Rgba border =
+        th.mode == ThemeMode::Dark ? Rgb(51, 51, 51) : Rgb(204, 204, 204);
     float activeOpacity = 1.f;
     if (!WindowIsActive(cx)) {
         border = RgbaOpacity(border, 0.7f);
@@ -72098,8 +71984,7 @@ El* WindowBorder::IntoEl() {
         BoxShadow shadows[2] = {
             {0, 2, 10, -1, Rgba8(0, 0, 0, (uint8_t)(46 * activeOpacity)),
              false},
-            {0, 1, 3, 0, Rgba8(0, 0, 0, (uint8_t)(46 * activeOpacity)),
-             false},
+            {0, 1, 3, 0, Rgba8(0, 0, 0, (uint8_t)(46 * activeOpacity)), false},
         };
         frame->Shadows(shadows, 2);
     }
@@ -72306,8 +72191,7 @@ int WindowNotificationCount(Ctx* cx) {
     return st ? st->items.len : 0;
 }
 
-void WindowRemoveNotifications(Ctx* cx,
-                               component::NotificationTypeId type) {
+void WindowRemoveNotifications(Ctx* cx, component::NotificationTypeId type) {
     WindowLayers* l = LayersOf(cx);
     if (!l || !l->notifications.IsValid()) {
         return;
@@ -72318,8 +72202,7 @@ void WindowRemoveNotifications(Ctx* cx,
     }
 }
 
-void WindowRemoveNotification1(Ctx* cx,
-                               component::NotificationTypeId type,
+void WindowRemoveNotification1(Ctx* cx, component::NotificationTypeId type,
                                uint32_t key) {
     WindowLayers* l = LayersOf(cx);
     if (!l || !l->notifications.IsValid()) {
@@ -135844,8 +135727,8 @@ struct WinAccessibilityNode : IRawElementProviderSimple,
     HRESULT STDMETHODCALLTYPE get_IsSelected(BOOL* out) override;
     HRESULT STDMETHODCALLTYPE
     get_SelectionContainer(IRawElementProviderSimple** out) override;
-    HRESULT STDMETHODCALLTYPE GetItem(
-        int row, int column, IRawElementProviderSimple** out) override;
+    HRESULT STDMETHODCALLTYPE GetItem(int row, int column,
+                                      IRawElementProviderSimple** out) override;
     HRESULT STDMETHODCALLTYPE get_RowCount(int* out) override;
     HRESULT STDMETHODCALLTYPE get_ColumnCount(int* out) override;
     HRESULT STDMETHODCALLTYPE get_Row(int* out) override;
@@ -135916,7 +135799,8 @@ static HRESULT AccessibilitySimpleAt(WinAccessibility* root, int index,
         return E_INVALIDARG;
     }
     *out = nullptr;
-    IRawElementProviderFragment* fragment = root ? root->NewNode(index) : nullptr;
+    IRawElementProviderFragment* fragment =
+        root ? root->NewNode(index) : nullptr;
     if (!fragment) {
         return UIA_E_ELEMENTNOTAVAILABLE;
     }
@@ -136288,13 +136172,13 @@ HRESULT WinAccessibilityNode::GetPatternProvider(PATTERNID pattern,
         return QueryInterface(__uuidof(ISelectionItemProvider), (void**)out);
     }
     if (pattern == UIA_GridPatternId &&
-        node->info.role == AccessibilityRole::Table &&
-        node->info.hasRowCount && node->info.hasColumnCount) {
+        node->info.role == AccessibilityRole::Table && node->info.hasRowCount &&
+        node->info.hasColumnCount) {
         return QueryInterface(__uuidof(IGridProvider), (void**)out);
     }
     if (pattern == UIA_TablePatternId &&
-        node->info.role == AccessibilityRole::Table &&
-        node->info.hasRowCount && node->info.hasColumnCount) {
+        node->info.role == AccessibilityRole::Table && node->info.hasRowCount &&
+        node->info.hasColumnCount) {
         return QueryInterface(__uuidof(ITableProvider), (void**)out);
     }
     if (pattern == UIA_GridItemPatternId &&
@@ -136919,8 +136803,8 @@ HRESULT WinAccessibilityNode::get_ContainingGrid(
     if (node->info.role != AccessibilityRole::Cell) {
         return UIA_E_INVALIDOPERATION;
     }
-    int table = AccessibilityAncestor(root, index, AccessibilityRole::Table,
-                                      false);
+    int table =
+        AccessibilityAncestor(root, index, AccessibilityRole::Table, false);
     return AccessibilitySimpleAt(root, table, out);
 }
 
@@ -136945,8 +136829,7 @@ HRESULT WinAccessibilityNode::GetColumnHeaders(SAFEARRAY** out) {
         return UIA_E_INVALIDOPERATION;
     }
     return AccessibilityProviderArray(root, root->NodeIndex(id),
-                                      AccessibilityRole::ColumnHeader, -1,
-                                      out);
+                                      AccessibilityRole::ColumnHeader, -1, out);
 }
 
 HRESULT WinAccessibilityNode::get_RowOrColumnMajor(RowOrColumnMajor* out) {
@@ -136981,12 +136864,11 @@ HRESULT WinAccessibilityNode::GetColumnHeaderItems(SAFEARRAY** out) {
     if (node->info.role != AccessibilityRole::Cell) {
         return UIA_E_INVALIDOPERATION;
     }
-    int table = AccessibilityAncestor(root, index, AccessibilityRole::Table,
-                                      false);
+    int table =
+        AccessibilityAncestor(root, index, AccessibilityRole::Table, false);
     int column = AccessibilityGridColumn(root, index);
-    return AccessibilityProviderArray(root, table,
-                                      AccessibilityRole::ColumnHeader, column,
-                                      out);
+    return AccessibilityProviderArray(
+        root, table, AccessibilityRole::ColumnHeader, column, out);
 }
 
 WinAccessibility* AccessibilityWinNew(Window* win, void* hwnd) {
@@ -137096,20 +136978,20 @@ bool AccessibilityWinSmokeTest(Window* win, uint32_t nodeId) {
         {UIA_SelectionItemPatternId,
          expected->info.hasSelected &&
              AccessibilitySelectionItemRole(expected->info.role)},
-        {UIA_GridPatternId,
-         expected->info.role == AccessibilityRole::Table &&
-             expected->info.hasRowCount && expected->info.hasColumnCount},
-        {UIA_TablePatternId,
-         expected->info.role == AccessibilityRole::Table &&
-             expected->info.hasRowCount && expected->info.hasColumnCount},
-        {UIA_GridItemPatternId,
-         expected->info.role == AccessibilityRole::Cell &&
-             expected->info.hasColumnIndex &&
-             AccessibilityGridRow(root, index) >= 0},
-        {UIA_TableItemPatternId,
-         expected->info.role == AccessibilityRole::Cell &&
-             expected->info.hasColumnIndex &&
-             AccessibilityGridRow(root, index) >= 0},
+        {UIA_GridPatternId, expected->info.role == AccessibilityRole::Table &&
+                                expected->info.hasRowCount &&
+                                expected->info.hasColumnCount},
+        {UIA_TablePatternId, expected->info.role == AccessibilityRole::Table &&
+                                 expected->info.hasRowCount &&
+                                 expected->info.hasColumnCount},
+        {UIA_GridItemPatternId, expected->info
+                                            .role == AccessibilityRole::Cell &&
+                                    expected->info.hasColumnIndex &&
+                                    AccessibilityGridRow(root, index) >= 0},
+        {UIA_TableItemPatternId, expected->info
+                                             .role == AccessibilityRole::Cell &&
+                                     expected->info.hasColumnIndex &&
+                                     AccessibilityGridRow(root, index) >= 0},
     };
     for (const PatternExpectation& pattern : patterns) {
         IUnknown* provider = nullptr;
@@ -137135,8 +137017,8 @@ bool AccessibilityWinSmokeTest(Window* win, uint32_t nodeId) {
              columns == expected->info.columnCount;
         int cellIndex = -1;
         for (int i = 0; ok && i < root->win->accessibility.len; i++) {
-            if (root->win->accessibility[i].info.role ==
-                    AccessibilityRole::Cell &&
+            if (root->win->accessibility[i]
+                        .info.role == AccessibilityRole::Cell &&
                 AccessibilityAncestor(root, i, AccessibilityRole::Table,
                                       false) == index) {
                 cellIndex = i;
@@ -138000,8 +137882,7 @@ int TextLayoutHitPoint(TextLayout* tl, Str s, float relX, float relY) {
     if (!inside) {
         int lineNo = 0;
         int lineX = 0;
-        pango_layout_index_to_line_x(tl->layout, index, FALSE, &lineNo,
-                                     &lineX);
+        pango_layout_index_to_line_x(tl->layout, index, FALSE, &lineNo, &lineX);
         PangoLayoutLine* line =
             pango_layout_get_line_readonly(tl->layout, lineNo);
         if (line) {
@@ -144948,8 +144829,8 @@ static Tiling ReadTiling(Window* win, bool maximized) {
         int format = 0;
         unsigned long n = 0, after = 0;
         unsigned char* data = nullptr;
-        if (XGetWindowProperty(gDpy, pw->xwin, aGtkEdgeConstraints, 0, 1,
-                               False, XA_CARDINAL, &type, &format, &n, &after,
+        if (XGetWindowProperty(gDpy, pw->xwin, aGtkEdgeConstraints, 0, 1, False,
+                               XA_CARDINAL, &type, &format, &n, &after,
                                &data) == Success) {
             if (data && type == XA_CARDINAL && format == 32 && n >= 1) {
                 unsigned long bits = ((unsigned long*)data)[0];
@@ -146101,8 +145982,7 @@ bool PlatInit(App* app) {
     aNetWmMoveResize = XInternAtom(gDpy, "_NET_WM_MOVERESIZE", False);
     aMotifWmHints = XInternAtom(gDpy, "_MOTIF_WM_HINTS", False);
     aGtkShowWindowMenu = XInternAtom(gDpy, "_GTK_SHOW_WINDOW_MENU", False);
-    aGtkEdgeConstraints =
-        XInternAtom(gDpy, "_GTK_EDGE_CONSTRAINTS", False);
+    aGtkEdgeConstraints = XInternAtom(gDpy, "_GTK_EDGE_CONSTRAINTS", False);
     aClipboard = XInternAtom(gDpy, "CLIPBOARD", False);
     aTargets = XInternAtom(gDpy, "TARGETS", False);
     aClipTarget = XInternAtom(gDpy, "GPUI_CLIPBOARD", False);
@@ -149795,10 +149675,10 @@ bool HttpGetNoRedirect(Str url, HttpRsp* out) {
 
 @implementation GpuiNoRedirectDelegate
 - (void)URLSession:(NSURLSession*)session
-              task:(NSURLSessionTask*)task
-willPerformHTTPRedirection:(NSHTTPURLResponse*)response
-        newRequest:(NSURLRequest*)request
-  completionHandler:(void (^)(NSURLRequest*))completionHandler {
+                          task:(NSURLSessionTask*)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse*)response
+                    newRequest:(NSURLRequest*)request
+             completionHandler:(void (^)(NSURLRequest*))completionHandler {
     (void)session;
     (void)task;
     (void)response;
@@ -149857,14 +149737,14 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
         dispatch_semaphore_t done = dispatch_semaphore_create(0);
         GpuiNoRedirectDelegate* delegate =
             noRedirect ? [[GpuiNoRedirectDelegate alloc] init] : nil;
-        NSURLSession* session = noRedirect
-                                    ? [NSURLSession
-                                          sessionWithConfiguration:
-                                              [NSURLSessionConfiguration
-                                                  defaultSessionConfiguration]
-                                                       delegate:delegate
-                                                  delegateQueue:nil]
-                                    : [NSURLSession sharedSession];
+        NSURLSession* session =
+            noRedirect
+                ? [NSURLSession
+                      sessionWithConfiguration:[NSURLSessionConfiguration
+                                                   defaultSessionConfiguration]
+                                      delegate:delegate
+                                 delegateQueue:nil]
+                : [NSURLSession sharedSession];
         NSURLSessionDataTask* task = [session
             dataTaskWithRequest:req
               completionHandler:^(NSData* d, NSURLResponse* r, NSError* e) {
@@ -149891,10 +149771,9 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
         out->status = (int)[rsp statusCode];
         if (noRedirect && out->status >= 300 && out->status < 400) {
             NSString* location = [rsp valueForHTTPHeaderField:@"Location"];
-            NSURL* target = location
-                                ? [NSURL URLWithString:location
-                                       relativeToURL:[rsp URL]]
-                                : nil;
+            NSURL* target = location ? [NSURL URLWithString:location
+                                              relativeToURL:[rsp URL]]
+                                     : nil;
             out->redirectUrl = StrFromNS([[target absoluteURL] absoluteString]);
         }
         Str ct = StrFromNS([rsp valueForHTTPHeaderField:@"Content-Type"]);
@@ -150025,16 +149904,16 @@ static void ReadRedirect(HINTERNET req, const wchar_t* base, HttpRsp* out) {
     }
     DWORD combinedLen = 32768;
     wchar_t* combined = AllocArray<wchar_t>((int)combinedLen);
-    if (combined && SUCCEEDED(UrlCombineW(base, location, combined,
-                                           &combinedLen, 0))) {
+    if (combined &&
+        SUCCEEDED(UrlCombineW(base, location, combined, &combinedLen, 0))) {
         out->redirectUrl = FromWide(combined);
     }
     Free(nullptr, combined);
     Free(nullptr, location);
 }
 
-static bool ReadResponse(HINTERNET req, const wchar_t* base,
-                         bool noRedirect, HttpRsp* out) {
+static bool ReadResponse(HINTERNET req, const wchar_t* base, bool noRedirect,
+                         HttpRsp* out) {
     DWORD status = 0;
     DWORD size = sizeof(status);
     if (!WinHttpQueryHeaders(
@@ -150138,11 +150017,11 @@ static bool HttpGetInternal(Str url, HttpRsp* out, bool noRedirect) {
                     conn.h, L"GET", pathLen > 0 ? path : L"/", nullptr,
                     WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
                 DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
-                bool redirectReady = !noRedirect ||
-                    (req.h && WinHttpSetOption(req.h,
-                                               WINHTTP_OPTION_REDIRECT_POLICY,
-                                               &redirectPolicy,
-                                               sizeof(redirectPolicy)));
+                bool redirectReady =
+                    !noRedirect ||
+                    (req.h &&
+                     WinHttpSetOption(req.h, WINHTTP_OPTION_REDIRECT_POLICY,
+                                      &redirectPolicy, sizeof(redirectPolicy)));
                 if (req.h && redirectReady &&
                     WinHttpSendRequest(req.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -150586,8 +150465,7 @@ static void RefreshBattery(SysState* s) {
         snprintf(path, sizeof(path), "/sys/class/power_supply/%s/status",
                  ent->d_name);
         if (ReadSmallFile(path, buf, (int)sizeof(buf)) > 0) {
-            s->battery.charging =
-                base::StrStartsWithI(Str(buf), "Charging");
+            s->battery.charging = base::StrStartsWithI(Str(buf), "Charging");
         }
         break;
     }
@@ -151846,7 +151724,7 @@ bool PlatCanonicalPath(const char* path, char* out, int cap) {
     }
     WCHAR wide[kMaxPath] = {};
     DWORD n = GetFinalPathNameByHandleW(file, wide, kMaxPath,
-                                       FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+                                        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
     CloseHandle(file);
     if (n == 0 || n >= kMaxPath) {
         return false;
@@ -151926,8 +151804,7 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
         }
         e.isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         e.isFile = !e.isDir;
-        e.isSymlink =
-            (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+        e.isSymlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
         e.size = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
         e.modified = ((uint64_t)fd.ftLastWriteTime.dwHighDateTime << 32) |
                      fd.ftLastWriteTime.dwLowDateTime;

@@ -7613,8 +7613,7 @@ struct DialogClose {
 };
 
 struct DialogTrigger {
-    static El* New(Ctx* cx, Listener onOpen = {},
-                   DialogHandle handle = {},
+    static El* New(Ctx* cx, Listener onOpen = {}, DialogHandle handle = {},
                    Str id = StrL("dialog-trigger"));
 };
 
@@ -7662,8 +7661,7 @@ struct AlertDialogAction {
     static El* New(Ctx* cx);
 };
 struct AlertDialogTrigger {
-    static El* New(Ctx* cx, Listener onOpen = {},
-                   DialogHandle handle = {});
+    static El* New(Ctx* cx, Listener onOpen = {}, DialogHandle handle = {});
 };
 
 struct AlertDialog {
@@ -7966,10 +7964,8 @@ struct CalendarState {
                        intptr_t year);
 };
 
-void CalendarStateInit(CalendarState* s, Ctx* cx,
-                       Date date = Date::Single());
-Entity<CalendarState> CalendarStateNew(Ctx* cx,
-                                       Date date = Date::Single());
+void CalendarStateInit(CalendarState* s, Ctx* cx, Date date = Date::Single());
+Entity<CalendarState> CalendarStateNew(Ctx* cx, Date date = Date::Single());
 bool CalendarStateApplyDate(CalendarState* s, Date date);
 void CalendarStateSetDate(CalendarState* s, Date date, Ctx* cx,
                           bool emit = false);
@@ -8018,8 +8014,8 @@ struct CalendarItemState {
 
 using CalendarItemFn = El* (*)(void* user, Ctx* cx, El* item,
                                const CalendarItemState& st);
-using CalendarLabelFn =
-    Str (*)(void* user, Ctx* cx, CalendarItemKind kind, int value);
+using CalendarLabelFn = Str (*)(void* user, Ctx* cx, CalendarItemKind kind,
+                                int value);
 
 struct CalendarOpts {
     int year = 0;
@@ -8132,8 +8128,7 @@ struct Checkbox {
 };
 
 struct CheckboxIndicator {
-    static El* New(Ctx* cx,
-                   CheckboxState state = CheckboxState::Unchecked,
+    static El* New(Ctx* cx, CheckboxState state = CheckboxState::Unchecked,
                    bool disabled = false,
                    const CheckboxIndicatorStyles* styles = nullptr,
                    const StateStyle* instance = nullptr);
@@ -8204,8 +8199,8 @@ struct ColorPickerState {
     ColorPickerState();
 
     static void OnToggleOpen(ColorPickerState* s, Ctx* cx, const ClickEvent*);
-    static void OnOpenChange(ColorPickerState* s, Ctx* cx,
-                             const ClickEvent*, intptr_t open);
+    static void OnOpenChange(ColorPickerState* s, Ctx* cx, const ClickEvent*,
+                             intptr_t open);
     static void OnTab(ColorPickerState* s, Ctx* cx, const ClickEvent*,
                       intptr_t ix);
     static void OnSwatchClick(ColorPickerState* s, Ctx* cx, const ClickEvent*,
@@ -8244,8 +8239,8 @@ bool ColorPickerParseHex(Str text, uint32_t* out);
 Str ColorPickerHexString(Arena* a, uint32_t color);
 
 struct ColorPicker {
-    static El* New(Ctx* cx, Str id, bool open = false,
-                   bool disabled = false, Str accessibilityLabel = {},
+    static El* New(Ctx* cx, Str id, bool open = false, bool disabled = false,
+                   Str accessibilityLabel = {},
                    AccessibilityRole role = AccessibilityRole::Button,
                    Listener onOpenChange = {}, FocusHandle focus = {},
                    int tabIndex = 0, bool tabStop = true,
@@ -8283,9 +8278,8 @@ Str SelectContext();
 SelectAction SelectActionOf(uint32_t id, bool open, bool disabled);
 
 struct Select {
-    static El* New(Ctx* cx, Str id, bool open = false,
-                   bool disabled = false, Str accessibilityLabel = {},
-                   Listener onOpenChange = {});
+    static El* New(Ctx* cx, Str id, bool open = false, bool disabled = false,
+                   Str accessibilityLabel = {}, Listener onOpenChange = {});
 };
 }
 
@@ -8357,8 +8351,8 @@ DateSelectionResult DatePickerSelectDate(bool range, LocalDate value,
                                          const DateMatcher& disabled);
 
 struct DatePicker {
-    static El* New(Ctx* cx, Str id, bool disabled = false,
-                   bool open = false, Listener onOpenChange = {});
+    static El* New(Ctx* cx, Str id, bool disabled = false, bool open = false,
+                   Listener onOpenChange = {});
 };
 }
 
@@ -8435,8 +8429,12 @@ struct NodeId {
     uint64_t AsU64() const { return value; }
 };
 
-inline bool operator==(NodeId a, NodeId b) { return a.value == b.value; }
-inline bool operator!=(NodeId a, NodeId b) { return !(a == b); }
+inline bool operator==(NodeId a, NodeId b) {
+    return a.value == b.value;
+}
+inline bool operator!=(NodeId a, NodeId b) {
+    return !(a == b);
+}
 
 struct PanelId {
     uint64_t value = 0;
@@ -8448,8 +8446,12 @@ struct PanelId {
     uint64_t AsU64() const { return value; }
 };
 
-inline bool operator==(PanelId a, PanelId b) { return a.value == b.value; }
-inline bool operator!=(PanelId a, PanelId b) { return !(a == b); }
+inline bool operator==(PanelId a, PanelId b) {
+    return a.value == b.value;
+}
+inline bool operator!=(PanelId a, PanelId b) {
+    return !(a == b);
+}
 
 enum class DockPlacement : uint8_t {
     Center,
@@ -8477,7 +8479,7 @@ struct DropPlaceholderBounds {
     Size size = {};
 
     static DropPlaceholderBounds ForPlacement(Bounds bounds,
-                                               const Placement* placement);
+                                              const Placement* placement);
     Bounds In(Bounds parent) const {
         return {parent.x + origin.x, parent.y + origin.y, size.w, size.h};
     }
@@ -9008,8 +9010,7 @@ struct InsertTarget {
     float size = 0;
     Bounds bounds = {};
 
-    static InsertTarget Tabs(NodeId node, int ix = -1,
-                             bool activate = true);
+    static InsertTarget Tabs(NodeId node, int ix = -1, bool activate = true);
     static InsertTarget Split(NodeId node, Placement placement,
                               const float* size = nullptr);
     static InsertTarget Tile(NodeId node, Bounds bounds);
@@ -9055,8 +9056,8 @@ struct PaneTree {
     EditResult Split(NodeId at, PanelId panel, Placement placement,
                      const float* size = nullptr);
     EditResult SetActive(NodeId node, int ix);
-    EditResult SetSizes(NodeId node, const float* sizes,
-                        const uint8_t* known, int count);
+    EditResult SetSizes(NodeId node, const float* sizes, const uint8_t* known,
+                        int count);
     EditResult SetTileBounds(PanelId panel, Bounds bounds);
     EditResult BringToFront(PanelId panel);
     void Normalize();
@@ -9356,8 +9357,8 @@ bool TilesCanRedo(const TilesState* s);
 void TilesUndo(TilesState* s);
 void TilesRedo(TilesState* s);
 
-bool snap_edge(float edge, const float* candidates, int count,
-               float threshold, float* out);
+bool snap_edge(float edge, const float* candidates, int count, float threshold,
+               float* out);
 Bounds compute_resized_bounds(Bounds previous, const float* newX,
                               const float* newY, const float* newW,
                               const float* newH, const Bounds* others,
@@ -9486,8 +9487,7 @@ struct PanelBuildContext {
 };
 
 using PanelRegistryBuild = DockPanelDef (*)(const PanelBuildContext* context,
-                                            Window* win, App* app,
-                                            void* data);
+                                            Window* win, App* app, void* data);
 
 struct PanelRegistryEntry {
     Str name = {};
@@ -9948,8 +9948,7 @@ struct NativeMenu {
     NativeMenu& operator=(const NativeMenu&) = delete;
     ~NativeMenu();
     NativeMenu& Menu(Str label, InputAction action);
-    NativeMenu& MenuWithDisabled(Str label, bool disabled,
-                                 InputAction action);
+    NativeMenu& MenuWithDisabled(Str label, bool disabled, InputAction action);
     NativeMenu& Separator();
     bool IsEmpty() const { return items.len == 0; }
 };
@@ -10183,8 +10182,7 @@ struct CompletionProvider {
     float inlineCompletionDebounceMs = kInlineCompletionDebounceMs;
 
     bool IsValid() const { return completions != nullptr; }
-    void Install(InputState* state,
-                 CompletionMenuOptions options = {}) const;
+    void Install(InputState* state, CompletionMenuOptions options = {}) const;
 };
 
 struct CodeActionProvider {
@@ -10295,8 +10293,7 @@ struct Lsp {
     Lsp& Hover(const HoverProvider& provider);
     Lsp& Definition(const DefinitionProvider& provider);
     Lsp& DocumentColors(const DocumentColorProvider& provider);
-    Lsp& SemanticTokens(
-        const DocumentRangeSemanticTokensProvider& provider);
+    Lsp& SemanticTokens(const DocumentRangeSemanticTokensProvider& provider);
     Lsp& ShowDocuments(const ShowDocumentHandler& handler);
     Lsp& CompletionMenu(const CompletionMenuOptions& options);
     void Install(InputState* input);
@@ -10686,8 +10683,8 @@ MotionStep<T> MotionAdvance(MotionState<T>* st, T target, const Motion& m,
     }
     float elapsedMs = (float)((now - st->startedAt) * 1000.0);
     float progress = MotionProgress(m, elapsedMs);
-    T sampled = motion::Interpolate<T>::Between(
-        st->from, st->target, MotionSample(m, progress));
+    T sampled = motion::Interpolate<T>::Between(st->from, st->target,
+                                                MotionSample(m, progress));
     if (!MotionEq(st->target, target)) {
 
         st->from = sampled;
@@ -11083,7 +11080,10 @@ using Positioned = ResolvedPosition;
 struct PositionerState {};
 
 struct Positioner {
-    enum class Strategy : uint8_t { Side, Corner };
+    enum class Strategy : uint8_t {
+        Side,
+        Corner
+    };
 
     Arena* a = nullptr;
     Strategy strategy = Strategy::Side;
@@ -11113,8 +11113,8 @@ ResolvedPosition PositionSide(Bounds trigger, Size popup, Size view,
                               float margin, const Placement* preferred,
                               Align align, float offset);
 
-ResolvedPosition PositionCorner(Anchor anchor, Point at, Size popup,
-                                Size view, float margin);
+ResolvedPosition PositionCorner(Anchor anchor, Point at, Size popup, Size view,
+                                float margin);
 
 }
 
@@ -11125,8 +11125,7 @@ namespace gpui {
 float ProgressClampValue(float value);
 
 struct Progress {
-    static El* New(Ctx* cx, Str id, float value = 0,
-                   bool indeterminate = false,
+    static El* New(Ctx* cx, Str id, float value = 0, bool indeterminate = false,
                    Str accessibilityLabel = {});
 };
 
@@ -11320,15 +11319,14 @@ struct ResizablePanelGroup {
     ResizablePanelGroup* Size(float v);
     ResizablePanelGroup* HandleColors(Rgba rest, Rgba dragging);
     ResizablePanelGroup* WithHandleAppearance(void* user,
-                                               ResizeHandleRenderer renderer);
+                                              ResizeHandleRenderer renderer);
     ResizablePanelGroup* OnResize(Listener listener);
 
     ResizablePanelGroup* Panel(El* content, float size,
                                float min = kResizablePanelMinSize,
                                float max = 0);
 
-    ResizablePanelGroup* Grow(El* content,
-                              float min = kResizablePanelMinSize);
+    ResizablePanelGroup* Grow(El* content, float min = kResizablePanelMinSize);
 
     ResizablePanelGroup* Flex();
 
@@ -11358,9 +11356,9 @@ struct ResizablePanel {
 };
 
 ResizablePanelGroup* h_resizable(Ctx* cx, Str id,
-                                  Entity<ResizableState> state = {});
+                                 Entity<ResizableState> state = {});
 ResizablePanelGroup* v_resizable(Ctx* cx, Str id,
-                                  Entity<ResizableState> state = {});
+                                 Entity<ResizableState> state = {});
 ResizablePanel* resizable_panel(Ctx* cx);
 }
 
@@ -11575,9 +11573,8 @@ struct PrepaintState {
     int statesLen = 0;
 };
 
-AxisPrepaintState ScrollbarPrepaintAxis(Axis axis, Bounds track,
-                                        float offset, float containerSize,
-                                        float contentSize,
+AxisPrepaintState ScrollbarPrepaintAxis(Axis axis, Bounds track, float offset,
+                                        float containerSize, float contentSize,
                                         const ScrollbarThumbStyle& style);
 
 struct Scrollbar {
@@ -11585,20 +11582,16 @@ struct Scrollbar {
     static El* New(Ctx* cx);
 
     static El* New(Ctx* cx, Str id, float scrollY, float scrollX,
-                   Listener onScroll,
-                   ScrollAxis axis = ScrollAxis::Vertical);
+                   Listener onScroll, ScrollAxis axis = ScrollAxis::Vertical);
     static El* New(Ctx* cx, Str id, float scrollY, float scrollX,
                    Listener onScroll, ScrollAxis axis, ScrollbarMode mode);
 
-    static El* Apply(Ctx* cx, El* element, Str id, float scrollY,
-                     float scrollX, Listener onScroll,
-                     ScrollAxis axis = ScrollAxis::Vertical);
-    static El* Apply(Ctx* cx, El* element, Str id, float scrollY,
-                     float scrollX, Listener onScroll, ScrollAxis axis,
-                     ScrollbarMode mode);
+    static El* Apply(Ctx* cx, El* element, Str id, float scrollY, float scrollX,
+                     Listener onScroll, ScrollAxis axis = ScrollAxis::Vertical);
+    static El* Apply(Ctx* cx, El* element, Str id, float scrollY, float scrollX,
+                     Listener onScroll, ScrollAxis axis, ScrollbarMode mode);
 
-    static El* ApplyStyles(Ctx* cx, El* element,
-                           const ScrollbarStyles& styles);
+    static El* ApplyStyles(Ctx* cx, El* element, const ScrollbarStyles& styles);
 
     static El* Vertical(Ctx* cx, Str id, float scrollY, Listener onScroll);
     static El* Vertical(Ctx* cx, Str id, float scrollY, Listener onScroll,
@@ -11639,8 +11632,7 @@ struct SheetState {
     Listener onClose = {};
 
     void Close(Ctx* cx);
-    static void OnOverlay(SheetState* self, Ctx* cx,
-                          const MouseDownEvent* ev);
+    static void OnOverlay(SheetState* self, Ctx* cx, const MouseDownEvent* ev);
     static void OnAction(SheetState* self, Ctx* cx, const ActionEvent* ev);
 };
 
@@ -11832,8 +11824,7 @@ struct RoleOverride {
     static RoleOverride Implicit();
     static RoleOverride Presentational();
     static RoleOverride Explicit(AccessibilityRole role);
-    bool Resolve(AccessibilityRole defaultRole,
-                 AccessibilityRole* out) const;
+    bool Resolve(AccessibilityRole defaultRole, AccessibilityRole* out) const;
 };
 
 struct StyledExt {
@@ -11922,8 +11913,7 @@ inline El* StyledExt::Margins(El* element, Edges value) {
 
 inline El* StyledDebug(El* element, float h, float s, float l) {
 #if defined(DEBUG) || !defined(NDEBUG)
-    return element ? element->Border(1, HslaToRgba(HslaNew(h / 360.f,
-                                                           s / 100.f,
+    return element ? element->Border(1, HslaToRgba(HslaNew(h / 360.f, s / 100.f,
                                                            l / 100.f, 1.f)))
                    : nullptr;
 #else
@@ -11998,11 +11988,12 @@ inline El* StyledExt::CornerRadii(El* element, Corners radius) {
 
 inline const char* const* StyledExtReflectionMethods(int* count) {
     static const char* methods[] = {
-        "refine_style", "h_flex", "v_flex", "paddings", "margins",
-        "debug_red", "debug_blue", "debug_yellow", "debug_green",
-        "debug_pink", "debug_focused", "font_thin", "font_extralight",
-        "font_light", "font_normal", "font_medium", "font_semibold",
-        "font_bold", "font_extrabold", "font_black", "corner_radii",
+        "refine_style",    "h_flex",     "v_flex",         "paddings",
+        "margins",         "debug_red",  "debug_blue",     "debug_yellow",
+        "debug_green",     "debug_pink", "debug_focused",  "font_thin",
+        "font_extralight", "font_light", "font_normal",    "font_medium",
+        "font_semibold",   "font_bold",  "font_extrabold", "font_black",
+        "corner_radii",
     };
     if (count) {
         *count = (int)(sizeof(methods) / sizeof(methods[0]));
@@ -12042,16 +12033,14 @@ struct SwitchThumbStyles {
 
 struct Switch {
     static El* New(Ctx* cx, Str id, bool checked = false, bool disabled = false,
-                   Listener onChange = {},
-                   const SwitchStyles* styles = nullptr,
+                   Listener onChange = {}, const SwitchStyles* styles = nullptr,
                    const StateStyle* instance = nullptr,
                    Str accessibilityLabel = {}, int tabIndex = 0,
                    bool tabStop = true, FocusHandle focus = {});
 };
 
 struct SwitchTrack {
-    static El* New(Ctx* cx, Str id, bool checked = false,
-                   bool disabled = false,
+    static El* New(Ctx* cx, Str id, bool checked = false, bool disabled = false,
                    const SwitchTrackStyles* styles = nullptr,
                    const StateStyle* instance = nullptr);
 };
@@ -12068,8 +12057,8 @@ struct SwitchThumb {
 namespace gpui {
 
 struct Table {
-    static El* New(Ctx* cx, Str id, int rowCount = -1,
-                   int columnCount = -1, Str accessibilityLabel = {});
+    static El* New(Ctx* cx, Str id, int rowCount = -1, int columnCount = -1,
+                   Str accessibilityLabel = {});
 };
 struct TableHeader {
     static El* New(Ctx* cx, Str id);
@@ -12157,8 +12146,7 @@ struct TextSelectionContentKey {
     uint64_t Value() const { return raw; }
 };
 
-inline bool operator==(TextSelectionContentKey a,
-                       TextSelectionContentKey b) {
+inline bool operator==(TextSelectionContentKey a, TextSelectionContentKey b) {
     return a.raw == b.raw;
 }
 
@@ -12274,8 +12262,9 @@ struct TextSelectionEvent {
 using TextSelectionFocusFn = void (*)(void* user, Window* window, App* app);
 using TextSelectionClearFn = void (*)(void* user, App* app);
 using TextSelectionCopyFn = int (*)(void* user, App* app, char* out, int cap);
-using TextSelectionContentKeyFn = bool (*)(
-    void* user, Point point, const App* app, TextSelectionContentKey* out);
+using TextSelectionContentKeyFn = bool (*)(void* user, Point point,
+                                           const App* app,
+                                           TextSelectionContentKey* out);
 
 struct TextSelectionParticipantState;
 
@@ -12586,9 +12575,8 @@ struct ToastManager {
         return count;
     }
 
-    bool Push(const I& id, const T& value, ToastOptions options,
-              int64_t nowMs, T* replaced = nullptr,
-              bool* hadReplaced = nullptr) {
+    bool Push(const I& id, const T& value, ToastOptions options, int64_t nowMs,
+              T* replaced = nullptr, bool* hadReplaced = nullptr) {
         if (hadReplaced) {
             *hadReplaced = false;
         }
@@ -12649,9 +12637,9 @@ struct ToastManager {
         for (int i = 0; i < entries.len; i++) {
             ManagedToast<I, T>& entry = entries[i];
             int64_t elapsed = nowMs - entry.lastAdvanceMs;
-            int delta = elapsed > 0x7fffffffLL
-                            ? 0x7fffffff
-                            : elapsed > 0 ? (int)elapsed : 0;
+            int delta = elapsed > 0x7fffffffLL ? 0x7fffffff
+                        : elapsed > 0          ? (int)elapsed
+                                               : 0;
             entry.lastAdvanceMs = nowMs;
             switch (entry.status) {
                 case ToastTransitionStatus::Starting:
@@ -12699,7 +12687,7 @@ struct ToastManager {
         return out;
     }
 
-private:
+  private:
     void EraseAt(int index) {
         for (int i = index; i < entries.len - 1; i++) {
             entries[i] = entries[i + 1];
@@ -12783,8 +12771,7 @@ struct ToastStack {
 
 struct Toast {
     El* root = nullptr;
-    ToastTransitionStatus transitionStatus =
-        ToastTransitionStatus::Starting;
+    ToastTransitionStatus transitionStatus = ToastTransitionStatus::Starting;
 
     static Toast* New(Ctx* cx, Str id);
     Toast* TransitionStatus(ToastTransitionStatus value);
@@ -12837,7 +12824,7 @@ struct Tooltip {
     static El* New(Ctx* cx, Str id);
 };
 
-using TooltipBuilder = El* (*)(Ctx* cx, void* data);
+using TooltipBuilder = El* (*)(Ctx * cx, void* data);
 
 enum class TooltipTransitionKind : uint8_t {
     Enter,
@@ -12855,7 +12842,7 @@ struct TooltipTransition {
                                     Bounds current);
 };
 
-using TooltipRenderer = El* (*)(Ctx* cx, El* view,
+using TooltipRenderer = El* (*)(Ctx * cx, El* view,
                                 const TooltipTransition& transition,
                                 void* data);
 
@@ -12891,8 +12878,7 @@ struct TooltipOverlay {
 
     ~TooltipOverlay();
 
-    TooltipOverlay* RenderWith(TooltipRenderer renderer,
-                               void* data = nullptr);
+    TooltipOverlay* RenderWith(TooltipRenderer renderer, void* data = nullptr);
     uint64_t NextEpoch();
     void RequestShow(const TooltipRequest& request, Window* window, Ctx* cx);
     void RequestHide(Window* window, Ctx* cx);
@@ -12998,8 +12984,7 @@ struct ItemSizeLayout {
 
 void ItemSizeLayoutBuild(ItemSizeLayout* layout, Axis axis,
                          const float* itemSizes, int count,
-                         float uniformItemSize, float gap,
-                         float crossSize);
+                         float uniformItemSize, float gap, float crossSize);
 
 struct VirtualListFrameState {
     VirtualRange visible = {};
@@ -13592,8 +13577,7 @@ void ScrollbarModeSet(App* app, ScrollbarMode mode);
 
 SemanticThemeTokens ThemeSemanticTokens(const Theme& theme,
                                         float fontSize = 0.f);
-void ThemeApplySemanticTokens(Theme* theme,
-                              const SemanticThemeTokens& tokens);
+void ThemeApplySemanticTokens(Theme* theme, const SemanticThemeTokens& tokens);
 
 const int kNumShadcnColumns = 11;
 
@@ -13648,7 +13632,9 @@ Rgba ThemeHsl(float hueDegrees, float saturationPercent,
 Rgba ThemeBlack();
 Rgba ThemeWhite();
 
-inline const Theme& ActiveTheme(const App* app) { return ThemeNow(app); }
+inline const Theme& ActiveTheme(const App* app) {
+    return ThemeNow(app);
+}
 
 template <typename T>
 struct ThemeConfigValue {
@@ -13740,8 +13726,7 @@ struct SemanticThemeConfigFile {
     SemanticThemeConfig tokens;
 };
 
-bool SemanticThemeConfigParse(const JsonValue* value,
-                              SemanticThemeConfig* out);
+bool SemanticThemeConfigParse(const JsonValue* value, SemanticThemeConfig* out);
 bool SemanticThemeConfigFileParse(const JsonValue* value,
                                   SemanticThemeConfigFile* out);
 
@@ -13881,13 +13866,21 @@ constexpr bool operator==(UiSize a, UiSize b) {
     return a.kind == b.kind &&
            (a.kind != UiSize::Kind::Size || a.pixels == b.pixels);
 }
-constexpr bool operator!=(UiSize a, UiSize b) { return !(a == b); }
+constexpr bool operator!=(UiSize a, UiSize b) {
+    return !(a == b);
+}
 constexpr bool operator==(UiSize a, UiSize::Constant b) {
     return a.kind == b.kind;
 }
-constexpr bool operator==(UiSize::Constant a, UiSize b) { return b == a; }
-constexpr bool operator!=(UiSize a, UiSize::Constant b) { return !(a == b); }
-constexpr bool operator!=(UiSize::Constant a, UiSize b) { return !(a == b); }
+constexpr bool operator==(UiSize::Constant a, UiSize b) {
+    return b == a;
+}
+constexpr bool operator!=(UiSize a, UiSize::Constant b) {
+    return !(a == b);
+}
+constexpr bool operator!=(UiSize::Constant a, UiSize b) {
+    return !(a == b);
+}
 constexpr bool operator<(UiSize a, UiSize::Constant b) {
     return (uint8_t)a.kind < (uint8_t)b.kind;
 }
@@ -14166,16 +14159,30 @@ inline float UiSizeWithPx(UiSize s) {
 inline El* UiInputTextSize(El* e, UiSize s) {
     return e->Font(UiInputFontPx(s));
 }
-inline El* UiInputPadL(El* e, UiSize s) { return e->PadL(UiInputPadX(s)); }
-inline El* UiInputPadR(El* e, UiSize s) { return e->PadR(UiInputPadX(s)); }
-inline El* UiInputPadX(El* e, UiSize s) { return e->PadX(UiInputPadX(s)); }
-inline El* UiInputPadY(El* e, UiSize s) { return e->PadY(UiInputPadY(s)); }
-inline El* UiInputH(El* e, UiSize s) { return e->H(UiInputHeight(s)); }
+inline El* UiInputPadL(El* e, UiSize s) {
+    return e->PadL(UiInputPadX(s));
+}
+inline El* UiInputPadR(El* e, UiSize s) {
+    return e->PadR(UiInputPadX(s));
+}
+inline El* UiInputPadX(El* e, UiSize s) {
+    return e->PadX(UiInputPadX(s));
+}
+inline El* UiInputPadY(El* e, UiSize s) {
+    return e->PadY(UiInputPadY(s));
+}
+inline El* UiInputH(El* e, UiSize s) {
+    return e->H(UiInputHeight(s));
+}
 inline El* UiInputSize(El* e, UiSize s) {
     return UiInputH(UiInputPadY(UiInputPadX(e, s), s), s);
 }
-inline El* UiListPadX(El* e, UiSize s) { return e->PadX(UiListPadX(s)); }
-inline El* UiListPadY(El* e, UiSize s) { return e->PadY(UiListPadY(s)); }
+inline El* UiListPadX(El* e, UiSize s) {
+    return e->PadX(UiListPadX(s));
+}
+inline El* UiListPadY(El* e, UiSize s) {
+    return e->PadY(UiListPadY(s));
+}
 inline El* UiListSize(El* e, UiSize s) {
     return UiInputTextSize(UiListPadY(UiListPadX(e, s), s), s);
 }
@@ -14188,14 +14195,11 @@ inline El* UiTableCellSize(El* e, UiSize s) {
     if (s == UiSize::XSmall || s == UiSize::Small) {
         e->Font(14);
     }
-    return e->PadL(pad.left)
-        ->PadR(pad.right)
-        ->PadT(pad.top)
-        ->PadB(pad.bottom);
+    return e->PadL(pad.left)->PadR(pad.right)->PadT(pad.top)->PadB(pad.bottom);
 }
 inline El* UiButtonTextSize(El* e, UiSize s) {
-    float font = s == UiSize::XSmall ? 12.f :
-                 (s == UiSize::Small ? 14.f : 16.f);
+    float font =
+        s == UiSize::XSmall ? 12.f : (s == UiSize::Small ? 14.f : 16.f);
     return e->Font(font);
 }
 
@@ -14688,8 +14692,7 @@ struct ToggleVariants {
     static Toggle* WithVariant(Toggle* toggle, ToggleVariant variant);
     static Toggle* Ghost(Toggle* toggle);
     static Toggle* Outline(Toggle* toggle);
-    static ToggleGroup* WithVariant(ToggleGroup* group,
-                                    ToggleVariant variant);
+    static ToggleGroup* WithVariant(ToggleGroup* group, ToggleVariant variant);
     static ToggleGroup* Ghost(ToggleGroup* group);
     static ToggleGroup* Outline(ToggleGroup* group);
 };
@@ -15145,7 +15148,10 @@ struct CandlestickChart {
 };
 
 struct RadarLabel {
-    enum class Kind : uint8_t { Text, Element };
+    enum class Kind : uint8_t {
+        Text,
+        Element
+    };
 
     Kind kind = Kind::Text;
     Str text = {};
@@ -15572,8 +15578,7 @@ void ListScrollToItem(ListState* s, int entry, ScrollStrategy strategy);
 
 bool ListShouldLoadMore(const ListState* s, int lastVisibleRow);
 
-void ListSetSelectedIndex(ListState* s, Ctx* cx, int entry,
-                          bool scroll = false,
+void ListSetSelectedIndex(ListState* s, Ctx* cx, int entry, bool scroll = false,
                           ScrollStrategy strategy = ScrollStrategy::Top);
 void ListSetRightClickedIndex(ListState* s, Ctx* cx, int entry);
 bool ListSelectedIndex(const ListState* s, IndexPath* out);
@@ -15763,14 +15768,13 @@ struct SearchableListDelegate {
     const SearchableListItem* Item(IndexPath path) const;
     bool Position(Str value, IndexPath* out) const;
     bool Matches(const SearchableListItem* value, Str query) const;
-    El* RenderItem(Ctx* cx, IndexPath path,
-                   const SearchableListItem* value, bool checked) const;
+    El* RenderItem(Ctx* cx, IndexPath path, const SearchableListItem* value,
+                   bool checked) const;
     El* RenderSectionHeader(Ctx* cx, int section) const;
     bool IsItemEnabled(IndexPath path, const SearchableListItem* value,
                        const App* app) const;
     bool IsItemChecked(IndexPath path, const SearchableListItem* value,
-                       const SearchableListState* state,
-                       const App* app) const;
+                       const SearchableListState* state, const App* app) const;
     void OnWillChange(SearchableListState* state,
                       const SearchableListChange* changes, int n) const;
     void OnConfirm(const SearchableListState* state, IndexPath path,
@@ -16184,10 +16188,8 @@ struct ComboboxState {
 
     static void OnListChange(ComboboxState* self, Ctx* cx,
                              const ListEvent* event);
-    static void OnToggle(ComboboxState* self, Ctx* cx,
-                         const ClickEvent* event);
-    static void OnClear(ComboboxState* self, Ctx* cx,
-                        const ClickEvent* event);
+    static void OnToggle(ComboboxState* self, Ctx* cx, const ClickEvent* event);
+    static void OnClear(ComboboxState* self, Ctx* cx, const ClickEvent* event);
     static void OnMouseDownOut(ComboboxState* self, Ctx* cx,
                                const MouseDownEvent* event);
 
@@ -16261,10 +16263,9 @@ struct Combobox {
     Combobox* FocusRing(bool v);
     Combobox* Multiple(bool v = true);
     Combobox* Trigger(El* e);
-    Combobox* RenderTrigger(
-        void* data,
-        El* (*fn)(Ctx* cx, void* data,
-                  const ComboboxTriggerContext* trigger));
+    Combobox* RenderTrigger(void* data,
+                            El* (*fn)(Ctx* cx, void* data,
+                                      const ComboboxTriggerContext* trigger));
     Combobox* Footer(El* e);
     Combobox* RenderFooter(void* data, El* (*fn)(Ctx* cx, void* data));
     Combobox* RenderEmpty(void* data, El* (*fn)(Ctx* cx, void* data));
@@ -16616,8 +16617,7 @@ struct DateRangePreset {
     LocalDate end = {};
     intptr_t arg = 0;
 
-    static DateRangePreset Single(Str label, LocalDate date,
-                                  intptr_t arg = 0);
+    static DateRangePreset Single(Str label, LocalDate date, intptr_t arg = 0);
     static DateRangePreset Range(Str label, LocalDate start, LocalDate end,
                                  intptr_t arg = 0);
 };
@@ -16645,14 +16645,12 @@ struct DatePickerState {
 
     static void OnCalendar(DatePickerState* self, Ctx* cx,
                            const CalendarEvent* ev);
-    static void OnToggle(DatePickerState* self, Ctx* cx,
-                         const ClickEvent* ev);
+    static void OnToggle(DatePickerState* self, Ctx* cx, const ClickEvent* ev);
     static void OnOpenChange(DatePickerState* self, Ctx* cx,
                              const ClickEvent* ev, intptr_t open);
     static void OnDismiss(DatePickerState* self, Ctx* cx,
                           const MouseUpEvent* ev);
-    static void OnClear(DatePickerState* self, Ctx* cx,
-                        const ClickEvent* ev);
+    static void OnClear(DatePickerState* self, Ctx* cx, const ClickEvent* ev);
 };
 
 Entity<DatePickerState> DatePickerStateNew(Ctx* cx, bool range = false);
@@ -16667,8 +16665,8 @@ void DatePickerStateSetNumberOfMonths(DatePickerState* state, int count,
                                       Ctx* cx = nullptr);
 void DatePickerStateSetFirstDayOfWeek(DatePickerState* state, int weekday,
                                       Ctx* cx = nullptr);
-void DatePickerStateSetDisabledMatcher(DatePickerState* state,
-                                       Matcher matcher, Ctx* cx = nullptr);
+void DatePickerStateSetDisabledMatcher(DatePickerState* state, Matcher matcher,
+                                       Ctx* cx = nullptr);
 void DatePickerStateSetYearRange(DatePickerState* state, int minYear,
                                  int maxYear, Ctx* cx = nullptr);
 void DatePickerStateSelectPreset(DatePickerState* state,
@@ -17784,7 +17782,7 @@ struct SearchPanel {
 };
 
 struct NativeMenu;
-using EditorContextMenuFn = NativeMenu* (*)(Ctx* cx, NativeMenu* empty,
+using EditorContextMenuFn = NativeMenu* (*)(Ctx * cx, NativeMenu* empty,
                                             void* data);
 
 struct Editor {
@@ -17799,8 +17797,7 @@ struct Editor {
     bool disabled = false;
     bool readonly = false;
     int tabIndex = 0;
-    AccessibilityRole accessibilityRole =
-        AccessibilityRole::MultilineTextInput;
+    AccessibilityRole accessibilityRole = AccessibilityRole::MultilineTextInput;
     Str ariaLabel = {};
     EditorContextMenuFn contextMenu = nullptr;
     void* contextMenuData = nullptr;
@@ -17883,8 +17880,8 @@ struct HoverPopover {
     Selection symbolRange = {};
     Str hover = {};
 
-    static HoverPopover* New(Ctx* cx, InputState* editor,
-                             Selection symbolRange, Str hover);
+    static HoverPopover* New(Ctx* cx, InputState* editor, Selection symbolRange,
+                             Str hover);
     El* IntoEl();
 };
 
@@ -17898,8 +17895,7 @@ struct Textarea {
 
     float height = 0;
     bool softWrap = true;
-    AccessibilityRole accessibilityRole =
-        AccessibilityRole::MultilineTextInput;
+    AccessibilityRole accessibilityRole = AccessibilityRole::MultilineTextInput;
     Str ariaLabel = {};
     Listener onFocus;
 
@@ -18051,8 +18047,7 @@ struct Label {
     Label* TextRight();
     Label* LineHeight(float mult);
     Str FullText() const;
-    int HighlightRanges(int totalLength, Selection* out,
-                        int capacity) const;
+    int HighlightRanges(int totalLength, Selection* out, int capacity) const;
     El* IntoEl();
 };
 
@@ -18328,8 +18323,7 @@ struct AppMenuBarState {
 
     static void OnMenuHover(AppMenuBarState* self, Ctx* cx,
                             const HoverEvent* ev, intptr_t ix);
-    static void OnAction(AppMenuBarState* self, Ctx* cx,
-                         const ActionEvent* ev);
+    static void OnAction(AppMenuBarState* self, Ctx* cx, const ActionEvent* ev);
 };
 
 struct AppMenuBarItem {
@@ -18603,8 +18597,8 @@ void NotificationSystemInsert(const NotificationSystemEntry& e);
 
 void NotificationSystemDismiss(int id, Window* win);
 void NotificationSystemDismissByType(NotificationTypeId type, Window* win);
-void NotificationSystemDismissByTypeKey(NotificationTypeId type,
-                                         uint32_t key, Window* win);
+void NotificationSystemDismissByTypeKey(NotificationTypeId type, uint32_t key,
+                                        Window* win);
 
 void NotificationSystemDismissAll(Window* win);
 const NotificationSystemEntry* NotificationSystemFind(int id, Window* win);
@@ -19533,13 +19527,11 @@ inline void WindowOpenDialog(Ctx* cx, Entity<T> e, bool overlay = true) {
     WindowOpenDialog(cx, e.id, overlay);
 }
 
-inline void WindowOpenAlertDialog(Ctx* cx, EntityId view,
-                                  bool overlay = true) {
+inline void WindowOpenAlertDialog(Ctx* cx, EntityId view, bool overlay = true) {
     WindowOpenDialog(cx, view, overlay);
 }
 template <typename T>
-inline void WindowOpenAlertDialog(Ctx* cx, Entity<T> e,
-                                  bool overlay = true) {
+inline void WindowOpenAlertDialog(Ctx* cx, Entity<T> e, bool overlay = true) {
     WindowOpenDialog(cx, e.id, overlay);
 }
 bool WindowHasActiveDialog(Ctx* cx);
@@ -19552,8 +19544,7 @@ void WindowOpenSheetAt(Ctx* cx, EntityId view,
                        component::SheetPlacement placement, float size);
 template <typename T>
 inline void WindowOpenSheetAt(Ctx* cx, Entity<T> e,
-                              component::SheetPlacement placement,
-                              float size) {
+                              component::SheetPlacement placement, float size) {
     WindowOpenSheetAt(cx, e.id, placement, size);
 }
 
@@ -19577,10 +19568,8 @@ int WindowPushNotification(Ctx* cx, component::NotificationType kind,
                            Str message);
 void WindowClearNotifications(Ctx* cx);
 int WindowNotificationCount(Ctx* cx);
-void WindowRemoveNotifications(Ctx* cx,
-                               component::NotificationTypeId type);
-void WindowRemoveNotification1(Ctx* cx,
-                               component::NotificationTypeId type,
+void WindowRemoveNotifications(Ctx* cx, component::NotificationTypeId type);
+void WindowRemoveNotification1(Ctx* cx, component::NotificationTypeId type,
                                uint32_t key);
 template <typename T>
 inline void WindowRemoveNotification(Ctx* cx) {
@@ -19699,8 +19688,8 @@ struct ScrollableElement {
                          ScrollbarAxis axis = ScrollbarAxis::Vertical);
     static El* VerticalScrollbar(Ctx* cx, El* element, Str id, float scrollY,
                                  Listener onScroll);
-    static El* HorizontalScrollbar(Ctx* cx, El* element, Str id,
-                                   float scrollX, Listener onScroll);
+    static El* HorizontalScrollbar(Ctx* cx, El* element, Str id, float scrollX,
+                                   Listener onScroll);
     static Scrollable* OverflowScrollbar(Ctx* cx, El* element);
     static Scrollable* OverflowXScrollbar(Ctx* cx, El* element);
     static Scrollable* OverflowYScrollbar(Ctx* cx, El* element);
@@ -19796,8 +19785,8 @@ struct RenderOptions {
     RenderOptions WithDisabled(bool value) const;
 };
 
-using SettingFieldElementFn =
-    El* (*)(void* user, const RenderOptions* options, Ctx* cx);
+using SettingFieldElementFn = El* (*)(void* user, const RenderOptions* options,
+                                      Ctx* cx);
 
 struct SettingFieldElement {
     void* user = nullptr;
@@ -20119,8 +20108,7 @@ struct SidebarMenuItem;
 struct SidebarMenu;
 struct SidebarGroup;
 
-using SidebarItemRender =
-    El* (*)(void* value, Ctx* cx, Str id, bool collapsed);
+using SidebarItemRender = El* (*)(void* value, Ctx* cx, Str id, bool collapsed);
 
 struct SidebarItem {
     void* value = nullptr;
@@ -20840,8 +20828,7 @@ struct TableState {
     void* delegateData = nullptr;
     void (*delegateSort)(Ctx* cx, void* data, int col,
                          ColumnSort sort) = nullptr;
-    void (*delegateMoveColumn)(Ctx* cx, void* data, int from,
-                               int to) = nullptr;
+    void (*delegateMoveColumn)(Ctx* cx, void* data, int from, int to) = nullptr;
     void (*delegateLoadMore)(Ctx* cx, void* data) = nullptr;
 
     static void OnRowClick(TableState* self, Ctx* cx, const ClickEvent* ev,
@@ -21682,8 +21669,8 @@ struct MarkdownBlockRenderer {
 };
 
 struct MarkdownExtensions {
-    ArenaVec<MarkdownBlockParser> blockParsers {};
-    ArenaVec<MarkdownBlockRenderer> blockRenderers {};
+    ArenaVec<MarkdownBlockParser> blockParsers{};
+    ArenaVec<MarkdownBlockRenderer> blockRenderers{};
     uint64_t revision = 0;
     bool enableMdx = false;
 
@@ -21928,7 +21915,7 @@ struct TextView {
     void* tableActionsData = nullptr;
     void* codeActionsData = nullptr;
 
-    ArenaVec<MdPlugin> plugins {};
+    ArenaVec<MdPlugin> plugins{};
 
     float tableColW = 64;
 
@@ -22438,7 +22425,7 @@ void ImageCacheClear();
 #define WIN_BACKEND_D3D11 1
 #define WIN_BACKEND_D3D12 1
 #else
-#if !defined(WIN_BACKEND_DIRECT2D) && !defined(WIN_BACKEND_D3D11) &&          \
+#if !defined(WIN_BACKEND_DIRECT2D) && !defined(WIN_BACKEND_D3D11) && \
     !defined(WIN_BACKEND_D3D12)
 #define WIN_BACKEND_DIRECT2D 1
 #endif
@@ -22618,7 +22605,7 @@ void TextLayoutAddRef(TextLayout* tl);
 void TextLayoutRelease(TextLayout* tl);
 
 void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
-                     bool clip, float clipW = 0);
+                    bool clip, float clipW = 0);
 void DrawTextAt(PaintCtx* ctx, Str s, float x, float y, float w, float h,
                 float fontSize, Rgba c, bool truncate, bool wrap = false,
                 float measMaxW = -1.f, int weight = 0, float lineH = 0);
