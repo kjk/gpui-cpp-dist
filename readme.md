@@ -45,8 +45,9 @@ Windows builds Direct2D by default. Pass
 the executable contains. An `all` build retains the process-start
 `__paint=d2d|d3d11|d3d12` selector; `__msaa=1|2|4|8` controls the custom
 renderers' sample count, and `__scene=off|replay|cache|skip|damage` selects the
-scene optimization level (`skip` by default). Pass those after `run.ts`'s
-`--`; Windows removes them from `argv` before calling `GpuiMain`.
+scene optimization level (`skip` by default). `__layout_reuse=off|on` rebuilds
+the taffy tree every frame when off. Pass those after `run.ts`'s `--`; the
+runtime removes them from `argv` before calling `GpuiMain`.
 
 ## What is here
 
@@ -91,7 +92,7 @@ No other dependencies, no nested build system, no STL containers.
 
 ## This copy
 
-Amalgamated from gpui-cpp [`a2076a8d48311fedc154be66fc7aa4d2abf8f9b1`](https://github.com/kjk/gpui-cpp/commit/a2076a8d48311fedc154be66fc7aa4d2abf8f9b1).
+Amalgamated from gpui-cpp [`1b44cded7f6d33205d8dd14db7794dc18417a476`](https://github.com/kjk/gpui-cpp/commit/1b44cded7f6d33205d8dd14db7794dc18417a476).
 
-[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/a2076a8d48311fedc154be66fc7aa4d2abf8f9b1...main)
+[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/1b44cded7f6d33205d8dd14db7794dc18417a476...main)
 shows every commit this copy is behind by; if that page is empty, it is current.

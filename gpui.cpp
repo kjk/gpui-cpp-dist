@@ -2,6 +2,7 @@
 
 #include <climits>
 #include <cstdarg>
+#include <cstring>
 #include <errno.h>
 #include <limits.h>
 #include <locale.h>
@@ -912,8 +913,37 @@ Str StrDup(Str s) {
     return StrDup(nullptr, s);
 }
 
+void StrDup2(Str s1, Str s2, Str& s1Out, Str& s2Out) {
+    s1Out = {};
+    s2Out = {};
+    int n1 = (!s1.s || s1.len < 0) ? 0 : s1.len;
+    int n2 = (!s2.s || s2.len < 0) ? 0 : s2.len;
+    if (n2 > INT_MAX - 2 - n1) {
+        return;
+    }
+    int n = n1 + n2 + 2;
+    char* p = (char*)Alloc(nullptr, n);
+    if (!p) {
+        return;
+    }
+    if (n1 > 0) {
+        memcpy(p, s1.s, (size_t)n1);
+    }
+    p[n1] = 0;
+    if (n2 > 0) {
+        memcpy(p + n1 + 1, s2.s, (size_t)n2);
+    }
+    p[n1 + 1 + n2] = 0;
+    s1Out = Str(p, n1);
+    s2Out = Str(p + n1 + 1, n2);
+}
+
 void StrFree(Str s) {
     free(s.s);
+}
+
+void StrFree2(Str s) {
+    StrFree(s);
 }
 
 static bool DateParseIso(const char* s, LocalDate* out) {
@@ -1684,8 +1714,7 @@ static void evalDefault(Fmt& fmt, const FmtArg& arg) {
             break;
         case FmtArg::Kind::Float:
 
-            StrBuilderAppend(fmt.a, fmt.res,
-                             bufFmt(buf, "%G", (double)arg.f));
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", (double)arg.f));
             break;
         case FmtArg::Kind::Double:
             StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", arg.d));
@@ -1818,8 +1847,7 @@ bool Fmt::Eval(const FmtArg** args, int nArgs) {
         auto& inst = instructions[n];
 
         if (inst.t == FmtArg::Kind::RawStr) {
-            StrBuilderAppend(a, res,
-                             Str(format.s + inst.rawOff, inst.sLen));
+            StrBuilderAppend(a, res, Str(format.s + inst.rawOff, inst.sLen));
             continue;
         }
 
@@ -7745,11 +7773,34 @@ void TextMeasEndFrame(PaintCtx* ctx) {
     uint32_t frame = c->frame;
     TextMeasSlot* old = (TextMeasSlot*)c->slots;
     int oldCap = c->cap;
+
+    const int kMaxKeep = 4096;
+    if (c->used <= kMaxKeep) {
+        return;
+    }
+    const uint32_t kKeep = 90;
     int keep = 0;
+    int keepNow = 0;
     for (int i = 0; i < oldCap; i++) {
-        if (old[i].occupied && old[i].lastUsed + 1 >= frame) {
+        if (!old[i].occupied) {
+            continue;
+        }
+        if (old[i].lastUsed == frame) {
+            keepNow++;
+        }
+        if (old[i].lastUsed + kKeep >= frame) {
             keep++;
         }
+    }
+
+    uint32_t minKeep = (keep > kMaxKeep && keepNow > 0)
+                           ? frame
+                           : (frame > kKeep ? frame - kKeep : 1);
+    if (minKeep == frame) {
+        keep = keepNow;
+    }
+    if (keep == c->used) {
+        return;
     }
     int newCap = c->cap;
     if (keep * 4 < newCap && newCap > 256) {
@@ -7769,7 +7820,7 @@ void TextMeasEndFrame(PaintCtx* ctx) {
         if (!old[i].occupied) {
             continue;
         }
-        if (old[i].lastUsed + 1 < frame) {
+        if (old[i].lastUsed < minKeep) {
             TextMeasFreeSlot(&old[i]);
             continue;
         }
@@ -8449,23 +8500,35 @@ static uint64_t FnvMix(uint64_t h, const void* p, size_t n) {
     return h;
 }
 
-static bool LayoutReuseOn() {
-    static int on = -1;
-    if (on >= 0) {
-        return on != 0;
+static int gLayoutReuse = -1;
+
+bool LayoutReuseTakeArg(Str arg) {
+    const Str k = StrL("__layout_reuse=");
+    if (!base::StrStartsWith(arg, k)) {
+        return false;
     }
-    char buf[16] = {};
+    Str value(arg.s + k.len, arg.len - k.len);
+    if (base::StrEqI(value, "off") || base::StrEq(value, "0")) {
+        gLayoutReuse = 0;
+        logf("layout: reuse off (__layout_reuse=off), rebuilding every frame");
+    } else if (base::StrEqI(value, "on") || base::StrEq(value, "1")) {
+        gLayoutReuse = 1;
+    }
+    return true;
+}
+
+bool LayoutReuseOn() {
+    if (gLayoutReuse >= 0) {
+        return gLayoutReuse != 0;
+    }
+    gLayoutReuse = 1;
     const char* env = getenv("GPUI_LAYOUT_REUSE");
-    if (env) {
-        StrCopyZ(buf, (int)sizeof(buf), env);
-    }
-    on = 1;
-    if (buf[0] &&
-        (base::StrEqI(Str(buf), "0") || base::StrEqI(Str(buf), "off"))) {
-        on = 0;
+    if (env && env[0] &&
+        (base::StrEqI(Str(env), "0") || base::StrEqI(Str(env), "off"))) {
+        gLayoutReuse = 0;
         logf("layout: reuse off (GPUI_LAYOUT_REUSE), rebuilding every frame");
     }
-    return on != 0;
+    return gLayoutReuse != 0;
 }
 
 static LayoutNode* LayoutNodeTake(LayoutCache* lc, El* e) {
@@ -8531,6 +8594,10 @@ static void LayoutDropSubtree(LayoutCache* lc, taffy::NodeId id) {
     lc->stats.dropped++;
 }
 
+static void LayoutDropUnreachable(taffy::NodeId id, void* user) {
+    LayoutDropSubtree((LayoutCache*)user, id);
+}
+
 static void StretchRootStyle(taffy::Style* ts, float availW, float availH) {
     if (ts->size.width.IsAuto() && availW > 0) {
         ts->size.width = taffy::Dimension::Length(availW);
@@ -8549,6 +8616,46 @@ struct LayoutSyncCtx {
 
 static taffy::NodeId LayoutSync(LayoutSyncCtx* sc, El* e, taffy::NodeId prev,
                                 bool havePrev, bool isRoot);
+
+static void LayoutShrink(LayoutSyncCtx* sc, El* e, taffy::NodeId prev,
+                         bool isRoot) {
+    LayoutCache* lc = sc->lc;
+    LayoutNode* rec = (LayoutNode*)lc->tree.GetNodeContext(prev);
+    if (!rec || rec->kind != (uint8_t)e->kind) {
+        return;
+    }
+    int want = 0;
+    for (El* c = e->first; c; c = c->next) {
+        if (!c->style.fixed) {
+            want++;
+        }
+    }
+    if (!isRoot) {
+        bool dropped = false;
+        for (int j = lc->tree.ChildCount(prev) - 1; j >= want; j--) {
+            LayoutDropSubtree(lc, lc->tree.ChildAtIndex(prev, j));
+            dropped = true;
+        }
+
+        if (dropped) {
+            lc->tree.MarkDirty(prev);
+        }
+    }
+    int i = 0;
+    for (El* c = e->first; c; c = c->next) {
+        if (c->style.fixed) {
+            continue;
+        }
+        if (i < lc->tree.ChildCount(prev)) {
+            taffy::NodeId old = lc->tree.ChildAtIndex(prev, i);
+            LayoutNode* oldRec = (LayoutNode*)lc->tree.GetNodeContext(old);
+            if (oldRec && oldRec->kind == (uint8_t)c->kind) {
+                LayoutShrink(sc, c, old, false);
+            }
+        }
+        i++;
+    }
+}
 
 static taffy::NodeId LayoutBuild(LayoutSyncCtx* sc, El* e, bool isRoot) {
     LayoutCache* lc = sc->lc;
@@ -8605,31 +8712,47 @@ static taffy::NodeId LayoutSync(LayoutSyncCtx* sc, El* e, taffy::NodeId prev,
         lc->stats.remeasured++;
     }
 
-    int had = lc->tree.ChildCount(prev);
+    int want = 0;
+    for (El* c = e->first; c; c = c->next) {
+        if (!c->style.fixed) {
+            want++;
+        }
+    }
+    bool dropped = false;
+    if (!isRoot) {
+        for (int j = lc->tree.ChildCount(prev) - 1; j >= want; j--) {
+            LayoutDropSubtree(lc, lc->tree.ChildAtIndex(prev, j));
+            dropped = true;
+        }
+    }
     int i = 0;
     for (El* c = e->first; c; c = c->next) {
         if (c->style.fixed) {
             VecAppend(gLayoutFixed, c);
             continue;
         }
+        int had = lc->tree.ChildCount(prev);
         if (i < had) {
             taffy::NodeId old = lc->tree.ChildAtIndex(prev, i);
-            taffy::NodeId now = LayoutSync(sc, c, old, true, false);
-            if (now != old) {
-                lc->tree.ReplaceChildAtIndex(prev, i, now);
+            LayoutNode* oldRec =
+                (LayoutNode*)lc->tree.GetNodeContext(old);
+            if (oldRec && oldRec->kind == (uint8_t)c->kind) {
+                taffy::NodeId now = LayoutSync(sc, c, old, true, false);
+                if (now != old) {
+                    lc->tree.ReplaceChildAtIndex(prev, i, now);
+                    LayoutDropSubtree(lc, old);
+                }
+            } else {
 
+                lc->tree.RemoveChildAtIndex(prev, i);
                 LayoutDropSubtree(lc, old);
+                taffy::NodeId now = LayoutBuild(sc, c, false);
+                lc->tree.InsertChildAtIndex(prev, i, now);
             }
         } else {
             lc->tree.AddChild(prev, LayoutBuild(sc, c, false));
         }
         i++;
-    }
-
-    bool dropped = false;
-    for (int j = lc->tree.ChildCount(prev) - 1; j >= i; j--) {
-        LayoutDropSubtree(lc, lc->tree.ChildAtIndex(prev, j));
-        dropped = true;
     }
 
     if (dropped) {
@@ -8960,10 +9083,24 @@ static void LayoutElIn(LayoutCache* lc, PaintCtx* ctx, El* e, float x, float y,
     }
     gLayoutFixed.len = 0;
     lc->stats = LayoutCacheStats{};
+    lc->tree.allocs = 0;
 
     PrepareEl(ctx, e, inheritFont, inheritFg);
 
     LayoutSyncCtx sc = {lc, ctx, availW, availH};
+
+    if (lc->hasRoot) {
+        LayoutNode* rec =
+            (LayoutNode*)lc->tree.GetNodeContext(lc->root);
+        if (!rec || rec->kind != (uint8_t)e->kind) {
+            LayoutDropSubtree(lc, lc->root);
+            lc->hasRoot = false;
+            lc->root = taffy::NodeId{};
+        }
+    }
+    if (lc->hasRoot) {
+        LayoutShrink(&sc, e, lc->root, true);
+    }
 
     taffy::NodeId root = LayoutSync(&sc, e, lc->root, lc->hasRoot, true);
     if (lc->hasRoot && root != lc->root) {
@@ -8978,30 +9115,39 @@ static void LayoutElIn(LayoutCache* lc, PaintCtx* ctx, El* e, float x, float y,
             own++;
         }
     }
+    int wantFixed = own + gLayoutFixed.len;
+    bool droppedFixed = false;
+    for (int j = lc->tree.ChildCount(root) - 1; j >= wantFixed; j--) {
+        LayoutDropSubtree(lc, lc->tree.ChildAtIndex(root, j));
+        droppedFixed = true;
+    }
     for (int i = 0; i < gLayoutFixed.len; i++) {
         El* f = gLayoutFixed[i];
         int at = own + i;
         bool had = at < lc->tree.ChildCount(root);
-        taffy::NodeId old =
-            had ? lc->tree.ChildAtIndex(root, at) : taffy::NodeId{};
-        taffy::NodeId now = LayoutSync(&sc, f, old, had, false);
         if (!had) {
-            lc->tree.AddChild(root, now);
-        } else if (now != old) {
-            lc->tree.ReplaceChildAtIndex(root, at, now);
-            LayoutDropSubtree(lc, old);
+            lc->tree.AddChild(root, LayoutBuild(&sc, f, false));
+            continue;
         }
-    }
-
-    bool droppedFixed = false;
-    for (int j = lc->tree.ChildCount(root) - 1; j >= own + gLayoutFixed.len;
-         j--) {
-        LayoutDropSubtree(lc, lc->tree.ChildAtIndex(root, j));
-        droppedFixed = true;
+        taffy::NodeId old = lc->tree.ChildAtIndex(root, at);
+        LayoutNode* oldRec = (LayoutNode*)lc->tree.GetNodeContext(old);
+        if (oldRec && oldRec->kind == (uint8_t)f->kind) {
+            taffy::NodeId now = LayoutSync(&sc, f, old, true, false);
+            if (now != old) {
+                lc->tree.ReplaceChildAtIndex(root, at, now);
+                LayoutDropSubtree(lc, old);
+            }
+        } else {
+            lc->tree.RemoveChildAtIndex(root, at);
+            LayoutDropSubtree(lc, old);
+            lc->tree.InsertChildAtIndex(root, at, LayoutBuild(&sc, f, false));
+        }
     }
     if (droppedFixed) {
         lc->tree.MarkDirty(root);
     }
+
+    lc->tree.EachUnreachable(root, LayoutDropUnreachable, lc);
 
     taffy::SizeAvail space;
     if (minContent) {
@@ -9024,6 +9170,7 @@ static void LayoutElIn(LayoutCache* lc, PaintCtx* ctx, El* e, float x, float y,
     }
     PlaceAnchored(e, ctx ? ctx->viewW : 0.f, ctx ? ctx->viewH : 0.f,
                   ctx ? ctx->clientInset : 0.f);
+    lc->stats.allocs = lc->tree.allocs;
 }
 
 void LayoutEl(PaintCtx* ctx, El* e, float x, float y, float availW,
@@ -9066,6 +9213,14 @@ void LayoutCacheFree(LayoutCache* lc) {
 
 LayoutCacheStats LayoutCacheLastStats(const LayoutCache* lc) {
     return lc ? lc->stats : LayoutCacheStats{};
+}
+
+int LayoutCacheNodeCount(const LayoutCache* lc) {
+    return lc ? lc->tree.TotalNodeCount() : 0;
+}
+
+int LayoutCacheSlotCount(const LayoutCache* lc) {
+    return lc ? lc->tree.SlotCount() : 0;
 }
 
 void LayoutScratchFree() {
@@ -10425,7 +10580,14 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
             e->input->inputBounds = e->Bounds();
 
             e->input->viewW = e->w - e->style.pad.HorizontalAxisSum();
-            e->input->viewH = e->h - e->style.pad.VerticalAxisSum();
+
+            if (e->style.overflowY == Overflow::Scroll ||
+                e->style.overflowY == Overflow::Hidden) {
+                float vh = e->h - e->style.pad.VerticalAxisSum();
+                if (vh > 0) {
+                    e->input->viewH = vh;
+                }
+            }
 
             if (e->style.overflowX == Overflow::Scroll) {
                 e->input->contentW = e->contentW;
@@ -11479,6 +11641,11 @@ static void IdCollect(El* e, uint32_t parent) {
     }
     if (e->scrollFromPath) {
         e->scrollId = IdToClick(here);
+    } else if (e->scrollId == 0 && e->id.s && e->id.len > 0 &&
+               (e->style.overflowY == Overflow::Scroll ||
+                e->style.overflowX == Overflow::Scroll)) {
+
+        e->scrollId = IdToClick(here);
     }
     for (El* c = e->first; c; c = c->next) {
         IdCollect(c, here);
@@ -12036,6 +12203,7 @@ bool ImageSrcIsLocal(Str src) {
 }
 
 struct AssetResolveSlot {
+
     Str src = {};
     Str asset = {};
 };
@@ -12045,12 +12213,7 @@ static int gAssetResolveN = 0;
 
 static void AssetResolveClear() {
     for (int i = 0; i < gAssetResolveN; i++) {
-        if (gAssetResolve[i].src.s) {
-            StrFree(gAssetResolve[i].src);
-        }
-        if (gAssetResolve[i].asset.s) {
-            StrFree(gAssetResolve[i].asset);
-        }
+        StrFree2(gAssetResolve[i].src);
         gAssetResolve[i] = {};
     }
     gAssetResolveN = 0;
@@ -12072,8 +12235,7 @@ Str ImageAssetFor(Arena* a, Str src) {
 
     if (gAssetResolveN < kAssetResolveSlots) {
         AssetResolveSlot* sl = &gAssetResolve[gAssetResolveN++];
-        sl->src = StrDup(src);
-        sl->asset = got.s ? StrDup(got) : Str{};
+        StrDup2(src, got, sl->src, sl->asset);
     }
     return got;
 }
@@ -15720,9 +15882,11 @@ static void FrameBenchTick(Window* win, float secs) {
 
     LayoutCacheStats ls = LayoutCacheLastStats(win->layout);
     logf(
-        "frame-bench layout nodes=%d made=%d dropped=%d restyled=%d "
-        "remeasured=%d",
-        ls.nodes, ls.made, ls.dropped, ls.restyled, ls.remeasured);
+        "frame-bench layout nodes=%d live=%d slots=%d made=%d dropped=%d "
+        "restyled=%d remeasured=%d allocs=%d",
+        ls.nodes, LayoutCacheNodeCount(win->layout),
+        LayoutCacheSlotCount(win->layout), ls.made, ls.dropped, ls.restyled,
+        ls.remeasured, ls.allocs);
 #if GPUI_OS_WINDOWS
     if (PaintGpuOn()) {
         const gpuw::FrameStats& st = gpuw::LastFrameStats();
@@ -15801,11 +15965,13 @@ static void LayoutDumpFrame(Window* win, El* root) {
     LayoutCacheStats ls = LayoutCacheLastStats(win->layout);
     fprintf(f,
             "--- frame %llu t=%.3f view=%.0fx%.0f prims=%d presented=%d "
-            "nodes=%d made=%d dropped=%d restyled=%d remeasured=%d\n",
+            "nodes=%d slots=%d made=%d dropped=%d restyled=%d remeasured=%d "
+            "allocs=%d\n",
             (unsigned long long)win->frameSeq, TimeNow(), win->paint.viewW,
             win->paint.viewH, SceneOn() ? scene::Stats().prims : -1,
-            (SceneOn() && scene::SkipPresent()) ? 0 : 1, ls.nodes, ls.made,
-            ls.dropped, ls.restyled, ls.remeasured);
+            (SceneOn() && scene::SkipPresent()) ? 0 : 1, ls.nodes,
+            LayoutCacheSlotCount(win->layout), ls.made, ls.dropped, ls.restyled,
+            ls.remeasured, ls.allocs);
     LayoutDumpEl(f, root, 0);
     fflush(f);
 }
@@ -16638,6 +16804,27 @@ static void ScrollbarPress(Window* win, ScrollRect* s, float x, float y,
                            : x <= s->bounds.Right() - s->thumbInset;
     bool onThumb = crossInside && at >= thumbStart &&
                    at <= thumbStart + thumbLength;
+    if (!onThumb) {
+
+        rawThumb = ScrollbarThumbSize(track, track, content,
+                                      s->thumbHoverMinLength);
+        rawStart = origin + ScrollbarThumbPos(
+                                track, rawThumb,
+                                horizontal ? s->scrollX : s->scrollY, track,
+                                content, marginEnd);
+        float hoverStart = rawStart + s->thumbHoverInset;
+        float hoverLength = rawThumb - s->thumbHoverInset * 2.f;
+        if (hoverLength < 0) hoverLength = 0;
+        bool hoverCross = horizontal
+                              ? y <= s->bounds.Bottom() - s->thumbHoverInset
+                              : x <= s->bounds.Right() - s->thumbHoverInset;
+        if (hoverCross && at >= hoverStart &&
+            at <= hoverStart + hoverLength) {
+            onThumb = true;
+            thumbStart = hoverStart;
+            thumbLength = hoverLength;
+        }
+    }
     if (onThumb) {
 
         rawThumb = ScrollbarThumbSize(track, track, content,
@@ -16659,6 +16846,7 @@ static void ScrollbarPress(Window* win, ScrollRect* s, float x, float y,
         win->scrollDragId = s->id;
         win->scrollDragHorizontal = horizontal;
         win->scrollDragGrab = at - thumbStart;
+        win->scrollDragInput = s->input;
         return;
     }
 
@@ -16669,6 +16857,9 @@ static void ScrollbarPress(Window* win, ScrollRect* s, float x, float y,
 }
 
 static ScrollRect* ScrollRectById(Window* win, int id) {
+    if (id == 0) {
+        return nullptr;
+    }
     for (int i = win->paint.scrolls.len - 1; i >= 0; i--) {
         if (win->paint.scrolls[i].id == id) {
             return &win->paint.scrolls[i];
@@ -16677,8 +16868,24 @@ static ScrollRect* ScrollRectById(Window* win, int id) {
     return nullptr;
 }
 
-static void ScrollbarDrag(Window* win, float x, float y) {
+static ScrollRect* ScrollRectForDrag(Window* win) {
     ScrollRect* s = ScrollRectById(win, win->scrollDragId);
+    if (s) {
+        return s;
+    }
+    if (!win->scrollDragInput) {
+        return nullptr;
+    }
+    for (int i = win->paint.scrolls.len - 1; i >= 0; i--) {
+        if (win->paint.scrolls[i].input == win->scrollDragInput) {
+            return &win->paint.scrolls[i];
+        }
+    }
+    return nullptr;
+}
+
+static void ScrollbarDrag(Window* win, float x, float y) {
+    ScrollRect* s = ScrollRectForDrag(win);
     if (!s || (!s->onScroll.IsValid() && !s->input)) {
         return;
     }
@@ -16867,7 +17074,7 @@ static void DispatchMouseMove(Window* win, const MouseMoveEvent& in) {
         SliderDrag(win, pressed, {x, y});
     }
 
-    if (win->scrollDragId && win->mouseDown) {
+    if (win->mouseDown && (win->scrollDragId || win->scrollDragInput)) {
         ScrollbarDrag(win, x, y);
     }
 
@@ -17120,6 +17327,7 @@ static void DispatchMouseUp(Window* win, const MouseUpEvent& in) {
 
     win->scrollDragId = 0;
     win->scrollDragGrab = 0;
+    win->scrollDragInput = nullptr;
     WindowSelectionRelease(win);
     if (win->onMouseUp.IsValid()) {
         ListenerCall(win->app, win, win->onMouseUp, &in);
@@ -17896,6 +18104,9 @@ int GpuiTakeRuntimeArgs(int argc, char** argv) {
             continue;
         }
 #endif
+        if (i > 0 && a && LayoutReuseTakeArg(Str(a))) {
+            continue;
+        }
         if (i > 0 && a && strcmp(a, "-gpui-inspector") == 0) {
             gInspectorAsked = true;
             continue;
@@ -25162,21 +25373,19 @@ static Selection AdjustDecorationRange(Selection range, Selection edit,
                                        int insertedLen) {
     int removedLen = std::max(0, edit.end - edit.start);
     int delta = insertedLen - removedLen;
-    auto shift = [delta](int offset) {
-        return std::max(0, offset + delta);
-    };
+    auto shift = [delta](int offset) { return std::max(0, offset + delta); };
     if (edit.start == edit.end) {
         int start = range.start < edit.start ? range.start : shift(range.start);
         int end = range.end <= edit.start ? range.end : shift(range.end);
         return {start, end};
     }
     int insertedEnd = edit.start + insertedLen;
-    int start = range.start <= edit.start
-                    ? range.start
-                    : range.start >= edit.end ? shift(range.start) : edit.start;
-    int end = range.end <= edit.start
-                  ? range.end
-                  : range.end >= edit.end ? shift(range.end) : insertedEnd;
+    int start = range.start <= edit.start ? range.start
+                : range.start >= edit.end ? shift(range.start)
+                                          : edit.start;
+    int end = range.end <= edit.start ? range.end
+              : range.end >= edit.end ? shift(range.end)
+                                      : insertedEnd;
     return {start, end};
 }
 
@@ -25255,8 +25464,7 @@ int DecorationCollections::BuildSpans(TextSpan* out, int cap) const {
     if (accepted.len > 1) {
         std::sort(accepted.els, accepted.els + accepted.len,
                   [](const TextSpan& a, const TextSpan& b) {
-                      return a.lo < b.lo ||
-                             (a.lo == b.lo && a.hi < b.hi);
+                      return a.lo < b.lo || (a.lo == b.lo && a.hi < b.hi);
                   });
     }
     for (int i = 0; out && i < accepted.len && i < cap; i++) {
@@ -25315,7 +25523,8 @@ void DiagnosticSet::Reset(Str value) {
 
 void DiagnosticSet::Push(const Diagnostic& diagnostic) {
     DiagnosticEntry entry;
-    entry.range.start = RopeClipOffset(text, diagnostic.range.start, Bias::Left);
+    entry.range
+        .start = RopeClipOffset(text, diagnostic.range.start, Bias::Left);
     entry.range.end = RopeClipOffset(text, diagnostic.range.end, Bias::Right);
     if (entry.range.end < entry.range.start) {
         entry.range.end = entry.range.start;
@@ -25323,8 +25532,8 @@ void DiagnosticSet::Push(const Diagnostic& diagnostic) {
     entry.diagnostic = CloneDiagnostic(arena, diagnostic);
     entry.diagnostic.range = entry.range;
     int at = 0;
-    while (at < diagnostics.len &&
-           diagnostics[at].range.start <= entry.range.start) {
+    while (at < diagnostics.len && diagnostics[at].range.start <= entry.range
+                                                                      .start) {
         at++;
     }
     VecInsertAt(diagnostics, at, entry);
@@ -25375,7 +25584,8 @@ const DiagnosticEntry* DiagnosticSet::ForOffset(int offset) const {
 }
 
 const DiagnosticEntry* DiagnosticSet::At(int index) const {
-    return index >= 0 && index < diagnostics.len ? &diagnostics[index] : nullptr;
+    return index >= 0 && index < diagnostics.len ? &diagnostics[index]
+                                                 : nullptr;
 }
 
 DisplayMap::DisplayMap(int columns) : wrapColumns(std::max(0, columns)) {
@@ -25651,8 +25861,7 @@ void DisplayMap::Rebuild() {
         int row = 0;
         while (start < value.len) {
             int columns = row == 0 ? wrapColumns : continuation;
-            int end =
-                DisplayAdvanceColumns(value, start, columns, tab.tabSize);
+            int end = DisplayAdvanceColumns(value, start, columns, tab.tabSize);
             VecAppend(rows, {line, start, end});
             start = end;
             row++;
@@ -25676,14 +25885,14 @@ void InputHighlighter::Update(const InputEdit* edit, Str text,
 }
 
 int InputHighlighter::Styles(Selection range,
-                             const HighlightStyleResolver* resolver,
-                             TextSpan* out, int cap) const {
-    return styles ? styles(data, range, resolver, out, cap) : 0;
+                             const HighlightStyleResolver* resolver, Arena* a,
+                             TextSpan** out) const {
+    return styles ? styles(data, range, resolver, a, out) : 0;
 }
 
-int InputHighlighter::FoldRanges(Str text, Selection changedRange,
-                                 FoldRange* out, int cap) const {
-    return foldRanges ? foldRanges(data, text, changedRange, out, cap) : 0;
+int InputHighlighter::FoldRanges(Str text, Selection changedRange, Arena* a,
+                                 FoldRange** out) const {
+    return foldRanges ? foldRanges(data, text, changedRange, a, out) : 0;
 }
 
 bool InputHighlighterFactory::Create(Str language,
@@ -26416,8 +26625,8 @@ Str RopeExt::WordAt(int offset) const {
 
 namespace gpui {
 
-InputEditorStyle InputEditorStyleResolve(
-    const InputEditorStyle& projected, const SemanticThemeTokens& tokens) {
+InputEditorStyle InputEditorStyleResolve(const InputEditorStyle& projected,
+                                         const SemanticThemeTokens& tokens) {
     InputEditorStyle out = projected;
     const ColorTokens& colors = tokens.colors;
     if (out.foreground.a == 0) out.foreground = colors.foreground;
@@ -26433,16 +26642,14 @@ InputEditorStyle InputEditorStyleResolve(
     return out;
 }
 
-El* InputBase::New(Ctx* cx, Str id, bool interactive,
-                   AccessibilityRole role) {
+El* InputBase::New(Ctx* cx, Str id, bool interactive, AccessibilityRole role) {
     Arena* a = cx->a;
     return (interactive ? Div(a)->PathId(id) : Div(a)->Id(id))
         ->Role(role)
         ->AriaDisabled(!interactive);
 }
 
-El* InputBase::New(Ctx* cx, Str id,
-                   const InputPresentation& presentation,
+El* InputBase::New(Ctx* cx, Str id, const InputPresentation& presentation,
                    const InputStyles& styles) {
     El* element = New(cx, id, presentation.IsEditable());
     element->TrackFocus(presentation.focus);
@@ -26545,6 +26752,9 @@ static El* RowMatchWashes(Arena* a, El* el, const InputEditorStyle& style,
 
 static const float kInputLineH = 20.f;
 
+static float DisplayLineH(const InputState* s, int row, float lineH);
+static float DisplayRowDocY(const InputState* s, int row, float lineH);
+
 static Str MaskedRun(Arena* a, Str text) {
     int chars = 0;
     for (int i = 0; i < text.len; i++) {
@@ -26576,14 +26786,14 @@ El* Input::New(Ctx* cx, InputState* state) {
     return New(cx, state, InputEditorStyle{});
 }
 
-El* Input::New(Ctx* cx, InputState* state,
-               const InputEditorStyle& projected) {
+El* Input::New(Ctx* cx, InputState* state, const InputEditorStyle& projected) {
     Arena* a = cx->a;
     if (!state) {
         return TextEl(a, Str{});
     }
     BaseTheme theme = base_theme::Theme::Global(cx->app);
-    InputEditorStyle resolved = InputEditorStyleResolve(projected, theme.tokens);
+    InputEditorStyle resolved =
+        InputEditorStyleResolve(projected, theme.tokens);
     const InputEditorStyle& style = resolved;
     float font = style.fontSize > 0 ? style.fontSize : 12.f;
     float lineMult = kInputLineH / font;
@@ -26718,18 +26928,59 @@ static El* FoldChevron(Arena* a, InputState* state,
             ->Fg(style.mutedForeground));
 }
 
+int InputComposeSpans(TextSpan* spans, int n, const TextSpan* decs, int nDecs,
+                      int cap, TextSpan* tmp) {
+
+    int m = 0;
+    int i = 0;
+    for (int d = 0; d < nDecs && m < cap; d++) {
+        const TextSpan& dec = decs[d];
+        for (; i < n && m < cap; i++) {
+            TextSpan sp = spans[i];
+            if (sp.hi <= dec.lo) {
+                tmp[m++] = sp;
+                continue;
+            }
+            if (sp.lo >= dec.hi) {
+                break;
+            }
+
+            if (sp.lo < dec.lo && m < cap) {
+                TextSpan head = sp;
+                head.hi = dec.lo;
+                tmp[m++] = head;
+            }
+            if (sp.hi > dec.hi) {
+                spans[i].lo = dec.hi;
+                break;
+            }
+        }
+        if (m < cap) {
+            tmp[m++] = dec;
+        }
+    }
+    for (; i < n && m < cap; i++) {
+        tmp[m++] = spans[i];
+    }
+    for (int k = 0; k < m; k++) {
+        spans[k] = tmp[k];
+    }
+    return m;
+}
+
 El* Textarea::New(Ctx* cx, InputState* state) {
     return New(cx, state, InputEditorStyle{});
 }
 
-El* Textarea::New(Ctx* cx, InputState* state,
-                  const InputEditorStyle& projected, bool lineNumbers) {
+El* Textarea::New(Ctx* cx, InputState* state, const InputEditorStyle& projected,
+                  bool lineNumbers) {
     Arena* a = cx->a;
     if (!state) {
         return TextEl(a, Str{});
     }
     BaseTheme theme = base_theme::Theme::Global(cx->app);
-    InputEditorStyle resolved = InputEditorStyleResolve(projected, theme.tokens);
+    InputEditorStyle resolved =
+        InputEditorStyleResolve(projected, theme.tokens);
     const InputEditorStyle& style = resolved;
     float font = style.fontSize > 0 ? style.fontSize : 12.f;
 
@@ -26746,9 +26997,7 @@ El* Textarea::New(Ctx* cx, InputState* state,
 
     bool wrap = state->softWrap;
     El* col = Div(a)->FlexCol()->W(kFill)->BindInput(state);
-    if (wrap) {
-        col->BoundsOut(&state->contentBox);
-    }
+    col->BoundsOut(&state->contentBox);
     if (text.len == 0) {
         VecClear(state->rowBoxes);
         if (caret) {
@@ -26764,15 +27013,19 @@ El* Textarea::New(Ctx* cx, InputState* state,
         return col->Child(ph);
     }
 
-    int rows = RopeLinesLen(text);
+    int rows = InputLinesLen(state);
 
     state->contentH = (float)rows * lineH;
     if (LayoutModeIsFolding(state->mode)) {
         FoldMapRebuild(&state->folds, rows);
         state->contentH = (float)FoldMapDisplayRowCount(&state->folds) * lineH;
     }
-    if (wrap && state->contentBox.h > 0) {
-        state->contentH = state->contentBox.h;
+    if (wrap) {
+
+        float wrapped = DisplayRowDocY(state, rows, lineH);
+        if (wrapped > 0) {
+            state->contentH = wrapped;
+        }
     }
 
     if (!wrap) {
@@ -26804,27 +27057,35 @@ El* Textarea::New(Ctx* cx, InputState* state,
 
     int caretRow = -1;
     if (style.activeLine.a != 0 || folding) {
-        caretRow = RopeOffsetToPoint(text, cursor).row;
+        caretRow = InputOffsetToPoint(state, cursor).row;
         caretRow = FoldMapNearestVisibleLine(&state->folds, caretRow);
     }
     bool caretFolded =
         folding && caret &&
-        FoldMapLineHidden(&state->folds, RopeOffsetToPoint(text, cursor).row);
+        FoldMapLineHidden(&state->folds, InputOffsetToPoint(state, cursor).row);
 
     float colW = 0;
     if (style.indentGuide.a != 0 && style.indentWidth > 0) {
         colW = font * 0.6f;
     }
 
+    float vh = state->viewH;
+    float vhCap = 600.f;
+    if (cx->win && cx->win->paint.viewH > 0) {
+        vhCap = cx->win->paint.viewH;
+    }
+    if (vh <= 0 || vh > vhCap) {
+        vh = vhCap;
+    }
     int firstRow = 0;
     int endRow = rows;
     float padTop = 0;
     float padBottom = 0;
-    if (state->viewH > 0 && rows > 1) {
+    if (rows > 1) {
 
         const int kSlack = 2;
         float top = state->scrollY;
-        float bottom = top + state->viewH;
+        float bottom = top + vh;
         if (!wrap || state->rowBoxes.len != rows) {
             int first = (int)(top / lineH) - kSlack;
             int end = (int)(bottom / lineH) + 1 + kSlack;
@@ -26834,44 +27095,54 @@ El* Textarea::New(Ctx* cx, InputState* state,
             padBottom = (float)(rows - endRow) * lineH;
         } else {
 
-            float origin = state->contentBox.y;
             float at = 0;
             int first = -1;
             int end = rows;
             for (int i = 0; i < rows; i++) {
-                float h = state->rowBoxes[i].h;
-                if (h <= 0) {
-                    h = lineH;
-                }
-                float y = state->rowBoxes[i].h > 0
-                              ? state->rowBoxes[i].y - origin
-                              : at;
-                if (first < 0 && y + h > top) {
+                float h = DisplayLineH(state, i, lineH);
+                if (first < 0 && at + h > top) {
                     first = i;
-                    padTop = y;
                 }
-                if (y > bottom) {
+                if (at > bottom) {
                     end = i;
                     break;
                 }
-                at = y + h;
+                at += h;
             }
             firstRow = first < 0 ? 0 : first;
             endRow = end < firstRow ? firstRow : end;
             firstRow = firstRow > kSlack ? firstRow - kSlack : 0;
             endRow = endRow + kSlack > rows ? rows : endRow + kSlack;
-            padTop = 0;
-            for (int i = 0; i < firstRow; i++) {
-                float h = state->rowBoxes[i].h;
-                padTop += h > 0 ? h : lineH;
+            padTop = DisplayRowDocY(state, firstRow, lineH);
+            padBottom = DisplayRowDocY(state, rows, lineH) -
+                        DisplayRowDocY(state, endRow, lineH);
+            if (padBottom < 0) {
+                padBottom = 0;
             }
-            padBottom = 0;
-            for (int i = endRow; i < rows; i++) {
-                float h = state->rowBoxes[i].h;
-                padBottom += h > 0 ? h : lineH;
+        }
+
+        int maxRows = (int)(vh / lineH) + 1 + 2 * kSlack;
+        if (maxRows < 8) {
+            maxRows = 8;
+        }
+        if (endRow - firstRow > maxRows) {
+            endRow = firstRow + maxRows;
+            if (endRow > rows) {
+                endRow = rows;
+            }
+            padBottom = DisplayRowDocY(state, rows, lineH) -
+                        DisplayRowDocY(state, endRow, lineH);
+            if (padBottom < 0) {
+                padBottom = 0;
             }
         }
     }
+
+    float emptyBottom =
+        InputEmptyBottomHeight(state->mode.kind == LayoutModeKind::CodeEditor,
+                               state->scrollBeyondLastLine, vh, lineH);
+    state->contentH += emptyBottom;
+    padBottom += emptyBottom;
     if (padTop > 0) {
         col->Child(Div(a)->W(kFill)->Shrink0()->H(padTop));
     }
@@ -26916,7 +27187,7 @@ El* Textarea::New(Ctx* cx, InputState* state,
         if (overPopover) {
 
         } else if (!state->hoverProvider || !inside || state->selecting ||
-            state->hoverDiagnostic >= 0 || secondary) {
+                   state->hoverDiagnostic >= 0 || secondary) {
             state->hoverText = Str{};
             state->hoverRange = Selection{};
             state->hoverAsked = true;
@@ -26956,7 +27227,42 @@ El* Textarea::New(Ctx* cx, InputState* state,
 
     int spanAt = 0;
     int matchAt = 0;
+
+    const Vec<int>& lineStarts = InputLineStarts(state);
+
+    const TextSpan* docSpans = style.spans;
+    int nDocSpans = style.nSpans;
+    if (state->highlighter.styles && firstRow < endRow &&
+        firstRow < lineStarts.len) {
+        Selection vis = {lineStarts[firstRow], endRow < lineStarts.len
+                                                   ? lineStarts[endRow]
+                                                   : text.len};
+        TextSpan* hl = nullptr;
+        int nHl = state->highlighter
+                      .Styles(vis, &style.highlightStyles, a, &hl);
+        if (style.nSpans > 0) {
+
+            int cap = nHl + 2 * style.nSpans;
+            auto* buf = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * cap);
+            auto* tmp = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * cap);
+            if (buf && tmp) {
+                if (nHl > 0) {
+                    memcpy(buf, hl, (size_t)nHl * sizeof(TextSpan));
+                }
+                nDocSpans = InputComposeSpans(buf, nHl, style.spans,
+                                              style.nSpans, cap, tmp);
+                docSpans = buf;
+            }
+        } else {
+            docSpans = hl;
+            nDocSpans = nHl;
+        }
+    }
     for (int row = firstRow; row < endRow; row++) {
+        int start = lineStarts[row];
+        int lineEnd =
+            row + 1 < lineStarts.len ? lineStarts[row + 1] - 1 : text.len;
+        Str line = Str(text.s + start, lineEnd - start);
 
         if (folding && FoldMapLineHidden(&state->folds, row)) {
             if (row < state->rowBoxes.len) {
@@ -26964,11 +27270,9 @@ El* Textarea::New(Ctx* cx, InputState* state,
             }
             continue;
         }
-        int start = RopeLineStartOffset(text, row);
-        Str line = RopeSliceLine(text, row);
 
         if (row == firstRow) {
-            while (spanAt < style.nSpans && style.spans[spanAt].hi <= start) {
+            while (spanAt < nDocSpans && docSpans[spanAt].hi <= start) {
                 spanAt++;
             }
             while (matchAt < style.nMatches && style.matches[matchAt]
@@ -26982,14 +27286,16 @@ El* Textarea::New(Ctx* cx, InputState* state,
             el->Mono();
         }
 
-        if (style.nSpans > 0) {
-            while (spanAt < style.nSpans && style.spans[spanAt].hi <= start) {
+        const int kMaxHighlightLineLen = 10000;
+
+        if (nDocSpans > 0 && line.len <= kMaxHighlightLineLen) {
+            while (spanAt < nDocSpans && docSpans[spanAt].hi <= start) {
                 spanAt++;
             }
             int first = spanAt;
             int count = 0;
-            while (first + count < style.nSpans &&
-                   style.spans[first + count].lo < start + line.len) {
+            while (first + count < nDocSpans &&
+                   docSpans[first + count].lo < start + line.len) {
                 count++;
             }
             if (count > 0) {
@@ -26997,7 +27303,7 @@ El* Textarea::New(Ctx* cx, InputState* state,
                     (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * count);
                 int nRowSpans = 0;
                 for (int k = 0; k < count; k++) {
-                    const TextSpan& sp = style.spans[first + k];
+                    const TextSpan& sp = docSpans[first + k];
                     int lo = sp.lo - start;
                     int hi = sp.hi - start;
                     if (lo < 0) {
@@ -27170,6 +27476,55 @@ El* Textarea::New(Ctx* cx, InputState* state,
                 }
             }
         }
+        if (state->showWhitespaces) {
+            float charW = colW > 0 ? colW : font * 0.6f;
+            if (charW > 0) {
+                if (!guides) {
+                    guides = Div(a)->Absolute()->Left(0)->Top(0)->H(kFill);
+                }
+                int displayCol = 0;
+                Rgba invis = style.mutedForeground;
+                for (int i = 0; i < line.len;) {
+                    unsigned char c = (unsigned char)line.s[i];
+                    if (c == ' ' || c == '\t') {
+                        float startX = charW * (float)displayCol;
+                        float x = c == ' '
+                                      ? startX + charW * 0.5f - font * 0.25f
+                                      : startX;
+                        if (x < 0) {
+                            x = 0;
+                        }
+                        El* mark = TextEl(a, c == ' ' ? StrL("\xE2\x80\xA2")
+                                                      : StrL("\xE2\x86\x92"))
+                                       ->Font(c == ' ' ? font * 0.5f : font)
+                                       ->Fg(invis);
+                        guides->Child(Div(a)
+                                          ->Absolute()
+                                          ->Left(x)
+                                          ->Top(0)
+                                          ->H(kFill)
+                                          ->ItemsCenter()
+                                          ->Child(mark));
+                        displayCol++;
+                        i++;
+                        continue;
+                    }
+                    if ((c & 0x80) == 0) {
+                        i++;
+                    } else if ((c & 0xE0) == 0xC0) {
+                        i += 2;
+                    } else if ((c & 0xF0) == 0xE0) {
+                        i += 3;
+                    } else {
+                        i += 4;
+                    }
+                    if (i > line.len) {
+                        i = line.len;
+                    }
+                    displayCol++;
+                }
+            }
+        }
         if (!lineNumbers) {
             El* only = el;
             if (guides) {
@@ -27293,6 +27648,77 @@ const char* InputCStr(const InputState* s) {
     return s && s->text.els ? s->text.els : "";
 }
 
+static void LineStartsEnsure(InputState* s) {
+    if (s->lineStartsValid && s->lineStartsVersion == s->docVersion) {
+        return;
+    }
+    VecClear(s->lineStarts);
+    VecAppend(s->lineStarts, 0);
+    Str t = InputValue(s);
+    int at = 0;
+    while (at < t.len) {
+        const char* nl =
+            (const char*)memchr(t.s + at, '\n', (size_t)(t.len - at));
+        if (!nl) {
+            break;
+        }
+        at = (int)(nl - t.s) + 1;
+        VecAppend(s->lineStarts, at);
+    }
+    s->lineStartsValid = true;
+    s->lineStartsVersion = s->docVersion;
+}
+
+const Vec<int>& InputLineStarts(const InputState* s) {
+    LineStartsEnsure(const_cast<InputState*>(s));
+    return s->lineStarts;
+}
+
+int InputLinesLen(const InputState* s) {
+    return InputLineStarts(s).len;
+}
+
+int InputLineStartOffset(const InputState* s, int row) {
+    const Vec<int>& starts = InputLineStarts(s);
+    if (row <= 0) {
+        return 0;
+    }
+    if (row >= starts.len) {
+        return s->text.len;
+    }
+    return starts[row];
+}
+
+Str InputSliceLine(const InputState* s, int row) {
+    const Vec<int>& starts = InputLineStarts(s);
+    if (row < 0 || row >= starts.len) {
+        return {};
+    }
+    int a = starts[row];
+    int b = row + 1 < starts.len ? starts[row + 1] - 1 : s->text.len;
+    return Str(s->text.els + a, b - a);
+}
+
+RopePoint InputOffsetToPoint(const InputState* s, int offset) {
+    const Vec<int>& starts = InputLineStarts(s);
+    offset = RopeClipOffset(InputValue(s), offset, Bias::Left);
+
+    int lo = 0;
+    int hi = starts.len - 1;
+    while (lo < hi) {
+        int mid = lo + (hi - lo + 1) / 2;
+        if (starts[mid] <= offset) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    RopePoint p = {};
+    p.row = lo;
+    p.column = offset - starts[lo];
+    return p;
+}
+
 InputState::~InputState() {
 
     if (focusWin) {
@@ -27305,6 +27731,9 @@ InputState::~InputState() {
     }
     StrFree(placeholder);
     MaskPatternFree(&maskPattern);
+    if (highlighter.drop) {
+        highlighter.drop(highlighter.data);
+    }
 }
 
 static void TextReserve(InputState* s, int want) {
@@ -27334,6 +27763,14 @@ static void TextSplice(InputState* s, int a, int b, Str ins) {
     }
     s->text.len = out;
     s->text.els[out] = 0;
+    s->docVersion++;
+
+    if (s->hasPendingEdit) {
+        s->pendingEdit = InputEdit{0, -1, s->text.len};
+    } else {
+        s->pendingEdit = InputEdit{a, b, a + insLen};
+        s->hasPendingEdit = true;
+    }
 }
 
 static void TextSet(InputState* s, Str v) {
@@ -27347,6 +27784,9 @@ static void TextSet(InputState* s, Str v) {
     }
     s->text.len = n;
     s->text.els[n] = 0;
+    s->docVersion++;
+    s->pendingEdit = InputEdit{0, -1, n};
+    s->hasPendingEdit = true;
 }
 
 void LayoutModeSetRows(LayoutMode* m, int rows) {
@@ -27650,7 +28090,7 @@ int InputCursor(const InputState* s) {
 }
 
 RopePoint InputCursorPosition(const InputState* s) {
-    return RopeOffsetToPoint(InputValue(s), InputCursor(s));
+    return InputOffsetToPoint(s, InputCursor(s));
 }
 
 Str InputSelectedValue(const InputState* s) {
@@ -27852,6 +28292,38 @@ static void UpdatePreferredColumn(InputState* s) {
 
 static const float kInputRightMargin = 5.f;
 
+static const int kBottomMarginRows = 3;
+
+float InputEmptyBottomHeight(bool isCodeEditor, int overrideRows,
+                             float viewportH, float lineH) {
+    if (!isCodeEditor) {
+        return 0;
+    }
+    if (overrideRows >= 0) {
+        return (float)overrideRows * lineH;
+    }
+    float half = viewportH * 0.5f;
+    float floor = (float)kBottomMarginRows * lineH;
+    return half > floor ? half : floor;
+}
+
+float InputCursorSurroundingPadding(bool isAutoGrow, int overrideLines,
+                                    int visibleLines, float lineH) {
+    if (isAutoGrow) {
+        return lineH;
+    }
+    float raw;
+    if (overrideLines >= 0) {
+        raw = (float)overrideLines * lineH;
+    } else if (visibleLines < kBottomMarginRows * 8) {
+        raw = lineH;
+    } else {
+        raw = (float)kBottomMarginRows * lineH;
+    }
+    float half = (float)visibleLines * lineH * 0.5f;
+    return raw < half ? raw : half;
+}
+
 void InputScrollToCaret(InputState* s, float caretX, float caretY,
                         InputMoveDir dir) {
     if (!s) {
@@ -27879,7 +28351,18 @@ void InputScrollToCaret(InputState* s, float caretX, float caretY,
     }
 
     if (s->viewH > 0) {
-        if (caretY - lineH < s->scrollY) {
+        bool surrounding = dir != InputMoveDir::None &&
+                           s->mode.kind == LayoutModeKind::CodeEditor;
+        if (surrounding) {
+            int visible = lineH > 0 ? (int)(s->viewH / lineH) : 0;
+            float edge = InputCursorSurroundingPadding(
+                false, s->cursorSurroundingLines, visible, lineH);
+            if (caretY - edge + lineH < s->scrollY) {
+                s->scrollY = caretY - edge + lineH;
+            } else if (caretY + edge > s->scrollY + s->viewH) {
+                s->scrollY = caretY + edge - s->viewH;
+            }
+        } else if (caretY - lineH < s->scrollY) {
             s->scrollY = caretY - lineH;
         } else if (caretY + lineH + lineH > s->scrollY + s->viewH) {
             s->scrollY = caretY + lineH + lineH - s->viewH;
@@ -27911,10 +28394,7 @@ void InputScrollToCursor(InputState* s, InputMoveDir dir) {
 
     row = FoldMapNearestVisibleLine(&s->folds, row);
 
-    float caretY = (float)row * lineH;
-    if (row < s->rowBoxes.len && s->rowBoxes.len > 0) {
-        caretY = s->rowBoxes[row].y - s->rowBoxes[0].y;
-    }
+    float caretY = DisplayRowDocY(s, row, lineH);
     InputScrollToCaret(s, s->caretX, caretY, dir);
 }
 
@@ -27925,10 +28405,7 @@ void InputScrollToOffset(InputState* s, int offset, InputMoveDir dir) {
     float lineH = s->lastLineH > 0 ? s->lastLineH : kInputLineH;
     int row = RopeOffsetToPoint(InputValue(s), offset).row;
     row = FoldMapNearestVisibleLine(&s->folds, row);
-    float y = (float)row * lineH;
-    if (row < s->rowBoxes.len && s->rowBoxes.len > 0) {
-        y = s->rowBoxes[row].y - s->rowBoxes[0].y;
-    }
+    float y = DisplayRowDocY(s, row, lineH);
     InputScrollToCaret(s, -1, y, dir);
 }
 
@@ -27956,8 +28433,8 @@ void InputMoveTo(InputState* s, App* app, Window* win, int offset) {
     InputMoveToWithAffinity(s, app, win, offset, false);
 }
 
-void InputSelectToWithAffinity(InputState* s, App* app, Window* win,
-                               int offset, bool lineEndAffinity) {
+void InputSelectToWithAffinity(InputState* s, App* app, Window* win, int offset,
+                               bool lineEndAffinity) {
     Str t = InputValue(s);
     if (offset < 0) {
         offset = 0;
@@ -28588,8 +29065,7 @@ void InputAcceptCompletion(InputState* s, App* app, Window* win) {
     InputDismissCompletion(s);
     s->silentReplace = true;
     if (edits.len == 1) {
-        InputReplaceTextInRange(s, app, win, &edits[0].range,
-                                edits[0].newText);
+        InputReplaceTextInRange(s, app, win, &edits[0].range, edits[0].newText);
     } else {
         InputApplyEdits(s, app, win, edits.els, edits.len);
     }
@@ -28716,8 +29192,7 @@ void InputInsertCompletion(InputState* s, App* app, Window* win,
 
     s->silentReplace = true;
     if (edits.len == 1) {
-        InputReplaceTextInRange(s, app, win, &edits[0].range,
-                                edits[0].newText);
+        InputReplaceTextInRange(s, app, win, &edits[0].range, edits[0].newText);
     } else {
         InputApplyEdits(s, app, win, edits.els, edits.len);
     }
@@ -28835,9 +29310,9 @@ void InputScheduleInlineCompletion(InputState* s) {
     if (!s->inlineCompletionProvider) {
         return;
     }
-    s->inlineCompletion.dueAt =
-        TimeNow() + (double)std::max(0.f, s->inlineCompletionDebounceMs) /
-                        1000.0;
+    s->inlineCompletion
+        .dueAt = TimeNow() +
+                 (double)std::max(0.f, s->inlineCompletionDebounceMs) / 1000.0;
     s->inlineCompletion.asked = false;
     s->inlineCompletion.at = InputCursor(s);
 }
@@ -29255,8 +29730,8 @@ void InputToggleCodeActions(InputState* s, App* app, Window* win) {
         }
         int n = 0;
         for (;;) {
-            n = fn(data, s->codeActions.arena, InputValue(s),
-                   s->selectedRange, buf.els, cap);
+            n = fn(data, s->codeActions.arena, InputValue(s), s->selectedRange,
+                   buf.els, cap);
             if (n < 0) {
                 n = 0;
             }
@@ -29445,6 +29920,17 @@ static float DisplayLineH(const InputState* s, int row, float lineH) {
     return lineH;
 }
 
+static float DisplayRowDocY(const InputState* s, int row, float lineH) {
+    if (!s || row <= 0) {
+        return 0;
+    }
+    float y = 0;
+    for (int i = 0; i < row; i++) {
+        y += DisplayLineH(s, i, lineH);
+    }
+    return y;
+}
+
 struct VerticalTarget {
     int offset = 0;
     float preferredX = -1;
@@ -29460,8 +29946,8 @@ static bool InputLineEndAffinityAt(PaintCtx* ctx, Str line, float font,
     }
     float endX = 0, endY = 0, endH = 0;
     float startX = 0, startY = 0, startH = 0;
-    if (!TextPointAt(ctx, line, font, maxW, true, offset, &endX, &endY,
-                     &endH, mono, lineMult, true) ||
+    if (!TextPointAt(ctx, line, font, maxW, true, offset, &endX, &endY, &endH,
+                     mono, lineMult, true) ||
         !TextPointAt(ctx, line, font, maxW, true, offset, &startX, &startY,
                      &startH, mono, lineMult, false)) {
         return false;
@@ -29583,8 +30069,7 @@ static void SelectVertical(InputState* s, App* app, Window* win, int lines) {
     Str t = InputValue(s);
     VerticalTarget to = VerticalTargetFor(s, win, lines, t, InputCursor(s));
     PauseBlink(s, app, win);
-    InputSelectToWithAffinity(s, app, win, to.offset,
-                              to.lineEndAffinity);
+    InputSelectToWithAffinity(s, app, win, to.offset, to.lineEndAffinity);
     s->preferredX = to.preferredX;
     s->preferredColumn = to.preferredColumn;
 
@@ -29769,8 +30254,7 @@ static bool DoOutdent(InputState* s, App* app, Window* win) {
     for (;;) {
         int lineLen = LineLenAt(src, i);
         int skip = 0;
-        if (lineLen >= tab.len &&
-            StrEq(Str(src.s + i, tab.len), tab)) {
+        if (lineLen >= tab.len && StrEq(Str(src.s + i, tab.len), tab)) {
             skip = tab.len;
             removed += tab.len;
         }
@@ -29856,8 +30340,7 @@ bool InputPerform(InputState* s, App* app, Window* win, InputAction action,
             return true;
         case InputAction::MoveEnd:
             PauseBlink(s, app, win);
-            InputMoveToWithAffinity(s, app, win, InputEndOfLine(s, win),
-                                    true);
+            InputMoveToWithAffinity(s, app, win, InputEndOfLine(s, win), true);
             return true;
         case InputAction::MoveToStart:
             InputMoveTo(s, app, win, 0);
@@ -30125,16 +30608,20 @@ static int FirstVisibleOffset(const InputState* s) {
         return 0;
     }
     int row = 0;
+    float lineH = s->lastLineH > 0 ? s->lastLineH : kInputLineH;
     if (s->rowBoxes.len > 0) {
-        float top = s->rowBoxes[0].y + s->scrollY;
-
-        while (row + 1 < s->rowBoxes.len &&
-               (s->rowBoxes[row + 1].h <= 0 || s->rowBoxes[row + 1].y <= top)) {
-            row++;
+        float at = 0;
+        for (int i = 0; i < s->rowBoxes.len; i++) {
+            float h = DisplayLineH(s, i, lineH);
+            if (at + h > s->scrollY) {
+                row = i;
+                break;
+            }
+            at += h;
+            row = i;
         }
         row = FoldMapNearestVisibleLine(&s->folds, row);
     } else {
-        float lineH = s->lastLineH > 0 ? s->lastLineH : kInputLineH;
         row = (int)(s->scrollY / lineH);
     }
     return RopeLineStartOffset(text, row);
@@ -30324,8 +30811,8 @@ void InputBlur(InputState* s, App* app, Window* win) {
     Notify(app, win);
 }
 
-int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x,
-                          float y, bool* lineEndAffinity) {
+int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x, float y,
+                          bool* lineEndAffinity) {
     if (lineEndAffinity) {
         *lineEndAffinity = false;
     }
@@ -30334,7 +30821,8 @@ int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x,
         return 0;
     }
     const Bounds& b = s->lastBounds;
-    if (b.w <= 0 && b.h <= 0) {
+    if (b.w <= 0 && b.h <= 0 && s->inputBounds.w <= 0 &&
+        s->inputBounds.h <= 0 && s->contentBox.h <= 0) {
         return 0;
     }
     float font = s->lastFont > 0 ? s->lastFont : 14.f;
@@ -30345,29 +30833,41 @@ int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x,
         return TextIndexAt(ctx, t, font, 0, false, x - b.x, 0, s->lastMono);
     }
     float lineH = s->lastLineH > 0 ? s->lastLineH : b.h;
-    int rows = RopeLinesLen(t);
+    int rows = InputLinesLen(s);
     int row = 0;
 
     float relY = 0;
     if (s->rowBoxes.len == rows && rows > 0) {
 
+        float originY = b.y;
+        if (s->inputBounds.h > 0) {
+            originY = s->inputBounds.y - s->scrollY;
+        }
+        float docY = y - originY;
+        float at = 0;
         row = FoldMapNearestVisibleLine(&s->folds, rows - 1);
         for (int i = 0; i < rows; i++) {
-            const Bounds& rb = s->rowBoxes[i];
-            if (rb.h <= 0) {
+            float h = DisplayLineH(s, i, lineH);
+            if (h <= 0) {
                 continue;
             }
-            if (y < rb.y + rb.h) {
+            if (docY < at + h) {
                 row = i;
+                relY = docY - at;
+                if (relY < 0) {
+                    relY = 0;
+                }
                 break;
             }
-        }
-        relY = y - s->rowBoxes[row].y;
-        if (relY < 0) {
-            relY = 0;
+            at += h;
         }
     } else {
-        row = lineH > 0 ? (int)((y - b.y) / lineH) : 0;
+
+        float originY = b.y;
+        if (s->inputBounds.h > 0) {
+            originY = s->inputBounds.y - s->scrollY;
+        }
+        row = lineH > 0 ? (int)((y - originY) / lineH) : 0;
         if (row < 0) {
             row = 0;
         }
@@ -30376,19 +30876,19 @@ int InputIndexForPosition(const InputState* s, PaintCtx* ctx, float x,
         }
         row = FoldMapNearestVisibleLine(&s->folds, row);
     }
-    Str line = RopeSliceLine(t, row);
-    int start = RopeLineStartOffset(t, row);
+    Str line = InputSliceLine(s, row);
+    int start = InputLineStartOffset(s, row);
 
     if (line.len == 0 || (x <= b.x && !s->softWrap)) {
         return start;
     }
     float maxW = s->softWrap ? b.w : 0;
     float lineMult = s->lastLineH > 0 ? s->lastLineH / font : 0;
-    int local = TextIndexAt(ctx, line, font, maxW, s->softWrap, x - b.x,
-                            relY, s->lastMono, lineMult);
+    int local = TextIndexAt(ctx, line, font, maxW, s->softWrap, x - b.x, relY,
+                            s->lastMono, lineMult);
     if (lineEndAffinity && s->softWrap) {
-        *lineEndAffinity = InputLineEndAffinityAt(
-            ctx, line, font, maxW, local, relY, s->lastMono, lineMult);
+        *lineEndAffinity = InputLineEndAffinityAt(ctx, line, font, maxW, local,
+                                                  relY, s->lastMono, lineMult);
     }
     return start + local;
 }
@@ -31131,6 +31631,7 @@ static const int kMaxUndoTransactions = 1000;
 static const int kMaxChangesPerTransaction = 1000;
 
 static void ChangeFree(Change* c) {
+
     StrFree(c->oldText);
     StrFree(c->newText);
     c->oldText = {};
@@ -31285,7 +31786,8 @@ void UndoCommitTransaction(UndoManager* m) {
     Change c = m->pending;
     m->hasPending = false;
     m->pending = {};
-    if (!RangeSame(c.oldRange, c.newRange) || !base::StrEq(c.oldText, c.newText)) {
+    if (!RangeSame(c.oldRange, c.newRange) ||
+        !base::StrEq(c.oldText, c.newText)) {
         PushTransaction(m, c, EditIntent::Atomic);
     } else {
         ChangeFree(&c);
@@ -39509,8 +40011,8 @@ bool TreeExpands(bool isFolder, bool isExpanded) {
 
 int TreeAddItem(TreeState* s, Str id, Str label, int parent) {
     TreeItem it;
-    it.id = id;
-    it.label = label;
+
+    StrDup2(id, label, it.id, it.label);
     it.parent = parent;
     int ix = s->items.len;
     if (parent >= 0 && parent < ix) {
@@ -39571,10 +40073,16 @@ void TreeSetItems(TreeState* s, Ctx* cx, const TreeItem* items, int count) {
     if (!s) {
         return;
     }
+
+    for (int i = 0; i < s->items.len; i++) {
+        StrFree2(s->items[i].id);
+    }
     s->items.len = 0;
     if (items && count > 0) {
         for (int i = 0; i < count; i++) {
-            VecAppend(s->items, items[i]);
+            TreeItem it = items[i];
+            StrDup2(items[i].id, items[i].label, it.id, it.label);
+            VecAppend(s->items, it);
         }
     }
     s->selected = -1;
@@ -39672,8 +40180,7 @@ static void TreeExpandAncestors(TreeState* s, Ctx* cx, int item) {
     VecReset(ancestors);
 }
 
-int TreeRevealItem(TreeState* s, Ctx* cx, Str id,
-                   ScrollStrategy strategy) {
+int TreeRevealItem(TreeState* s, Ctx* cx, Str id, ScrollStrategy strategy) {
     if (!s) {
         return -1;
     }
@@ -39843,8 +40350,7 @@ El* TreeList::New(Ctx* cx, Str id, Entity<TreeState> state, float h,
         if (!it->disabled) {
             wrap->OnMouseDown(ListenerArg(down, i));
         }
-        TreeEntryState entryState = {i == s->selected,
-                                     i == s->rightClicked};
+        TreeEntryState entryState = {i == s->selected, i == s->rightClicked};
         if (El* built = row(user, cx, i, entry, entryState)) {
             wrap->Child(built);
         }
@@ -47603,7 +48109,7 @@ struct InputMenuViewState {
 };
 
 static Entity<InputMenuViewState> InputMenuView(Ctx* cx, InputState* input,
-                                                 const char* kind) {
+                                                const char* kind) {
     Entity<InputMenuViewState> entity = ElementStateEntity<InputMenuViewState>(
         cx, fmt("%s-%p", Str(kind), (void*)input),
         StrL("gpui::component::InputMenuViewState"));
@@ -47665,8 +48171,8 @@ CompletionMenu* CompletionMenu::UpdateQuery(int startOffset, Str value) {
     return this;
 }
 
-CompletionMenu* CompletionMenu::Show(int offset,
-                                     const CompletionItem* items, int n) {
+CompletionMenu* CompletionMenu::Show(int offset, const CompletionItem* items,
+                                     int n) {
     if (editor) {
         int start = editor->completion.triggerStart >= 0
                         ? editor->completion.triggerStart
@@ -47684,8 +48190,7 @@ void CompletionMenu::Hide() {
 }
 
 bool CompletionMenu::HandleAction(InputAction action) {
-    return editor &&
-           InputCompletionAction(editor, cx->app, cx->win, action);
+    return editor && InputCompletionAction(editor, cx->app, cx->win, action);
 }
 
 El* CompletionMenu::IntoEl() {
@@ -47694,8 +48199,8 @@ El* CompletionMenu::IntoEl() {
         return nullptr;
     }
     const Theme& theme = ThemeNow(cx->app);
-    float x = editor->caretWinX > 0 ? editor->caretWinX - 4.f
-                                    : editor->inputBounds.x;
+    float x =
+        editor->caretWinX > 0 ? editor->caretWinX - 4.f : editor->inputBounds.x;
     float lineH = editor->lastLineH > 0 ? editor->lastLineH : 20.f;
     float y = editor->caretWinY > 0 ? editor->caretWinY + 4.f
                                     : editor->inputBounds.y + lineH + 4.f;
@@ -47705,14 +48210,14 @@ El* CompletionMenu::IntoEl() {
     if (windowW > 0 && windowW - x < maxW) maxW = windowW - x;
     if (maxW < 120.f) maxW = 120.f;
     const float gap = 4.f;
-    bool vertical = windowW > 0 &&
-                    x + configuredMax + gap + configuredMax + gap > windowW;
+    bool vertical =
+        windowW > 0 && x + configuredMax + gap + configuredMax + gap > windowW;
     Entity<InputMenuViewState> view =
         InputMenuView(cx, editor, "completion-menu");
 
     El* list = PopoverSurface(
-        cx, Div(a)->FlexCol()->MinW(120)->MaxW(maxW)->MaxH(240)->ClipY()->Pad(
-                4));
+        cx,
+        Div(a)->FlexCol()->MinW(120)->MaxW(maxW)->MaxH(240)->ClipY()->Pad(4));
     for (int i = 0; i < editor->completion.items.len; i++) {
         const CompletionItem& item = editor->completion.items[i];
         bool selected = i == editor->completion.selected;
@@ -47724,10 +48229,10 @@ El* CompletionMenu::IntoEl() {
                       ->Radius(theme.radius * 0.5f)
                       ->Font(12)
                       ->HoverBg(BackgroundOpacity(theme.tokens.accent, 0.8f))
-                      ->OnClick(ListenTo(view, &InputMenuViewState::CompletionClick,
-                                         i))
-                      ->OnHover(ListenTo(view, &InputMenuViewState::CompletionHover,
-                                         i));
+                      ->OnClick(ListenTo(
+                          view, &InputMenuViewState::CompletionClick, i))
+                      ->OnHover(ListenTo(
+                          view, &InputMenuViewState::CompletionHover, i));
         if (selected) row->Bg(theme.tokens.accent)->Fg(theme.accentFg);
         El* label = TextEl(a, item.label)->LineHeight(1.f);
         int matched = editor->completion.query.len;
@@ -47743,9 +48248,9 @@ El* CompletionMenu::IntoEl() {
         row->Child(label);
         if (item.detail.len > 0) {
             El* detail = TextEl(a, item.detail)
-                              ->LineHeight(1.f)
-                              ->Italic()
-                              ->Fg(selected ? theme.accentFg : theme.mutedFg);
+                             ->LineHeight(1.f)
+                             ->Italic()
+                             ->Fg(selected ? theme.accentFg : theme.mutedFg);
             if (item.deprecated) detail->Strikethrough();
             row->Child(detail);
         }
@@ -47767,12 +48272,9 @@ El* CompletionMenu::IntoEl() {
         TextViewStyle textStyle = TextViewStyle::Default();
         textStyle.ParagraphGap(8);
         menu->Child(
-            PopoverSurface(cx, Div(a)
-                                   ->W(configuredMax)
-                                   ->MaxH(240)
-                                   ->ClipY()
-                                   ->PadX(8)
-                                   ->PadY(4))
+            PopoverSurface(
+                cx,
+                Div(a)->W(configuredMax)->MaxH(240)->ClipY()->PadX(8)->PadY(4))
                 ->Child(TextView::New(cx, documentation)
                             ->Font(12)
                             ->Style(textStyle)
@@ -47783,8 +48285,7 @@ El* CompletionMenu::IntoEl() {
         ->Fixed()
         ->Left(x)
         ->Top(y)
-        ->OnMouseDownOut(
-            ListenTo(view, &InputMenuViewState::CompletionOutside))
+        ->OnMouseDownOut(ListenTo(view, &InputMenuViewState::CompletionOutside))
         ->Child(menu);
 }
 
@@ -47796,8 +48297,8 @@ CodeActionMenu* CodeActionMenu::New(Ctx* cx, InputState* state) {
     return menu;
 }
 
-CodeActionMenu* CodeActionMenu::Show(int offset,
-                                     const CodeActionItem* items, int n) {
+CodeActionMenu* CodeActionMenu::Show(int offset, const CodeActionItem* items,
+                                     int n) {
     (void)offset;
     InputPresentCodeActions(state, items, n);
     if (cx->win) AppInvalidate(cx->win);
@@ -47817,8 +48318,8 @@ El* CodeActionMenu::IntoEl() {
     if (!state || !state->codeActions.open || state->codeActions.items.len <= 0)
         return nullptr;
     const Theme& theme = ThemeNow(cx->app);
-    float x = state->caretWinX > 0 ? state->caretWinX - 4.f
-                                   : state->inputBounds.x;
+    float x =
+        state->caretWinX > 0 ? state->caretWinX - 4.f : state->inputBounds.x;
     float lineH = state->lastLineH > 0 ? state->lastLineH : 20.f;
     float y = state->caretWinY > 0 ? state->caretWinY + 4.f
                                    : state->inputBounds.y + lineH + 4.f;
@@ -47827,8 +48328,8 @@ El* CodeActionMenu::IntoEl() {
     if (maxW > 320.f) maxW = 320.f;
     if (maxW < 120.f) maxW = 120.f;
     El* list = PopoverSurface(
-        cx, Div(a)->FlexCol()->MinW(120)->MaxW(maxW)->MaxH(480)->ClipY()->Pad(
-                4));
+        cx,
+        Div(a)->FlexCol()->MinW(120)->MaxW(maxW)->MaxH(480)->ClipY()->Pad(4));
     Entity<InputMenuViewState> view =
         InputMenuView(cx, state, "code-action-menu");
     for (int i = 0; i < state->codeActions.items.len; i++) {
@@ -47842,26 +48343,25 @@ El* CodeActionMenu::IntoEl() {
                       ->Radius(theme.radius * 0.5f)
                       ->Font(12)
                       ->HoverBg(BackgroundOpacity(theme.tokens.accent, 0.8f))
-                      ->OnClick(ListenTo(view, &InputMenuViewState::CodeActionClick,
-                                         i))
-                      ->OnHover(ListenTo(view, &InputMenuViewState::CodeActionHover,
-                                         i));
+                      ->OnClick(ListenTo(
+                          view, &InputMenuViewState::CodeActionClick, i))
+                      ->OnHover(ListenTo(
+                          view, &InputMenuViewState::CodeActionHover, i));
         if (selected) row->Bg(theme.tokens.accent)->Fg(theme.accentFg);
-        row->Child(
-            TextEl(a, state->codeActions.items[i].title)->LineHeight(1.f));
+        row->Child(TextEl(a, state->codeActions.items[i].title)
+                       ->LineHeight(1.f));
         list->Child(row);
     }
     return Div(a)
         ->Fixed()
         ->Left(x)
         ->Top(y)
-        ->OnMouseDownOut(
-            ListenTo(view, &InputMenuViewState::CodeActionOutside))
+        ->OnMouseDownOut(ListenTo(view, &InputMenuViewState::CodeActionOutside))
         ->Child(list);
 }
 
 DiagnosticPopover* DiagnosticPopover::New(Ctx* cx, InputState* state,
-                                           int diagnostic) {
+                                          int diagnostic) {
     DiagnosticPopover* popover = ArenaNew<DiagnosticPopover>(cx->a);
     popover->a = cx->a;
     popover->cx = cx;
@@ -47876,7 +48376,8 @@ El* DiagnosticPopover::IntoEl() {
     const Theme& theme = ThemeNow(cx->app);
     const Diagnostic& item = state->diagnostics[diagnostic];
     Rgba foreground = theme.blue;
-    if (item.severity == DiagnosticSeverity::Error) foreground = theme.red;
+    if (item.severity == DiagnosticSeverity::Error)
+        foreground = theme.red;
     else if (item.severity == DiagnosticSeverity::Warning)
         foreground = theme.yellow;
     else if (item.severity == DiagnosticSeverity::Hint)
@@ -47890,22 +48391,22 @@ El* DiagnosticPopover::IntoEl() {
                    ->Selectable()
                    ->IntoEl();
     El* surface = Div(a)
-        ->MinW(200)
-        ->MaxW(500)
-        ->MaxH(320)
-        ->ClipY()
-        ->PadX(4)
-        ->PadY(2)
-        ->Radius(theme.radius)
-        ->Bg(background)
-        ->Fg(foreground)
-        ->Border(1, foreground)
-        ->BoundsOut(&state->popoverBounds)
-        ->Child(body);
+                      ->MinW(200)
+                      ->MaxW(500)
+                      ->MaxH(320)
+                      ->ClipY()
+                      ->PadX(4)
+                      ->PadY(2)
+                      ->Radius(theme.radius)
+                      ->Bg(background)
+                      ->Fg(foreground)
+                      ->Border(1, foreground)
+                      ->BoundsOut(&state->popoverBounds)
+                      ->Child(body);
     Entity<InputMenuViewState> view =
         InputMenuView(cx, state, "diagnostic-popover");
-    surface->OnMouseDownOut(
-        ListenTo(view, &InputMenuViewState::PopoverOutside));
+    surface
+        ->OnMouseDownOut(ListenTo(view, &InputMenuViewState::PopoverOutside));
     Bounds trigger = state->popoverTriggerBounds;
     if (trigger.w <= 0 || trigger.h <= 0) {
         trigger = {state->hoverDiagnosticX, state->hoverDiagnosticY, 1, 1};
@@ -47935,24 +48436,19 @@ El* HoverPopover::IntoEl() {
     TextViewStyle textStyle = TextViewStyle::Default();
     textStyle.ParagraphGap(8);
     El* surface = PopoverSurface(
-        cx, Div(a)
-                ->MinW(200)
-                ->MaxW(500)
-                ->MaxH(320)
-                ->ClipY()
-                ->PadX(8)
-                ->PadY(4));
-    surface->Child(TextView::New(cx, hover)
-                       ->Font(12)
-                       ->Style(textStyle)
-                       ->Selectable()
-                       ->IntoEl())
+        cx, Div(a)->MinW(200)->MaxW(500)->MaxH(320)->ClipY()->PadX(8)->PadY(4));
+    surface
+        ->Child(TextView::New(cx, hover)
+                    ->Font(12)
+                    ->Style(textStyle)
+                    ->Selectable()
+                    ->IntoEl())
         ->Fg(theme.foreground)
         ->BoundsOut(&editor->popoverBounds);
     Entity<InputMenuViewState> view =
         InputMenuView(cx, editor, "hover-popover");
-    surface->OnMouseDownOut(
-        ListenTo(view, &InputMenuViewState::PopoverOutside));
+    surface
+        ->OnMouseDownOut(ListenTo(view, &InputMenuViewState::PopoverOutside));
     Bounds trigger = editor->popoverTriggerBounds;
     if (trigger.w <= 0 || trigger.h <= 0) {
         trigger = {editor->hoverX, editor->hoverY, 1, 1};
@@ -47965,39 +48461,8 @@ El* HoverPopover::IntoEl() {
         ->IntoEl();
 }
 
-static int HighlightSpans(Ctx* cx, Str text, SyntaxLang lang, TextSpan* out,
-                          int cap) {
-    if (lang == SyntaxLangNone || !text.s) {
-        return 0;
-    }
-    const Theme& th = ThemeNow(cx->app);
-    ThemeMode mode = ThemeGet(cx->app);
-    SyntaxLexer lx;
-    SyntaxLexStart(&lx, lang, text);
-    int n = 0;
-    while (SyntaxLexNext(&lx) && n < cap) {
-        if (lx.tok == SyntaxTok::Text) {
-            continue;
-        }
-        Rgba c = SyntaxTokColor(lx.tok, mode, th.foreground);
-        int lo = (int)(lx.text.s - text.s);
-        int hi = lo + lx.text.len;
-
-        if (n > 0 && out[n - 1].hi == lo && RgbaEq(out[n - 1].color, c)) {
-            out[n - 1].hi = hi;
-            continue;
-        }
-        out[n].lo = lo;
-        out[n].hi = hi;
-        out[n].color = c;
-        out[n].bg = Rgba8(0, 0, 0, 0);
-        out[n].underline = false;
-        n++;
-    }
-    return n;
-}
-
-static bool SemanticTokColor(Ctx* cx, Str name, Rgba* out) {
+static bool HighlightNameColor(Str name, ThemeMode mode, Rgba fallback,
+                               Rgba* out) {
     static const struct {
         const char* name;
         SyntaxTok tok;
@@ -48012,13 +48477,11 @@ static bool SemanticTokColor(Ctx* cx, Str name, Rgba* out) {
         {"boolean", SyntaxTok::Boolean},   {"comment", SyntaxTok::Comment},
         {"tag", SyntaxTok::Tag},           {"attribute", SyntaxTok::Attribute},
     };
-    const Theme& th = ThemeNow(cx->app);
-    ThemeMode mode = ThemeGet(cx->app);
     Str head = name;
     for (int pass = 0; pass < 2; pass++) {
         for (const auto& row : kMap) {
             if (base::StrEqI(head, row.name)) {
-                *out = SyntaxTokColor(row.tok, mode, th.foreground);
+                *out = SyntaxTokColor(row.tok, mode, fallback);
                 return true;
             }
         }
@@ -48036,6 +48499,332 @@ static bool SemanticTokColor(Ctx* cx, Str name, Rgba* out) {
         head = Str(head.s, dot);
     }
     return false;
+}
+
+struct HlRun {
+    int lo;
+    int hi;
+    SyntaxTok tok;
+};
+
+struct SynHlJob;
+
+struct SyntaxInputHighlighter {
+    SyntaxLang lang = SyntaxLangNone;
+    uint64_t version = 0;
+    bool valid = false;
+
+    Vec<HlRun> runs;
+    Vec<FoldRange> folds;
+
+    ThemeMode mode = ThemeMode::Light;
+    Rgba foreground = {};
+
+    SynHlJob* flight = nullptr;
+    TaskId flightTask = 0;
+    double lexDueAt = 0;
+    uint64_t lexDueVersion = ~(uint64_t)0;
+};
+
+static const int kSyncLexMaxBytes = 256 * 1024;
+static const double kLexDebounce = 0.150;
+
+struct SynHlJob {
+    SyntaxInputHighlighter* hl = nullptr;
+    App* app = nullptr;
+    EntityId view = {};
+    uint64_t version = 0;
+    SyntaxLang lang = SyntaxLangNone;
+    char* text = nullptr;
+    int len = 0;
+    Vec<HlRun> runs;
+    Vec<FoldRange> folds;
+};
+
+static void SynHlLexInto(SyntaxLang lang, Str text, Vec<HlRun>* runs,
+                         Vec<FoldRange>* folds) {
+    VecClear(*runs);
+    VecClear(*folds);
+    if (lang == SyntaxLangNone || text.len == 0) {
+        return;
+    }
+
+    int starts[64];
+    int nOpen = 0;
+    int line = 0;
+    int at = 0;
+    SyntaxLexer lx;
+    SyntaxLexStart(&lx, lang, text);
+    while (SyntaxLexNext(&lx)) {
+        int tokStart = (int)(lx.text.s - text.s);
+        for (; at < tokStart && at < text.len; at++) {
+            if (text.s[at] == '\n') {
+                line++;
+            }
+        }
+        bool literal =
+            lx.tok == SyntaxTok::String || lx.tok == SyntaxTok::Comment;
+        for (int i = 0; i < lx.text.len; i++) {
+            char c = lx.text.s[i];
+            if (c == '\n') {
+                line++;
+                continue;
+            }
+            if (literal) {
+                continue;
+            }
+            if (c == '{') {
+                if (nOpen < (int)(sizeof(starts) / sizeof(starts[0]))) {
+                    starts[nOpen] = line;
+                }
+                nOpen++;
+            } else if (c == '}' && nOpen > 0) {
+                nOpen--;
+                if (nOpen >= (int)(sizeof(starts) / sizeof(starts[0]))) {
+                    continue;
+                }
+                int startLine = starts[nOpen];
+
+                if (startLine < line) {
+                    FoldRange fr;
+                    fr.startLine = startLine;
+                    fr.endLine = line;
+                    VecAppend(*folds, fr);
+                }
+            }
+        }
+        at = tokStart + lx.text.len;
+        if (lx.tok == SyntaxTok::Text) {
+            continue;
+        }
+
+        int hi = tokStart + lx.text.len;
+        if (runs->len > 0 && (*runs)[runs->len - 1].hi == tokStart &&
+            (*runs)[runs->len - 1].tok == lx.tok) {
+            (*runs)[runs->len - 1].hi = hi;
+            continue;
+        }
+        HlRun run;
+        run.lo = tokStart;
+        run.hi = hi;
+        run.tok = lx.tok;
+        VecAppend(*runs, run);
+    }
+}
+
+static Str SynHlLanguage(void* data) {
+    return SyntaxLangName(((SyntaxInputHighlighter*)data)->lang);
+}
+
+static void SynHlUpdate(void* data, const InputEdit* edit, Str text,
+                        bool folding) {
+    auto* hl = (SyntaxInputHighlighter*)data;
+
+    (void)edit;
+    (void)folding;
+    SynHlLexInto(hl->lang, text, &hl->runs, &hl->folds);
+}
+
+static void SynHlLexWork(SynHlJob* job) {
+    SynHlLexInto(job->lang, Str(job->text, job->len), &job->runs, &job->folds);
+}
+
+static void SynHlLexDone(SynHlJob* job) {
+    SyntaxInputHighlighter* hl = job->hl;
+    if (hl) {
+        hl->flight = nullptr;
+        hl->flightTask = 0;
+        VecClear(hl->runs);
+        if (job->runs.len > 0) {
+            if (HlRun* dst = VecAppendBlanks(hl->runs, job->runs.len)) {
+                memcpy(dst, job->runs.els,
+                       (size_t)job->runs.len * sizeof(HlRun));
+            }
+        }
+        VecClear(hl->folds);
+        if (job->folds.len > 0) {
+            if (FoldRange* dst = VecAppendBlanks(hl->folds, job->folds.len)) {
+                memcpy(dst, job->folds.els,
+                       (size_t)job->folds.len * sizeof(FoldRange));
+            }
+        }
+        hl->valid = true;
+        hl->version = job->version;
+        NotifyEntity(job->app, job->view, nullptr);
+    }
+    Free(nullptr, job->text);
+    delete job;
+}
+
+static Str SynHlTokName(SyntaxTok tok) {
+    switch (tok) {
+        case SyntaxTok::Keyword:
+            return StrL("keyword");
+        case SyntaxTok::Type:
+            return StrL("type");
+        case SyntaxTok::Function:
+            return StrL("function");
+        case SyntaxTok::Property:
+            return StrL("property");
+        case SyntaxTok::String:
+            return StrL("string");
+        case SyntaxTok::Number:
+            return StrL("number");
+        case SyntaxTok::Boolean:
+            return StrL("boolean");
+        case SyntaxTok::Comment:
+            return StrL("comment");
+        case SyntaxTok::Tag:
+            return StrL("tag");
+        case SyntaxTok::Attribute:
+            return StrL("attribute");
+        default:
+            return Str{};
+    }
+}
+
+static int SynHlStyles(void* data, Selection range,
+                       const HighlightStyleResolver* resolver, Arena* a,
+                       TextSpan** out) {
+    auto* hl = (SyntaxInputHighlighter*)data;
+    *out = nullptr;
+    if (hl->runs.len == 0 || range.end <= range.start) {
+        return 0;
+    }
+
+    int lo = 0;
+    int hi = hl->runs.len;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (hl->runs[mid].hi <= range.start) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    int first = lo;
+    int count = 0;
+    while (first + count < hl->runs.len && hl->runs[first + count]
+                                                   .lo < range.end) {
+        count++;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    auto* spans = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * count);
+    if (!spans) {
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        const HlRun& r = hl->runs[first + i];
+        int spanLo = r.lo < range.start ? range.start : r.lo;
+        int spanHi = r.hi > range.end ? range.end : r.hi;
+        if (spanHi <= spanLo) {
+            continue;
+        }
+
+        Rgba c = SyntaxTokColor(r.tok, hl->mode, hl->foreground);
+        TextSpan resolved = {};
+        if (resolver && resolver->Style(SynHlTokName(r.tok), &resolved)) {
+            c = resolved.color;
+        }
+
+        if (n > 0 && spans[n - 1].hi == spanLo &&
+            RgbaEq(spans[n - 1].color, c)) {
+            spans[n - 1].hi = spanHi;
+            continue;
+        }
+        TextSpan sp = {};
+        sp.lo = spanLo;
+        sp.hi = spanHi;
+        sp.color = c;
+        sp.bg = Rgba8(0, 0, 0, 0);
+        spans[n++] = sp;
+    }
+    *out = spans;
+    return n;
+}
+
+static int SynHlFoldRanges(void* data, Str, Selection, Arena* a,
+                           FoldRange** out) {
+
+    auto* hl = (SyntaxInputHighlighter*)data;
+    *out = nullptr;
+    if (hl->folds.len == 0) {
+        return 0;
+    }
+    auto* folds = (FoldRange*)Alloc(a, (int)sizeof(FoldRange) * hl->folds.len);
+    if (!folds) {
+        return 0;
+    }
+    memcpy(folds, hl->folds.els, (size_t)hl->folds.len * sizeof(FoldRange));
+    *out = folds;
+    return hl->folds.len;
+}
+
+static void SynHlDrop(void* data) {
+    auto* hl = (SyntaxInputHighlighter*)data;
+
+    if (hl->flight) {
+        hl->flight->hl = nullptr;
+        if (hl->flightTask && ExecCancel(hl->flightTask)) {
+            Free(nullptr, hl->flight->text);
+            delete hl->flight;
+        }
+    }
+    delete hl;
+}
+
+static SyntaxInputHighlighter* SynHlEnsure(InputState* s, SyntaxLang lang) {
+    if (lang == SyntaxLangNone) {
+        if (s->highlighter.drop) {
+            s->highlighter.drop(s->highlighter.data);
+        }
+        s->highlighter = InputHighlighter{};
+        return nullptr;
+    }
+    if (s->highlighter.data && s->highlighter.update == &SynHlUpdate) {
+        auto* hl = (SyntaxInputHighlighter*)s->highlighter.data;
+        if (hl->lang != lang) {
+            hl->lang = lang;
+            hl->valid = false;
+        }
+        return hl;
+    }
+    if (s->highlighter.drop) {
+        s->highlighter.drop(s->highlighter.data);
+    }
+    auto* hl = new SyntaxInputHighlighter();
+    hl->lang = lang;
+    s->highlighter.data = hl;
+    s->highlighter.language = &SynHlLanguage;
+    s->highlighter.update = &SynHlUpdate;
+    s->highlighter.styles = &SynHlStyles;
+    s->highlighter.foldRanges = &SynHlFoldRanges;
+    s->highlighter.drop = &SynHlDrop;
+    return hl;
+}
+
+struct SynHlResolver {
+    ThemeMode mode = ThemeMode::Light;
+    Rgba foreground = {};
+};
+
+static bool SynHlResolveStyle(void* data, Str name, TextSpan* out) {
+    auto* r = (SynHlResolver*)data;
+    Rgba c;
+    if (!HighlightNameColor(name, r->mode, r->foreground, &c)) {
+        return false;
+    }
+    *out = TextSpan{};
+    out->color = c;
+    return true;
+}
+
+static bool SemanticTokColor(Ctx* cx, Str name, Rgba* out) {
+    const Theme& th = ThemeNow(cx->app);
+    return HighlightNameColor(name, ThemeGet(cx->app), th.foreground, out);
 }
 
 static int SemanticSpans(Ctx* cx, InputState* state, Str text, TextSpan* out,
@@ -48070,47 +48859,6 @@ static int SemanticSpans(Ctx* cx, InputState* state, Str text, TextSpan* out,
     return m;
 }
 
-static int MergeDecorations(TextSpan* spans, int n, const TextSpan* decs,
-                            int nDecs, int cap, TextSpan* tmp) {
-    auto* out = spans + 0;
-
-    int m = 0;
-    int i = 0;
-    for (int d = 0; d < nDecs && m < cap; d++) {
-        const TextSpan& dec = decs[d];
-        for (; i < n && m < cap; i++) {
-            TextSpan sp = spans[i];
-            if (sp.hi <= dec.lo) {
-                tmp[m++] = sp;
-                continue;
-            }
-            if (sp.lo >= dec.hi) {
-                break;
-            }
-
-            if (sp.lo < dec.lo && m < cap) {
-                TextSpan head = sp;
-                head.hi = dec.lo;
-                tmp[m++] = head;
-            }
-            if (sp.hi > dec.hi) {
-                spans[i].lo = dec.hi;
-                break;
-            }
-        }
-        if (m < cap) {
-            tmp[m++] = dec;
-        }
-    }
-    for (; i < n && m < cap; i++) {
-        tmp[m++] = spans[i];
-    }
-    for (int k = 0; k < m; k++) {
-        out[k] = tmp[k];
-    }
-    return m;
-}
-
 Highlighter* Highlighter::Diagnostics(const Diagnostic* items, int n) {
     diagnostics = items;
     nDiagnostics = n;
@@ -48125,63 +48873,6 @@ Highlighter* Highlighter::Folding(bool v) {
 Highlighter* Highlighter::Searchable(bool v) {
     searchable = v;
     return this;
-}
-
-static const int kMaxFoldRanges = 512;
-
-static int FoldCandidates(Str text, SyntaxLang lang, FoldRange* out, int cap) {
-    if (text.len == 0 || cap <= 0) {
-        return 0;
-    }
-
-    int starts[64];
-    int nOpen = 0;
-    int n = 0;
-    int line = 0;
-    int at = 0;
-    SyntaxLexer lx = {};
-    SyntaxLexStart(&lx, lang, text);
-    while (SyntaxLexNext(&lx)) {
-        int tokStart = (int)(lx.text.s - text.s);
-
-        for (; at < tokStart && at < text.len; at++) {
-            if (text.s[at] == '\n') {
-                line++;
-            }
-        }
-        bool literal =
-            lx.tok == SyntaxTok::String || lx.tok == SyntaxTok::Comment;
-        for (int i = 0; i < lx.text.len; i++) {
-            char c = lx.text.s[i];
-            if (c == '\n') {
-                line++;
-                continue;
-            }
-            if (literal) {
-                continue;
-            }
-            if (c == '{') {
-                if (nOpen < (int)(sizeof(starts) / sizeof(starts[0]))) {
-                    starts[nOpen] = line;
-                }
-                nOpen++;
-            } else if (c == '}' && nOpen > 0) {
-                nOpen--;
-                if (nOpen >= (int)(sizeof(starts) / sizeof(starts[0]))) {
-                    continue;
-                }
-                int startLine = starts[nOpen];
-
-                if (startLine < line && n < cap) {
-                    out[n].startLine = startLine;
-                    out[n].endLine = line;
-                    n++;
-                }
-            }
-        }
-        at = tokStart + lx.text.len;
-    }
-    return n;
 }
 
 El* Highlighter::IntoEl() {
@@ -48224,33 +48915,80 @@ El* Highlighter::IntoEl() {
         state->mode.kind = LayoutModeKind::CodeEditor;
         state->mode.folding = folding;
     }
-    if (state && folding) {
-        FoldRange ranges[kMaxFoldRanges];
-        int nRanges =
-            FoldCandidates(InputValue(state), lang, ranges, kMaxFoldRanges);
-        InputSetFoldCandidates(state, ranges, nRanges);
-    }
-
     Str text = state ? InputValue(state) : Str{};
-    const int kMaxSpans = 4096;
-    auto* spans = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * kMaxSpans);
-    int n = HighlightSpans(cx, text, lang, spans, kMaxSpans);
+    if (state) {
 
-    {
-        auto* sem = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * kMaxSpans);
-        int nSem = sem ? SemanticSpans(cx, state, text, sem, kMaxSpans) : 0;
-        if (nSem > 0) {
-            auto* tmp = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * kMaxSpans);
-            if (tmp) {
-                n = MergeDecorations(spans, n, sem, nSem, kMaxSpans, tmp);
+        SyntaxInputHighlighter* hl = SynHlEnsure(state, lang);
+        if (hl) {
+            hl->mode = ThemeGet(cx->app);
+            hl->foreground = th.foreground;
+            if (!hl->valid || hl->version != state->docVersion) {
+                if (text.len <= kSyncLexMaxBytes) {
+                    InputEdit whole = {};
+                    whole.oldEndByte = -1;
+                    whole.newEndByte = text.len;
+                    const InputEdit* edit =
+                        state->hasPendingEdit ? &state->pendingEdit : &whole;
+                    state->highlighter.Update(edit, text, folding);
+                    hl->valid = true;
+                    hl->version = state->docVersion;
+                } else if (!hl->flight) {
+
+                    if (hl->lexDueVersion != state->docVersion) {
+                        hl->lexDueVersion = state->docVersion;
+                        hl->lexDueAt = TimeNow() + kLexDebounce;
+                    }
+                    if (TimeNow() < hl->lexDueAt) {
+                        WindowRequestAnimationFrame(cx->win);
+                    } else {
+                        auto* job = new SynHlJob();
+                        job->hl = hl;
+                        job->app = cx->app;
+                        job->view = cx->self;
+                        job->version = state->docVersion;
+                        job->lang = hl->lang;
+                        job->text = (char*)Alloc(nullptr, text.len + 1);
+                        if (job->text) {
+                            memcpy(job->text, text.s, (size_t)text.len);
+                            job->text[text.len] = 0;
+                            job->len = text.len;
+                            hl->flightTask =
+                                ExecSpawn(MkFunc0(SynHlLexWork, job),
+                                          MkFunc0(SynHlLexDone, job));
+                        }
+                        if (job->text && hl->flightTask) {
+                            hl->flight = job;
+                        } else {
+                            Free(nullptr, job->text);
+                            delete job;
+                        }
+                    }
+                }
             }
+            state->hasPendingEdit = false;
+            if (folding) {
+                FoldRange* ranges = nullptr;
+                int nRanges = state->highlighter.FoldRanges(
+                    text, Selection{0, text.len}, a, &ranges);
+                InputSetFoldCandidates(state, ranges, nRanges);
+            }
+
+            auto* resolver = ArenaNew<SynHlResolver>(a);
+            resolver->mode = hl->mode;
+            resolver->foreground = th.foreground;
+            style.highlightStyles.data = resolver;
+            style.highlightStyles.style = &SynHlResolveStyle;
         }
     }
-    if (nDecorations > 0) {
+
+    const int kMaxSpans = 4096;
+    auto* spans = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * kMaxSpans);
+    int n = spans ? SemanticSpans(cx, state, text, spans, kMaxSpans) : 0;
+    if (nDecorations > 0 && spans) {
         auto* tmp = (TextSpan*)Alloc(a, (int)sizeof(TextSpan) * kMaxSpans);
         if (tmp) {
-            n = MergeDecorations(spans, n, decorations, nDecorations, kMaxSpans,
-                                 tmp);
+            n = InputComposeSpans(spans, n, decorations, nDecorations,
+                                  kMaxSpans, tmp);
         }
     }
     style.spans = n > 0 ? spans : nullptr;
@@ -48272,15 +49010,19 @@ El* Highlighter::IntoEl() {
     El* scroller = editor;
     if (h > 0) {
 
-        scroller = InputBase::New(cx, id, true,
-                                  AccessibilityRole::MultilineTextInput)
-                       ->BindInput(state)
-                       ->FlexCol()
-                       ->W(kFill)
-                       ->H(h)
-                       ->ClipY()
-                       ->ScrollY(state ? state->scrollY : 0)
-                       ->Child(editor);
+        scroller =
+            InputBase::New(cx, id, true, AccessibilityRole::MultilineTextInput)
+                ->BindInput(state)
+                ->FlexCol()
+                ->W(kFill)
+                ->H(h)
+                ->ClipY()
+                ->ScrollY(state ? state->scrollY : 0)
+                ->ScrollFromPath();
+        if (state && !state->softWrap) {
+            scroller->ScrollX(state->scrollX);
+        }
+        scroller->Child(editor);
     }
     El* completionMenu = CompletionMenu::New(cx, state)->IntoEl();
     if (!completionMenu) {
@@ -48289,8 +49031,8 @@ El* Highlighter::IntoEl() {
 
     El* diagPopover = nullptr;
     if (state) {
-        diagPopover =
-            DiagnosticPopover::New(cx, state, state->hoverDiagnostic)->IntoEl();
+        diagPopover = DiagnosticPopover::New(cx, state, state->hoverDiagnostic)
+                          ->IntoEl();
         if (!diagPopover && state->hoverDiagnostic < 0) {
             diagPopover = HoverPopover::New(cx, state, state->hoverRange,
                                             state->hoverText)
@@ -133538,6 +134280,7 @@ void TaffyTree::Init(int capacity) {
     VecReset(slots);
     VecReset(freeSlots);
     liveCount = 0;
+    allocs = 0;
     useRounding = true;
     if (capacity > 0) {
         base::VecReserve(slots, capacity);
@@ -133577,6 +134320,7 @@ static NodeId InsertNode(TaffyTree* tree, const Style& style) {
     } else {
         d = new NodeData();
         tree->slots[idx] = d;
+        tree->allocs++;
     }
 
     d->style = style;
@@ -133626,14 +134370,17 @@ NodeId TaffyTree::NewWithChildren(const Style& style, const NodeId* children,
 }
 
 void TaffyTree::Clear() {
+
+    VecReset(freeSlots);
     for (int i = 0; i < slots.len; i++) {
         NodeData* d = slots[i];
-        if (!d || !d->alive) {
+        if (!d) {
             continue;
         }
         d->alive = false;
         d->children.len = 0;
         d->hasParent = false;
+        d->parent = NodeId{};
         VecAppend(freeSlots, (int32_t)i);
     }
     liveCount = 0;
@@ -133668,6 +134415,47 @@ void TaffyTree::Remove(NodeId node) {
     d->hasParent = false;
     liveCount--;
     VecAppend(freeSlots, IdIndex(node));
+}
+
+static void MarkReachable(const TaffyTree* tree, NodeId id, uint8_t* seen,
+                          int nSlots) {
+    NodeData* d = tree->Get(id);
+    if (!d) {
+        return;
+    }
+    int32_t idx = IdIndex(id);
+    if (idx < 0 || idx >= nSlots || seen[idx]) {
+        return;
+    }
+    seen[idx] = 1;
+    for (int i = 0; i < d->children.len; i++) {
+        MarkReachable(tree, d->children[i], seen, nSlots);
+    }
+}
+
+void TaffyTree::EachUnreachable(NodeId root, void (*fn)(NodeId, void*),
+                                void* user) {
+    if (!fn || slots.len <= 0) {
+        return;
+    }
+    uint8_t* seen = (uint8_t*)base::Alloc(nullptr, slots.len);
+    if (!seen) {
+        return;
+    }
+    memset(seen, 0, (size_t)slots.len);
+    MarkReachable(this, root, seen, slots.len);
+    Vec<NodeId> ids;
+    for (int i = 0; i < slots.len; i++) {
+        NodeData* d = slots[i];
+        if (d && d->alive && !seen[i]) {
+            VecAppend(ids, MakeId((int32_t)i, d->generation));
+        }
+    }
+    base::Free(nullptr, seen);
+    for (int i = 0; i < ids.len; i++) {
+        fn(ids[i], user);
+    }
+    VecReset(ids);
 }
 
 void TaffyTree::SetNodeContext(NodeId node, void* context, bool hasContext) {
@@ -134127,9 +134915,8 @@ static void PrintNode(TaffyTree* tree, NodeId node, bool hasSibling,
         "%s%s%s [x: %-4g y: %-4g w: %-4g h: %-4g "
         "content_w: %-4g content_h: %-4g",
         Str(linesString), Str(fork), Str(displayStr), (double)layout.location.x,
-        (double)layout.location.y, (double)layout.size.w,
-        (double)layout.size.h, (double)layout.contentSize.w,
-        (double)layout.contentSize.h));
+        (double)layout.location.y, (double)layout.size.w, (double)layout.size.h,
+        (double)layout.contentSize.w, (double)layout.contentSize.h));
     base::log(
         base::fmt(" border: l:%g r:%g t:%g b:%g, "
                   "padding: l:%g r:%g t:%g b:%g] (%llu)\n",
@@ -139448,6 +140235,13 @@ struct PaintApp {
     IDWriteTextFormat* font20 = nullptr;
     IDWriteTextFormat* font24 = nullptr;
     IDWriteTextFormat* fontMono = nullptr;
+
+    IDWriteInlineObject* ellipsis12 = nullptr;
+    IDWriteInlineObject* ellipsis14 = nullptr;
+    IDWriteInlineObject* ellipsis16 = nullptr;
+    IDWriteInlineObject* ellipsis20 = nullptr;
+    IDWriteInlineObject* ellipsis24 = nullptr;
+    IDWriteInlineObject* ellipsisMono = nullptr;
 };
 
 struct PaintTarget {
@@ -139505,6 +140299,12 @@ void PaintAppFree(PaintApp* pa) {
     if (!pa) {
         return;
     }
+    gpui_paint_win_Rel(&pa->ellipsis12);
+    gpui_paint_win_Rel(&pa->ellipsis14);
+    gpui_paint_win_Rel(&pa->ellipsis16);
+    gpui_paint_win_Rel(&pa->ellipsis20);
+    gpui_paint_win_Rel(&pa->ellipsis24);
+    gpui_paint_win_Rel(&pa->ellipsisMono);
     gpui_paint_win_Rel(&pa->font12);
     gpui_paint_win_Rel(&pa->font14);
     gpui_paint_win_Rel(&pa->font16);
@@ -140406,6 +141206,30 @@ static IDWriteTextFormat* FontFor(PaintApp* pa, float fontSize,
     return pa->font16;
 }
 
+static IDWriteInlineObject* EllipsisSign(PaintApp* pa, IDWriteTextFormat* fmt) {
+    if (!pa || !fmt || !pa->dwrite) {
+        return nullptr;
+    }
+    IDWriteInlineObject** slot = &pa->ellipsis16;
+    if (fmt == pa->font12) {
+        slot = &pa->ellipsis12;
+    } else if (fmt == pa->font14) {
+        slot = &pa->ellipsis14;
+    } else if (fmt == pa->font16) {
+        slot = &pa->ellipsis16;
+    } else if (fmt == pa->font20) {
+        slot = &pa->ellipsis20;
+    } else if (fmt == pa->font24) {
+        slot = &pa->ellipsis24;
+    } else if (fmt == pa->fontMono) {
+        slot = &pa->ellipsisMono;
+    }
+    if (!*slot) {
+        pa->dwrite->CreateEllipsisTrimmingSign(fmt, slot);
+    }
+    return *slot;
+}
+
 static DWRITE_FONT_WEIGHT DwriteWeight(uint8_t weight) {
     switch (weight & kFontWeightMask) {
         case kFontWeightThin:
@@ -140749,12 +141573,10 @@ void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
     if (clip && clipW > 0) {
         Dw(tl)->SetMaxWidth(clipW);
         DWRITE_TRIMMING trim = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-        IDWriteInlineObject* sign = nullptr;
-        if (SUCCEEDED(ctx->pa->dwrite
-                          ->CreateEllipsisTrimmingSign(Dw(tl), &sign)) &&
-            sign) {
+        IDWriteInlineObject* sign =
+            EllipsisSign(ctx->pa, FontFor(ctx->pa, Dw(tl)->GetFontSize(), 0));
+        if (sign) {
             Dw(tl)->SetTrimming(&trim, sign);
-            sign->Release();
         }
     }
     D2D1_DRAW_TEXT_OPTIONS opt =

@@ -83,7 +83,8 @@ struct Str {
     explicit Str(const char* s_) : s((char*)s_), len(0) {
         len = s_ ? (int)strlen(s_) : 0;
     }
-    constexpr explicit Str(const char* s_, int len_) noexcept : s((char*)s_), len(len_) {}
+    constexpr explicit Str(const char* s_, int len_) noexcept
+        : s((char*)s_), len(len_) {}
     explicit Str(char* s_) : s(s_), len(0) { len = s ? (int)strlen(s) : 0; }
     constexpr explicit Str(char* s_, int len_) noexcept : s(s_), len(len_) {}
 
@@ -1168,6 +1169,9 @@ void StrFree(const char*) = delete;
 
 Str StrDup(Arena*, Str str);
 Str StrDup(Str s);
+
+void StrDup2(Str s1, Str s2, Str& s1Out, Str& s2Out);
+void StrFree2(Str s);
 
 GPUI_NOINLINE bool StrEqRest(Str s1, Str s2);
 inline bool StrEq(Str s1, Str s2) {
@@ -3216,6 +3220,8 @@ struct TaffyTree {
     Vec<int32_t> freeSlots;
     int32_t liveCount = 0;
 
+    int32_t allocs = 0;
+
     bool useRounding = true;
 
     MeasureFn measureFn = nullptr;
@@ -3239,6 +3245,8 @@ struct TaffyTree {
 
     void Remove(NodeId node);
 
+    void EachUnreachable(NodeId root, void (*fn)(NodeId, void*), void* user);
+
     void SetNodeContext(NodeId node, void* context, bool hasContext);
     void* GetNodeContext(NodeId node) const;
 
@@ -3256,6 +3264,8 @@ struct TaffyTree {
 
     NodeId ChildAtIndex(NodeId parent, int childIndex) const;
     int TotalNodeCount() const { return liveCount; }
+
+    int SlotCount() const { return slots.len; }
 
     NodeId Parent(NodeId child, bool* hasParent) const;
 
@@ -4194,8 +4204,8 @@ struct AnchoredPosition {
 };
 
 AnchoredPosition AnchoredSideResolve(Bounds trigger, Size popup, Size view,
-                                     float margin, int preferred,
-                                     int align, float offset);
+                                     float margin, int preferred, int align,
+                                     float offset);
 AnchoredPosition AnchoredCornerResolve(Anchor anchor, Point at, Size popup,
                                        Size view, float margin);
 
@@ -5912,6 +5922,53 @@ enum class InputOverlayKind : uint8_t {
 using OverlayActionFn = bool (*)(void* data, InputOverlayKind kind,
                                  InputAction action);
 
+struct InputEdit {
+    int startByte = 0;
+    int oldEndByte = 0;
+    int newEndByte = 0;
+    RopePoint startPosition = {};
+    RopePoint oldEndPosition = {};
+    RopePoint newEndPosition = {};
+
+    static InputEdit New(Str oldText, Selection range, Str inserted);
+};
+
+struct HighlightStyleResolver {
+    void* data = nullptr;
+    bool (*style)(void* data, Str name, TextSpan* out) = nullptr;
+
+    bool Style(Str name, TextSpan* out) const;
+};
+
+using SharedHighlightStyleResolver = HighlightStyleResolver;
+
+struct InputHighlighter {
+    void* data = nullptr;
+    Str (*language)(void* data) = nullptr;
+
+    void (*update)(void* data, const InputEdit* edit, Str text,
+                   bool folding) = nullptr;
+
+    int (*styles)(void* data, Selection range,
+                  const HighlightStyleResolver* resolver, Arena* a,
+                  TextSpan** out) = nullptr;
+
+    int (*foldRanges)(void* data, Str text, Selection changedRange, Arena* a,
+                      FoldRange** out) = nullptr;
+
+    void (*drop)(void* data) = nullptr;
+
+    Str Language() const;
+    void Update(const InputEdit* edit, Str text, bool folding) const;
+    int Styles(Selection range, const HighlightStyleResolver* resolver,
+               Arena* a, TextSpan** out) const;
+    int FoldRanges(Str text, Selection changedRange, Arena* a,
+                   FoldRange** out) const;
+};
+
+int InputComposeSpans(TextSpan* spans, int n, const TextSpan* decs, int nDecs,
+                      int cap, TextSpan* tmp);
+
 struct InputState {
     InputKind kind = InputKind::Input;
     LayoutMode mode = {};
@@ -5919,6 +5976,17 @@ struct InputState {
     FocusHandle focus = {};
 
     Vec<char> text;
+
+    uint64_t docVersion = 0;
+
+    Vec<int> lineStarts;
+    uint64_t lineStartsVersion = 0;
+    bool lineStartsValid = false;
+
+    InputHighlighter highlighter = {};
+
+    InputEdit pendingEdit = {};
+    bool hasPendingEdit = false;
     Selection selectedRange = {};
     bool selectionReversed = false;
 
@@ -5948,6 +6016,11 @@ struct InputState {
 
     Bounds gutterBox = {};
     bool softWrap = true;
+
+    bool showWhitespaces = false;
+
+    int scrollBeyondLastLine = -1;
+    int cursorSurroundingLines = -1;
 
     int align = 0;
 
@@ -6075,11 +6148,22 @@ enum class InputMoveDir : uint8_t {
 void InputScrollToCaret(InputState* s, float caretX, float caretY,
                         InputMoveDir dir);
 
+float InputEmptyBottomHeight(bool isCodeEditor, int overrideRows,
+                             float viewportH, float lineH);
+float InputCursorSurroundingPadding(bool isAutoGrow, int overrideLines,
+                                    int visibleLines, float lineH);
+
 void InputScrollToOffset(InputState* s, int offset, InputMoveDir dir);
 
 void InputScrollToCursor(InputState* s, InputMoveDir dir);
 
 Str InputValue(const InputState* s);
+
+const Vec<int>& InputLineStarts(const InputState* s);
+int InputLinesLen(const InputState* s);
+int InputLineStartOffset(const InputState* s, int row);
+Str InputSliceLine(const InputState* s, int row);
+RopePoint InputOffsetToPoint(const InputState* s, int offset);
 const char* InputCStr(const InputState* s);
 
 Str InputUnmaskValue(Arena* a, const InputState* s);
@@ -6118,8 +6202,8 @@ void InputMoveToWithAffinity(InputState* s, App* app, Window* win, int offset,
                              bool lineEndAffinity);
 
 void InputSelectTo(InputState* s, App* app, Window* win, int offset);
-void InputSelectToWithAffinity(InputState* s, App* app, Window* win,
-                               int offset, bool lineEndAffinity);
+void InputSelectToWithAffinity(InputState* s, App* app, Window* win, int offset,
+                               bool lineEndAffinity);
 void InputSelectAll(InputState* s, App* app, Window* win);
 void InputUnselect(InputState* s, App* app, Window* win);
 void InputSetSelectedRange(InputState* s, App* app, Window* win, int a, int b);
@@ -6440,6 +6524,10 @@ void PaintTextUnderline(PaintCtx* ctx, Str s, float fontSize, float maxW,
 
 struct LayoutCache;
 
+bool LayoutReuseTakeArg(Str arg);
+
+bool LayoutReuseOn();
+
 LayoutCache* LayoutCacheNew();
 void LayoutCacheFree(LayoutCache* lc);
 
@@ -6452,9 +6540,15 @@ struct LayoutCacheStats {
 
     int restyled = 0;
     int remeasured = 0;
+
+    int allocs = 0;
 };
 
 LayoutCacheStats LayoutCacheLastStats(const LayoutCache* lc);
+
+int LayoutCacheNodeCount(const LayoutCache* lc);
+
+int LayoutCacheSlotCount(const LayoutCache* lc);
 
 void LayoutScratchFree();
 
@@ -6696,6 +6790,8 @@ struct Window {
     float scrollDragGrab = 0;
 
     bool scrollDragHorizontal = false;
+
+    InputState* scrollDragInput = nullptr;
     InputState* input = nullptr;
 
     EntityId tooltip = {};
@@ -9861,17 +9957,6 @@ bool InputPerformNativeMenuItem(InputState* state, App* app, Window* win,
 
 namespace gpui {
 
-struct InputEdit {
-    int startByte = 0;
-    int oldEndByte = 0;
-    int newEndByte = 0;
-    RopePoint startPosition = {};
-    RopePoint oldEndPosition = {};
-    RopePoint newEndPosition = {};
-
-    static InputEdit New(Str oldText, Selection range, Str inserted);
-};
-
 struct RopeLines {
     Str rope = {};
     int row = 0;
@@ -10054,34 +10139,6 @@ struct DisplayMap {
 
   private:
     void Rebuild();
-};
-
-struct HighlightStyleResolver {
-    void* data = nullptr;
-    bool (*style)(void* data, Str name, TextSpan* out) = nullptr;
-
-    bool Style(Str name, TextSpan* out) const;
-};
-
-using SharedHighlightStyleResolver = HighlightStyleResolver;
-
-struct InputHighlighter {
-    void* data = nullptr;
-    Str (*language)(void* data) = nullptr;
-    void (*update)(void* data, const InputEdit* edit, Str text,
-                   bool folding) = nullptr;
-    int (*styles)(void* data, Selection range,
-                  const HighlightStyleResolver* resolver, TextSpan* out,
-                  int cap) = nullptr;
-    int (*foldRanges)(void* data, Str text, Selection changedRange,
-                      FoldRange* out, int cap) = nullptr;
-
-    Str Language() const;
-    void Update(const InputEdit* edit, Str text, bool folding) const;
-    int Styles(Selection range, const HighlightStyleResolver* resolver,
-               TextSpan* out, int cap) const;
-    int FoldRanges(Str text, Selection changedRange, FoldRange* out,
-                   int cap) const;
 };
 
 struct InputHighlighterFactory {
@@ -10271,6 +10328,8 @@ struct InputEditorStyle {
 
     bool mask = false;
     int align = 0;
+
+    HighlightStyleResolver highlightStyles = {};
 
     const TextSpan* spans = nullptr;
     int nSpans = 0;
@@ -13016,6 +13075,7 @@ bool TreeCollapses(bool isFolder, bool isExpanded);
 bool TreeExpands(bool isFolder, bool isExpanded);
 
 struct TreeItem {
+
     Str id = {};
     Str label = {};
     int parent = -1;
@@ -13080,6 +13140,9 @@ struct TreeState {
     static void OnScroll(TreeState* self, Ctx* cx, const ScrollEvent* ev);
 
     ~TreeState() {
+        for (int i = 0; i < items.len; i++) {
+            StrFree2(items[i].id);
+        }
         VecReset(items);
         VecReset(entries);
     }
