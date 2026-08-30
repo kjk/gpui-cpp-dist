@@ -1,3 +1,4 @@
+#define GPUI_INCLUDE_PRIVATE_API 1
 #include "gpui.h"
 
 #include <climits>

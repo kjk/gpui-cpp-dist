@@ -5,7 +5,12 @@
 #endif
 #define GPUI_MARKDOWN_FULL 1
 #define GPUI_MARKDOWN_MINI 0
+#ifndef GPUI_INCLUDE_PRIVATE_API
+#define GPUI_INCLUDE_PRIVATE_API 0
+#endif
 
+#ifndef GPUI_BASE_H_
+#define GPUI_BASE_H_
 #line 1 "src/base.h"
 
 #ifndef UNICODE
@@ -1314,6 +1319,8 @@ inline void logf(const char* format, const TArgs&... args) {
     log(FormatTemp(format, args...));
 }
 }
+
+#endif
 
 #line 1 "src/taffy/geometry.h"
 
@@ -22900,6 +22907,7 @@ const SceneStats& Stats();
 
 }
 
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/constant.h"
 
 namespace markdown {
@@ -22956,6 +22964,9 @@ extern const CharacterReference kCharacterReferences[2125];
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/state.h"
 
 namespace markdown {
@@ -23322,6 +23333,9 @@ State Call(Tokenizer* tokenizer, StateName name);
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/event.h"
 
 namespace markdown {
@@ -23513,6 +23527,9 @@ struct Event {
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/util.h"
 
 namespace markdown {
@@ -23629,6 +23646,9 @@ Str CharacterReferenceDecodeInto(char buf[4], Str value, uint8_t marker);
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/tokenizer.h"
 
 namespace markdown {
@@ -23830,6 +23850,9 @@ Node* ToMdastCompile(const Vec<Event>& events, ParseState* parseState);
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/construct.h"
 
 namespace markdown {
@@ -24194,7 +24217,12 @@ bool TextResolve(Tokenizer* t, Subresult* out);
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown-mini/markdown.h"
+
+#endif
 
 #line 1 "src/shell/a11y.h"
 
@@ -25897,6 +25925,7 @@ void SysNotifyShutdown();
 
 }
 
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/taffy/taffy_math.h"
 
 #if defined(_MSC_VER)
@@ -26031,6 +26060,9 @@ constexpr SizeFOpt AsOptional(SizeF s) {
 
 }
 
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/taffy/compute.h"
 
 namespace taffy {
@@ -26116,6 +26148,8 @@ SizeF ComputeContentSizeContribution(PointF location, SizeF size,
                                      SizeF contentSize, PointOverflow overflow);
 
 }
+
+#endif
 
 #line 1 "src/ui/element_ext.h"
 

@@ -1,8 +1,10 @@
 # gpui-cpp-dist
 
 The amalgamated build of [gpui-cpp](https://github.com/kjk/gpui-cpp): GPUI is
-`gpui.h` and `gpui.cpp`, and its QuickJS-NG engine is the separate generated
-`quickjs/quickjs.h` and `quickjs/quickjs.c`. Everything beside those four files
+`gpui.h` and `gpui.cpp`, its QuickJS-NG engine is the separate generated
+`quickjs/quickjs.h` and `quickjs/quickjs.c`, and `extras/` holds the ported
+library crates as standalone amalgams, one header + one source each (see
+"What is here"). Everything beside those generated files
 is here so you can run them before you commit to them — every example, the
 assets they load, and the build and run scripts used by the source repo.
 
@@ -54,6 +56,24 @@ runtime removes them from `argv` before calling `GpuiMain`.
 ```
 gpui.h, gpui.cpp     the C++20 library amalgam
 quickjs/             pinned QuickJS-NG as one C11 header and one C source
+extras/              the ported library crates as standalone amalgams, one
+                     header + one source each:
+  autocorrect/       the autocorrect CJK copywriting linter, crate
+                     autocorrect 2.14.2. NOT part of
+                     gpui.cpp: the editor example (and the tests) compile
+                     and link it beside gpui.cpp
+  taffy/             the flexbox/grid/block layout engine, crate taffy
+                     0.13.0. Also inside gpui.cpp — this copy is
+                     for using the library without gpui
+  markdown/          the CommonMark + GFM parser, crate markdown
+                     1.0.0. Also inside gpui.cpp — this copy
+                     is for using the parser without gpui
+  markdown-mini/     a smaller parser implementing the same markdown.h
+                     API (not an upstream crate); inside gpui.cpp only
+                     when built with GPUI_MARKDOWN=mini
+  wry/               the webview, crate lb-wry 0.53.3 (WebView2 on
+                     Windows, WKWebView on macOS, stubs elsewhere). Also
+                     inside gpui.cpp
 gpui_shell/           command-line JavaScript application host
 examples/            every example, including story/ and showcase/
 assets/              icons, images and documents the examples load at runtime
@@ -67,7 +87,8 @@ build.ts, run.ts     the source repo's own build and run scripts
 
 Drop the GPUI pair and `quickjs/` into your tree, `#include "gpui.h"` where you
 need the API, compile `gpui.cpp` as C++20, and compile `quickjs/quickjs.c` as
-C11. The platform halves are already inside `gpui.cpp` behind `GPUI_OS_*`
+C11. The platform halves are already
+inside `gpui.cpp` behind `GPUI_OS_*`
 guards, so the same source set builds on all four:
 
 - **Windows** — `cl /std:c++20 /EHsc /utf-8 /DUNICODE /D_UNICODE`, static CRT;
@@ -88,11 +109,45 @@ Compile QuickJS with `/TC /std:c11 /experimental:c11atomics` under MSVC
 `-x c -std=gnu11` under clang, GCC and emscripten. `build.ts` supplies the full
 warning and platform flags.
 
+The headers private to the bundled library ports (markdown's tokenizer,
+taffy's layout internals, autocorrect's internals) sit behind
+`#if GPUI_INCLUDE_PRIVATE_API`, which defaults to 0: including `gpui.h`
+gives you the public API only. Define `GPUI_INCLUDE_PRIVATE_API 1` before
+the include if you want to reach the internals; `gpui.cpp` and the
+`extras/` sources already do, being the implementation.
+
+## The extras/ pairs
+
+Each `extras/` directory is one of the ported library crates as a
+standalone amalgam: include its header, compile its `.cpp` as C++20. Their
+headers inline the shared base layer behind a `GPUI_BASE_H_` guard that
+`gpui.h` also wraps its own copy in, so a pair header and `gpui.h` can meet
+in one translation unit in either order; their private headers sit behind
+the same `GPUI_INCLUDE_PRIVATE_API` gate as above.
+
+`extras/autocorrect/` is the one pair **not** inside `gpui.cpp`: it holds
+declarations plus the linter only, and links *beside* `gpui.cpp`, which
+provides the base implementation — this is exactly how the editor example
+and the tests build.
+
+`extras/taffy/`, `extras/markdown/`, `extras/markdown-mini/` and
+`extras/wry/` are **also inside `gpui.cpp`**; these copies exist for using
+one library on its own, without gpui. Each therefore carries the base
+implementation (with its platform halves behind `GPUI_OS_*` guards), which
+means two things: never link one of them beside `gpui.cpp` — the symbols
+would be there twice — and provide the one seam base leaves to the
+application, `void base::log(base::Str)` (the examples' `AppLog.cpp` is the
+reference). `markdown/` and `markdown-mini/` implement the same
+`markdown.h`, so they are drop-in swaps for each other and never link
+together. On Windows, `wry/` additionally links `ole32.lib user32.lib
+comctl32.lib shlwapi.lib advapi32.lib shell32.lib`; taffy and the markdown
+parsers need no libraries at all.
+
 No other dependencies, no nested build system, no STL containers.
 
 ## This copy
 
-Amalgamated from gpui-cpp [`eb2253d7e1b64c480622ce756675d8a8afec0b36`](https://github.com/kjk/gpui-cpp/commit/eb2253d7e1b64c480622ce756675d8a8afec0b36).
+Amalgamated from gpui-cpp [`2246a980cc24834f79560d6b136a0817686dffda`](https://github.com/kjk/gpui-cpp/commit/2246a980cc24834f79560d6b136a0817686dffda).
 
-[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/eb2253d7e1b64c480622ce756675d8a8afec0b36...main)
+[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/2246a980cc24834f79560d6b136a0817686dffda...main)
 shows every commit this copy is behind by; if that page is empty, it is current.

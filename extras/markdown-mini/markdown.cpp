@@ -1,0 +1,4191 @@
+#define GPUI_INCLUDE_PRIVATE_API 1
+#include "markdown.h"
+
+#include <climits>
+#include <cstdarg>
+#include <locale.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#line 1 "src/base.cpp"
+
+namespace base {
+
+static int VsnprintfUtf8(Str buf, const char* fmt, va_list args);
+
+float StrToFloatUnchecked(Str s) {
+    if (!s.s || s.len <= 0) {
+        return 0;
+    }
+    char local[128];
+    char* buf = local;
+    if (s.len >= (int)sizeof(local)) {
+        Str temp = AllocStrTemp(s.len);
+        if (!temp.s) {
+            return 0;
+        }
+        buf = temp.s;
+    }
+    memcpy(buf, s.s, (size_t)s.len);
+    buf[s.len] = 0;
+    return strtof(buf, nullptr);
+}
+
+int StrToIntUnchecked(Str s) {
+    if (!s.s || s.len <= 0) {
+        return 0;
+    }
+    int i = 0;
+    while (i < s.len && s.s[i] <= ' ') {
+        i++;
+    }
+    bool negative = false;
+    if (i < s.len && (s.s[i] == '+' || s.s[i] == '-')) {
+        negative = s.s[i] == '-';
+        i++;
+    }
+    uint64_t value = 0;
+    while (i < s.len && s.s[i] >= '0' && s.s[i] <= '9') {
+        value = value * 10 + (uint64_t)(s.s[i] - '0');
+        i++;
+    }
+    int64_t signedValue = negative ? -(int64_t)value : (int64_t)value;
+    return (int)signedValue;
+}
+
+void* AllocZero(int count, int size) {
+    return calloc(count, size);
+}
+
+static_assert(sizeof(Arena) <= kArenaHeaderSize,
+              "Arena header must fit in reserved header bytes");
+
+using ArenaFlags = uint64_t;
+enum : uint8_t {
+    ArenaFlagNoChain = 1ull << 0,
+    ArenaFlagLargePages = 1ull << 1,
+};
+
+struct ArenaParams {
+    ArenaFlags flags = 0;
+    uint64_t reserveSize = 0;
+    uint64_t commitSize = 0;
+    void* optionalBackingBuffer = nullptr;
+    const char* allocationSiteFile = nullptr;
+    int allocationSiteLine = 0;
+    const char* name = nullptr;
+};
+
+static uint64_t ArenaDefaultReserveSize() {
+    static uint64_t sz = 0;
+    if (sz == 0) {
+        sz = PlatArenaReserveSize();
+    }
+    return sz;
+}
+static uint64_t gArenaDefaultCommitSize = 64ull * 1024ull;
+static ArenaFlags gArenaDefaultFlags = 0;
+
+static uint64_t ArenaAlignPow2(uint64_t value, uint64_t align) {
+    if (align <= 1) {
+        return value;
+    }
+    return (value + align - 1) & ~(align - 1);
+}
+
+static uint64_t ArenaMin(uint64_t a, uint64_t b) {
+    return (a < b) ? a : b;
+}
+
+static uint64_t ArenaMax(uint64_t a, uint64_t b) {
+    return (a > b) ? a : b;
+}
+
+static uint64_t ArenaClampTop(uint64_t value, uint64_t maxValue) {
+    return (value < maxValue) ? value : maxValue;
+}
+
+static uint64_t ArenaClampBot(uint64_t minValue, uint64_t value) {
+    return (value > minValue) ? value : minValue;
+}
+
+static Arena* ArenaAlloc(const ArenaParams& params);
+
+static void ArenaRelease(Arena* arena) {
+    PlatMemRelease(arena, arena->reserved);
+}
+
+static void* ArenaPushLocked(Arena* arena, uint64_t size, uint64_t align,
+                             bool zero) {
+    if (!arena) {
+        return nullptr;
+    }
+    if (align == 0) {
+        align = 1;
+    }
+
+    Arena* current = arena->current;
+    uint64_t posPre = ArenaAlignPow2(current->pos, align);
+    uint64_t posPost = posPre + size;
+
+    uint64_t sizeToZero = 0;
+    if (zero && current->committed > posPre) {
+        sizeToZero = ArenaMin(current->committed, posPost) - posPre;
+    }
+
+    if (current->reserved < posPost && !(arena->flags & ArenaFlagNoChain)) {
+        uint64_t reserveChunkSize = current->reserveChunkSize;
+        uint64_t commitChunkSize = current->commitChunkSize;
+        if (size + kArenaHeaderSize > reserveChunkSize) {
+            reserveChunkSize = ArenaAlignPow2(size + kArenaHeaderSize,
+                                              ArenaMax(align, PlatPageSize()));
+            commitChunkSize = reserveChunkSize;
+        }
+
+        ArenaParams newParams = {};
+        newParams.flags = current->flags;
+        newParams.reserveSize = reserveChunkSize;
+        newParams.commitSize = commitChunkSize;
+        newParams.allocationSiteFile = current->allocationSiteFile;
+        newParams.allocationSiteLine = current->allocationSiteLine;
+        newParams.name = current->name;
+
+        Arena* newBlock = ArenaAlloc(newParams);
+        if (!newBlock) {
+            return nullptr;
+        }
+
+        newBlock->basePos = current->basePos + current->reserved;
+        newBlock->prev = current;
+        arena->current = newBlock;
+        current = newBlock;
+        posPre = ArenaAlignPow2(current->pos, align);
+        posPost = posPre + size;
+        sizeToZero = 0;
+    }
+
+    if (current->committed < posPost) {
+        if (current->flags & ArenaFlagLargePages) {
+            return nullptr;
+        }
+
+        uint64_t commitEnd = ArenaAlignPow2(posPost, current->commitChunkSize);
+        uint64_t commitClamped = ArenaClampTop(commitEnd, current->reserved);
+        uint64_t commitSize = commitClamped - current->committed;
+        void* commitPtr = (char*)current + current->committed;
+        if (!PlatMemCommit(commitPtr, commitSize, false)) {
+            return nullptr;
+        }
+        current->committed = commitClamped;
+    }
+
+    if (current->committed < posPost) {
+        return nullptr;
+    }
+
+    void* result = (char*)current + posPre;
+    current->pos = posPost;
+
+    arena->nAllocsLifetime++;
+    arena->nAllocsSinceReset++;
+    uint64_t used = current->basePos + posPost;
+    arena->peakBytesLifetime = std::max(used, arena->peakBytesLifetime);
+    arena->peakBytesSinceReset = std::max(used, arena->peakBytesSinceReset);
+
+    if (sizeToZero) {
+        memset(result, 0, (size_t)sizeToZero);
+    }
+    return result;
+}
+
+static ArenaParams ArenaDefaultParams() {
+    ArenaParams params = {};
+    params.flags = gArenaDefaultFlags;
+    params.reserveSize = ArenaDefaultReserveSize();
+    params.commitSize = gArenaDefaultCommitSize;
+    return params;
+}
+
+Arena* ArenaNew() {
+    return ArenaAlloc(ArenaDefaultParams());
+}
+
+static Arena* ArenaAlloc(const ArenaParams& srcParams) {
+    ArenaParams params = srcParams;
+    if (params.reserveSize == 0) {
+        params.reserveSize = ArenaDefaultReserveSize();
+    }
+    if (params.commitSize == 0) {
+        params.commitSize = gArenaDefaultCommitSize;
+    }
+
+    bool useLargePages = (params.flags & ArenaFlagLargePages) != 0;
+    const uint64_t pageSize =
+        useLargePages ? PlatLargePageSize() : PlatPageSize();
+    uint64_t reserveSize = ArenaAlignPow2(
+        ArenaMax(params.reserveSize, kArenaHeaderSize), pageSize);
+    uint64_t commitSize =
+        ArenaAlignPow2(ArenaMax(params.commitSize, kArenaHeaderSize), pageSize);
+    commitSize = ArenaClampTop(commitSize, reserveSize);
+
+    void* base = params.optionalBackingBuffer;
+    bool usesExternalBuffer = (base != nullptr);
+    ArenaFlags actualFlags = params.flags;
+
+    if (!usesExternalBuffer) {
+        if (useLargePages) {
+            base = PlatMemReserveCommit(reserveSize, true);
+            if (base) {
+                commitSize = reserveSize;
+            } else {
+                actualFlags &= ~ArenaFlagLargePages;
+                useLargePages = false;
+                reserveSize = ArenaAlignPow2(reserveSize, PlatPageSize());
+                commitSize = ArenaAlignPow2(commitSize, PlatPageSize());
+            }
+        }
+
+        if (!base) {
+            base = PlatMemReserve(reserveSize);
+            if (base && !PlatMemCommit(base, commitSize, false)) {
+                PlatMemRelease(base, reserveSize);
+                base = nullptr;
+            }
+        }
+    } else {
+        commitSize = reserveSize;
+    }
+
+    if (!base) {
+        return nullptr;
+    }
+
+    memset(base, 0, (size_t)std::min<uint64_t>(commitSize, kArenaHeaderSize));
+    Arena* arena = (Arena*)base;
+    arena->prev = nullptr;
+    arena->current = arena;
+    arena->flags = actualFlags;
+    arena->commitChunkSize = useLargePages ? reserveSize : commitSize;
+    arena->reserveChunkSize = reserveSize;
+    arena->basePos = 0;
+    arena->pos = kArenaHeaderSize;
+    arena->committed = commitSize;
+    arena->reserved = reserveSize;
+    arena->allocationSiteFile = params.allocationSiteFile;
+    arena->allocationSiteLine = params.allocationSiteLine;
+    arena->name = params.name;
+    arena->usesExternalBuffer = usesExternalBuffer;
+    arena->nAllocsLifetime = 0;
+    arena->peakBytesLifetime = 0;
+    arena->nAllocsSinceReset = 0;
+    arena->peakBytesSinceReset = 0;
+    return arena;
+}
+
+void ArenaDelete(Arena* arena) {
+    if (!arena) {
+        return;
+    }
+
+    Arena* node = arena->current;
+    while (node) {
+        Arena* prev = node->prev;
+        if (!node->usesExternalBuffer) {
+            ArenaRelease(node);
+        }
+        node = prev;
+    }
+}
+
+void* Arena::Push(uint64_t size, uint64_t align, bool zero) {
+    lock.Lock();
+    void* mem = ArenaPushLocked(this, size, align, zero);
+    lock.Unlock();
+    return mem;
+}
+
+void Arena::PopTo(uint64_t popPos) {
+    Arena* arena = this;
+    lock.Lock();
+
+    uint64_t bigPos = ArenaClampBot(kArenaHeaderSize, popPos);
+    Arena* node = arena->current;
+    while (node && node->basePos >= bigPos) {
+        Arena* prevNode = node->prev;
+        if (!node->usesExternalBuffer) {
+            ArenaRelease(node);
+        } else {
+            node->pos = kArenaHeaderSize;
+        }
+        node = prevNode;
+    }
+
+    if (!node) {
+        lock.Unlock();
+        return;
+    }
+
+    arena->current = node;
+    uint64_t newPos = bigPos - node->basePos;
+    node->pos = newPos;
+    lock.Unlock();
+}
+
+uint64_t ArenaUsed(Arena* arena) {
+    if (!arena) {
+        return 0;
+    }
+    Arena* cur = arena->current;
+    return cur ? cur->basePos + cur->pos : 0;
+}
+
+static Arena* ArenaBlockAt(Arena* arena, uint64_t pos) {
+    Arena* node = arena ? arena->current : nullptr;
+    while (node && node->basePos > pos) {
+        node = node->prev;
+    }
+    return node;
+}
+
+int VarintSize(uint32_t v) {
+    int n = 1;
+    while (v >= 0x80) {
+        v >>= 7;
+        n++;
+    }
+    return n;
+}
+
+int VarintPut(char* dst, uint32_t v) {
+    int n = 0;
+    while (v >= 0x80) {
+        dst[n++] = (char)(v | 0x80);
+        v >>= 7;
+    }
+    dst[n++] = (char)v;
+    return n;
+}
+
+int VarintGet(const char* src, uint32_t* out) {
+    uint32_t v = 0;
+    int shift = 0;
+    int n = 0;
+    for (;;) {
+        uint8_t b = (uint8_t)src[n++];
+        v |= (uint32_t)(b & 0x7f) << shift;
+        if ((b & 0x80) == 0) {
+            break;
+        }
+        shift += 7;
+    }
+    *out = v;
+    return n;
+}
+
+static char* ArenaStrAt(Arena* a, ArenaStr s) {
+    Arena* node = ArenaBlockAt(a, s);
+    if (!node) {
+        return nullptr;
+    }
+    return (char*)node + ((uint64_t)s - node->basePos);
+}
+
+ArenaStr ArenaStrDup(Arena* a, Str src) {
+    if (!a || !src.s || src.len <= 0) {
+        return kArenaStrNone;
+    }
+    uint32_t len = (uint32_t)src.len;
+    int vlen = VarintSize(len);
+    a->lock.Lock();
+
+    char* dst = (char*)ArenaPushLocked(a, (uint64_t)vlen + len + 1, 1, false);
+    Arena* cur = a->current;
+    uint64_t at = dst ? cur->basePos + (uint64_t)((char*)dst - (char*)cur) : 0;
+    a->lock.Unlock();
+    if (!dst) {
+        return kArenaStrNone;
+    }
+    VarintPut(dst, len);
+    memcpy(dst + vlen, src.s, (size_t)len);
+    dst[vlen + len] = 0;
+    return (ArenaStr)at;
+}
+
+uint32_t ArenaStrLen(Arena* a, ArenaStr s) {
+    if (!ArenaStrIsSet(s)) {
+        return 0;
+    }
+    const char* p = ArenaStrAt(a, s);
+    if (!p) {
+        return 0;
+    }
+    uint32_t len = 0;
+    VarintGet(p, &len);
+    return len;
+}
+
+ArenaStr ArenaStrAppend(Arena* a, ArenaStr s, Str more) {
+    if (!a || !more.s || more.len <= 0) {
+        return s;
+    }
+    if (!ArenaStrIsSet(s)) {
+        return ArenaStrDup(a, more);
+    }
+
+    a->lock.Lock();
+    char* p = ArenaStrAt(a, s);
+    uint32_t len = 0;
+    int vlen = p ? VarintGet(p, &len) : 0;
+    Arena* cur = a->current;
+    uint64_t used = cur ? cur->basePos + cur->pos : 0;
+
+    bool newest = p && (uint64_t)s + vlen + len + 1 == used;
+    uint32_t nlen = len + (uint32_t)more.len;
+    int nvlen = VarintSize(nlen);
+
+    uint64_t want = newest ? (uint64_t)(nvlen - vlen) + (uint64_t)more.len
+                           : (uint64_t)nvlen + nlen + 1;
+    char* dst = (char*)ArenaPushLocked(a, want, 1, false);
+    uint64_t at = 0;
+    if (dst) {
+        Arena* after = a->current;
+        at = after->basePos + (uint64_t)((char*)dst - (char*)after);
+    }
+    a->lock.Unlock();
+    if (!dst) {
+        return s;
+    }
+
+    if (newest && at == used) {
+        if (nvlen != vlen) {
+            memmove(p + nvlen, p + vlen, (size_t)len);
+        }
+        VarintPut(p, nlen);
+        memcpy(p + nvlen + len, more.s, (size_t)more.len);
+        p[nvlen + nlen] = 0;
+        return s;
+    }
+
+    VarintPut(dst, nlen);
+    if (len > 0) {
+        memcpy(dst + nvlen, p + vlen, (size_t)len);
+    }
+    memcpy(dst + nvlen + len, more.s, (size_t)more.len);
+    dst[nvlen + nlen] = 0;
+    return (ArenaStr)at;
+}
+
+Str ArenaStrGet(Arena* a, ArenaStr s) {
+    if (!ArenaStrIsSet(s)) {
+        return {};
+    }
+    char* p = ArenaStrAt(a, s);
+    if (!p) {
+        return {};
+    }
+    uint32_t len = 0;
+    int vlen = VarintGet(p, &len);
+    return Str(p + vlen, (int)len);
+}
+
+uint32_t ArenaOffsetOf(Arena* a, const void* p) {
+    if (!a || !p) {
+        return kArenaPtrNone;
+    }
+    const char* at = (const char*)p;
+    for (Arena* node = a->current; node; node = node->prev) {
+        const char* lo = (const char*)node;
+        if (at < lo || at >= lo + node->pos) {
+            continue;
+        }
+        return (uint32_t)(node->basePos + (uint64_t)(at - lo));
+    }
+    return kArenaPtrNone;
+}
+
+void* Arena::Alloc(int size) {
+    if (size <= 0) {
+        return nullptr;
+    }
+    return Push((uint64_t)size, 8, false);
+}
+
+void Arena::Reset() {
+    PopTo(0);
+    nAllocsSinceReset = 0;
+    peakBytesSinceReset = 0;
+}
+
+void* Alloc(Arena* arena, int size) {
+    if (size <= 0) {
+        return nullptr;
+    }
+    if (!arena) {
+        return malloc(size);
+    }
+    return arena->Alloc(size);
+}
+
+void Free(Arena* arena, void* mem) {
+
+    if (arena) return;
+    free(mem);
+}
+
+static void* Alloc(Arena* arena, size_t size) {
+    if (size == 0) {
+        return nullptr;
+    }
+    if (!arena) {
+        return malloc(size);
+    }
+    return arena->Push((uint64_t)size, 8, false);
+}
+
+static void* Realloc(Arena* arena, void* mem, size_t newSize, size_t copySize) {
+    if (!arena) {
+        return realloc(mem, newSize);
+    }
+
+    if (newSize == 0) {
+        return nullptr;
+    }
+    void* newMem = arena->Push((uint64_t)newSize, 8, false);
+    if (newMem && mem && copySize > 0) {
+
+        size_t n = copySize;
+        n = std::min(n, newSize);
+        memmove(newMem, mem, n);
+    }
+    return newMem;
+}
+
+static void* MemDup(Arena* arena, const void* mem, size_t size,
+                    size_t extraBytes = 0) {
+    void* newMem = Alloc(arena, size + extraBytes);
+    if (!newMem) {
+        return nullptr;
+    }
+    if (mem && size) {
+        memcpy(newMem, mem, size);
+    }
+
+    if (extraBytes > 0) {
+        memset((char*)newMem + size, 0, extraBytes);
+    }
+    return newMem;
+}
+
+static thread_local Arena* gTempArena = nullptr;
+
+Arena* GetTempArena() {
+    if (!gTempArena) {
+        gTempArena = ArenaNew();
+    }
+    return gTempArena;
+}
+
+void ResetTempArena() {
+    if (gTempArena) {
+        gTempArena->Reset();
+    }
+}
+
+void DestroyTempArena() {
+    ArenaDelete(gTempArena);
+    gTempArena = nullptr;
+}
+
+Str AllocStrTemp(int size) {
+    if (size == 0) {
+        return {};
+    }
+    Arena* arena = GetTempArena();
+    char* res = (char*)arena->Push((uint64_t)size + 1, 1, false);
+    res[size] = 0;
+    return Str(res, size);
+}
+
+GPUI_NOINLINE void* ArenaVecAlloc(Arena* a, int count, int elSize, int align,
+                                  int hdrSize) {
+    if (!a || count <= 0 || elSize <= 0 || hdrSize < 0) {
+        return nullptr;
+    }
+    if (align < 8) {
+        align = 8;
+    }
+    if (count > (INT_MAX - hdrSize) / elSize) {
+        return nullptr;
+    }
+    return a->Push((uint64_t)hdrSize + (uint64_t)count * (uint64_t)elSize,
+                   (uint64_t)align, false);
+}
+
+GPUI_NOINLINE bool VecRealloc(Arena* a, void** els, int len, int* cap,
+                              int newCap, int elSize) {
+
+    if (elSize <= 0 || newCap < 0 || newCap > INT_MAX - 1) {
+        return false;
+    }
+    int newElCount = newCap + 1;
+    if (newElCount > INT_MAX / elSize) {
+        return false;
+    }
+
+    int keep = len;
+    keep = std::max(keep, 0);
+    keep = std::min(keep, newCap);
+    int oldSize = keep * elSize;
+    int allocSize = newElCount * elSize;
+
+    void* newEls = Realloc(a, *els, (size_t)allocSize, (size_t)oldSize);
+    if (!newEls) {
+        return false;
+    }
+    int tail = allocSize - oldSize;
+    if (tail > 0) {
+        memset((char*)newEls + oldSize, 0, (size_t)tail);
+    }
+    *els = newEls;
+    *cap = newCap;
+    return true;
+}
+
+static int VecNextCap(int cap, int wanted, int elSize) {
+    if (cap == 0) {
+        int floorCap = elSize == 1 ? 8 : elSize <= 1024 ? 4 : 1;
+        return std::max(floorCap, wanted);
+    }
+    return std::max(cap * 2, wanted);
+}
+
+GPUI_NOINLINE bool VecReserveNT(Arena* arena, VecNonTemplated* v, int elSize,
+                                int wantedSize) {
+    int cap = v->cap;
+    int curCap = cap < 0 ? -cap : cap;
+    if (wantedSize <= curCap) {
+        return true;
+    }
+    int newCap = VecNextCap(curCap, wantedSize, elSize);
+    if (cap < 0) {
+        void* borrowed = v->els;
+        v->els = nullptr;
+        v->cap = 0;
+        if (!VecRealloc(arena, &v->els, 0, &v->cap, newCap, elSize)) {
+            v->els = borrowed;
+            v->cap = -curCap;
+            return false;
+        }
+        if (v->len > 0) {
+            memcpy(v->els, borrowed, (size_t)v->len * (size_t)elSize);
+        }
+        return true;
+    }
+    return VecRealloc(arena, &v->els, v->len, &v->cap, newCap, elSize);
+}
+
+GPUI_NOINLINE void* VecInsertSpaceNT(VecNonTemplated* v, int elSize, int idx,
+                                     int count) {
+    int oldLen = v->len;
+    int newLen = std::max(oldLen, idx) + count;
+    if (!VecReserveNT(nullptr, v, elSize, newLen)) {
+        return nullptr;
+    }
+    char* res = (char*)v->els + (size_t)idx * (size_t)elSize;
+    if (oldLen > idx) {
+        char* dst = res + (size_t)count * (size_t)elSize;
+        memmove(dst, res, (size_t)(oldLen - idx) * (size_t)elSize);
+    }
+    v->len = newLen;
+    return res;
+}
+
+GPUI_NOINLINE bool VecResizeNT(VecNonTemplated* v, int elSize, int newSize) {
+    if (newSize < 0) {
+        return false;
+    }
+    int curCap = v->cap < 0 ? -v->cap : v->cap;
+    if (newSize > curCap) {
+        if (!VecReserveNT(nullptr, v, elSize, newSize)) {
+            return false;
+        }
+        curCap = v->cap < 0 ? -v->cap : v->cap;
+    }
+    v->len = newSize;
+    if (v->els && curCap > newSize) {
+        char* tail = (char*)v->els + (size_t)newSize * (size_t)elSize;
+        memset(tail, 0, (size_t)(curCap - newSize) * (size_t)elSize);
+    }
+    return true;
+}
+
+GPUI_NOINLINE void VecRemoveAtNT(VecNonTemplated* v, int elSize, int idx,
+                                 int count) {
+    int oldLen = v->len;
+    char* els = (char*)v->els;
+    if (oldLen > idx + count) {
+        char* dst = els + (size_t)idx * (size_t)elSize;
+        char* src = els + (size_t)(idx + count) * (size_t)elSize;
+        memmove(dst, src, (size_t)(oldLen - idx - count) * (size_t)elSize);
+    }
+    int newLen = oldLen - count;
+    memset(els + (size_t)newLen * (size_t)elSize, 0,
+           (size_t)count * (size_t)elSize);
+    v->len = newLen;
+}
+
+GPUI_NOINLINE void VecRemoveAtFastNT(VecNonTemplated* v, int elSize, int idx) {
+    int oldLen = v->len;
+    if (idx >= oldLen) {
+        return;
+    }
+    char* els = (char*)v->els;
+    char* removed = els + (size_t)idx * (size_t)elSize;
+    char* last = els + (size_t)(oldLen - 1) * (size_t)elSize;
+    if (removed != last) {
+        memcpy(removed, last, (size_t)elSize);
+    }
+    memset(last, 0, (size_t)elSize);
+    v->len = oldLen - 1;
+}
+
+GPUI_NOINLINE void VecFreeElementsNT(VecNonTemplated* v) {
+    v->len = 0;
+    if (!v->els) {
+        v->cap = 0;
+        return;
+    }
+    if (v->cap > 0) {
+        Free(nullptr, v->els);
+    }
+    v->cap = 0;
+    v->els = nullptr;
+}
+
+GPUI_NOINLINE void VecClearNT(VecNonTemplated* v, int elSize) {
+    v->len = 0;
+    int curCap = v->cap < 0 ? -v->cap : v->cap;
+    if (v->els && curCap > 0) {
+        memset(v->els, 0, (size_t)curCap * (size_t)elSize);
+    }
+}
+
+GPUI_NOINLINE void* VecTakeNT(VecNonTemplated* v, int elSize) {
+    void* els = v->els;
+    if (v->cap < 0) {
+        int n = v->len;
+        v->els = nullptr;
+        v->cap = 0;
+        v->len = 0;
+        if (n <= 0) {
+            return nullptr;
+        }
+        if (!VecRealloc(nullptr, &v->els, 0, &v->cap, n, elSize)) {
+            return nullptr;
+        }
+        void* result = v->els;
+        memcpy(result, els, (size_t)n * (size_t)elSize);
+        v->els = nullptr;
+        v->cap = 0;
+        return result;
+    }
+    v->els = nullptr;
+    v->len = 0;
+    v->cap = 0;
+    return els;
+}
+
+GPUI_NOINLINE void VecCopyFromNT(VecNonTemplated* v, int elSize, int srcLen,
+                                 const void* srcEls, bool zeroTail) {
+    VecReserveNT(nullptr, v, elSize, srcLen);
+    v->len = srcLen;
+    if (srcLen > 0 && srcEls && v->els) {
+        memcpy(v->els, srcEls, (size_t)srcLen * (size_t)elSize);
+    }
+    if (zeroTail && v->els) {
+        int curCap = v->cap < 0 ? -v->cap : v->cap;
+        if (curCap > srcLen) {
+            char* tail = (char*)v->els + (size_t)srcLen * (size_t)elSize;
+            memset(tail, 0, (size_t)(curCap - srcLen) * (size_t)elSize);
+        }
+    }
+}
+
+#if defined(DEBUG)
+
+static FILE* gVecDbgFile = nullptr;
+static bool gVecDbgOpened = false;
+static int gVecDbgNextId = 1;
+
+static void VecDbgClose() {
+    if (gVecDbgFile) {
+        fclose(gVecDbgFile);
+        gVecDbgFile = nullptr;
+    }
+}
+
+static FILE* VecDbgOut() {
+    if (!gVecDbgOpened) {
+        gVecDbgOpened = true;
+        const char* path = getenv("GPUI_VEC_LOG");
+        if (path && *path) {
+            gVecDbgFile = fopen(path, "wb");
+            if (gVecDbgFile) {
+                atexit(VecDbgClose);
+            }
+        }
+    }
+    return gVecDbgFile;
+}
+
+int VecDbgBirth(const char* file, int line, const char* func, char kind,
+                int elSize) noexcept {
+    int id = gVecDbgNextId++;
+    FILE* f = VecDbgOut();
+    if (f) {
+        fprintf(f, "B %d %c %d %s %s:%d\n", id, kind, elSize,
+                (func && *func) ? func : "-", file ? file : "<null>", line);
+    }
+    return id;
+}
+
+void VecDbgGrow(int id, int len, int oldCap, int needed, int newCap) noexcept {
+    FILE* f = VecDbgOut();
+    if (f) {
+        fprintf(f, "G %d %d %d %d %d\n", id, len, oldCap, needed, newCap);
+    }
+}
+
+void VecDbgSegment(int id, int len, int want, int lastSegCap, int newSegCap,
+                   int totalCap, bool reused) noexcept {
+    FILE* f = VecDbgOut();
+    if (f) {
+        fprintf(f, "S %d %d %d %d %d %d %d\n", id, len, want, lastSegCap,
+                newSegCap, totalCap, reused ? 1 : 0);
+    }
+}
+
+void VecDbgDeath(int id, int len, int cap) noexcept {
+    FILE* f = VecDbgOut();
+    if (f) {
+        fprintf(f, "D %d %d %d\n", id, len, cap);
+    }
+}
+
+void VecDbgArenaDeath(int id, int len, int totalCap, int segCount) noexcept {
+    FILE* f = VecDbgOut();
+    if (f) {
+        fprintf(f, "E %d %d %d %d\n", id, len, totalCap, segCount);
+    }
+}
+#endif
+
+static bool StrIsNull(const Str& s) {
+    return !s.s;
+}
+
+static Str WrapAllocated(char* s, int cch = -1) {
+    if (!s) {
+        return {};
+    }
+    if (cch < 0) {
+        return Str(s);
+    }
+    return Str(s, cch);
+}
+
+Str StrDup(Arena* a, Str s) {
+    if (StrIsNull(s) || s.len < 0) {
+        return {};
+    }
+    int cch = s.len;
+    return WrapAllocated(
+        (char*)MemDup(a, s.s, (size_t)cch * sizeof(char), sizeof(char)), cch);
+}
+
+Str StrDup(Str s) {
+    return StrDup(nullptr, s);
+}
+
+void StrDup2(Str s1, Str s2, Str& s1Out, Str& s2Out) {
+    s1Out = {};
+    s2Out = {};
+    int n1 = (!s1.s || s1.len < 0) ? 0 : s1.len;
+    int n2 = (!s2.s || s2.len < 0) ? 0 : s2.len;
+    if (n2 > INT_MAX - 2 - n1) {
+        return;
+    }
+    int n = n1 + n2 + 2;
+    char* p = (char*)Alloc(nullptr, n);
+    if (!p) {
+        return;
+    }
+    if (n1 > 0) {
+        memcpy(p, s1.s, (size_t)n1);
+    }
+    p[n1] = 0;
+    if (n2 > 0) {
+        memcpy(p + n1 + 1, s2.s, (size_t)n2);
+    }
+    p[n1 + 1 + n2] = 0;
+    s1Out = Str(p, n1);
+    s2Out = Str(p + n1 + 1, n2);
+}
+
+void StrFree(Str s) {
+    free(s.s);
+}
+
+void StrFree2(Str s) {
+    StrFree(s);
+}
+
+static bool DateParseIso(const char* s, LocalDate* out) {
+    int part[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++) {
+        if (i > 0) {
+            if (*s != '-') {
+                return false;
+            }
+            s++;
+        }
+        int digits = 0;
+        while (*s >= '0' && *s <= '9') {
+            part[i] = part[i] * 10 + (*s - '0');
+            s++;
+            digits++;
+        }
+        if (digits == 0 || digits > 4) {
+            return false;
+        }
+    }
+    if (*s != 0) {
+        return false;
+    }
+    if (part[0] < 1 || part[1] < 1 || part[1] > 12 || part[2] < 1 ||
+        part[2] > 31) {
+        return false;
+    }
+    out->year = part[0];
+    out->month = part[1];
+    out->day = part[2];
+    return true;
+}
+
+static bool gTodayChecked = false;
+static LocalDate gTodayPinned = {};
+
+LocalDate DateToday() {
+    if (!gTodayChecked) {
+        gTodayChecked = true;
+        const char* env = getenv("GPUI_TODAY");
+        if (env) {
+            LocalDate pinned;
+            if (DateParseIso(env, &pinned)) {
+                gTodayPinned = pinned;
+            }
+        }
+    }
+    if (gTodayPinned.year != 0) {
+        return gTodayPinned;
+    }
+    LocalDate out;
+    time_t now = time(nullptr);
+    struct tm* lt = localtime(&now);
+    if (!lt) {
+        return out;
+    }
+    out.year = lt->tm_year + 1900;
+    out.month = lt->tm_mon + 1;
+    out.day = lt->tm_mday;
+    return out;
+}
+
+LocalDate DateAddDays(LocalDate base, int days) {
+    struct tm t = {};
+    t.tm_year = base.year - 1900;
+    t.tm_mon = base.month - 1;
+    t.tm_mday = base.day + days;
+    t.tm_hour = 12;
+    t.tm_isdst = -1;
+    time_t stamp = mktime(&t);
+    if (stamp == (time_t)-1) {
+        return base;
+    }
+    LocalDate out;
+    out.year = t.tm_year + 1900;
+    out.month = t.tm_mon + 1;
+    out.day = t.tm_mday;
+    return out;
+}
+
+void StrLowerAscii(char* s) {
+    if (!s) {
+        return;
+    }
+    for (; *s; s++) {
+        if (*s >= 'A' && *s <= 'Z') {
+            *s = (char)(*s - 'A' + 'a');
+        }
+    }
+}
+
+GPUI_NOINLINE bool StrEqRest(Str s1, Str s2) {
+    if (s1.s == s2.s || s1.len == 0) {
+        return true;
+    }
+    if (!s1.s || !s2.s) {
+        return false;
+    }
+    return memcmp(s1.s, s2.s, (size_t)s1.len) == 0;
+}
+
+bool StrEq(Str s1, const char* s2) {
+    return StrEq(s1, Str(s2));
+}
+
+GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2) {
+    if (s1.s == s2.s || s1.len == 0) {
+        return true;
+    }
+    if (StrIsNull(s1) || StrIsNull(s2)) {
+        return false;
+    }
+    return 0 == StrCmpNI(s1.s, s2.s, s1.len);
+}
+
+bool StrEqI(Str s1, const char* s2) {
+    return StrEqI(s1, Str(s2));
+}
+
+bool StrStartsWith(Str s, Str prefix) {
+    if (prefix.len > s.len) {
+        return false;
+    }
+    if (prefix.len == 0) {
+        return true;
+    }
+    return s.s && prefix.s && StrEq(Str(s.s, prefix.len), prefix);
+}
+
+bool StrStartsWith(Str s, const char* prefix) {
+    return StrStartsWith(s, Str(prefix));
+}
+
+bool StrStartsWithI(Str s, const char* prefix) {
+    return StrStartsWithI(s, Str(prefix));
+}
+
+bool StrEndsWith(Str s, Str suffix) {
+    if (suffix.len > s.len) {
+        return false;
+    }
+    if (suffix.len == 0) {
+        return true;
+    }
+    return s.s && suffix.s &&
+           StrEq(Str(s.s + s.len - suffix.len, suffix.len), suffix);
+}
+
+bool StrEndsWith(Str s, const char* suffix) {
+    return StrEndsWith(s, Str(suffix));
+}
+
+bool StrEndsWithI(Str s, Str suffix) {
+    if (suffix.len > s.len) {
+        return false;
+    }
+    if (suffix.len == 0) {
+        return true;
+    }
+    return s.s && suffix.s &&
+           StrEqI(Str(s.s + s.len - suffix.len, suffix.len), suffix);
+}
+
+bool StrEndsWithI(Str s, const char* suffix) {
+    return StrEndsWithI(s, Str(suffix));
+}
+
+int StrFind(Str s, Str sub) {
+    if (!s.s || !sub.s || sub.len <= 0 || sub.len > s.len) {
+        return -1;
+    }
+    for (int off = 0; off + sub.len <= s.len; off++) {
+        if (StrEq(Str(s.s + off, sub.len), sub)) {
+            return off;
+        }
+    }
+    return -1;
+}
+
+int StrFind(Str s, const char* sub) {
+    return StrFind(s, Str(sub));
+}
+
+int StrFindI(Str s, Str sub) {
+    if (!s.s || !sub.s || sub.len <= 0 || sub.len > s.len) {
+        return -1;
+    }
+    for (int off = 0; off + sub.len <= s.len; off++) {
+        if (StrEqI(Str(s.s + off, sub.len), sub)) {
+            return off;
+        }
+    }
+    return -1;
+}
+
+int StrFindI(Str s, const char* sub) {
+    return StrFindI(s, Str(sub));
+}
+
+bool StrContains(Str s, Str sub) {
+    return StrFind(s, sub) >= 0;
+}
+
+bool StrContainsI(Str s, Str sub) {
+    return StrFindI(s, sub) >= 0;
+}
+
+static bool IsStrTrimAscii(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+Str StrTrimAscii(Str s) {
+    if (!s.s || s.len <= 0) {
+        return s;
+    }
+    int start = 0;
+    int end = s.len;
+    while (start < end && IsStrTrimAscii(s.s[start])) {
+        start++;
+    }
+    while (end > start && IsStrTrimAscii(s.s[end - 1])) {
+        end--;
+    }
+    return Str(s.s + start, end - start);
+}
+
+Str StrReplaceAll(Str value, Str from, Str to) {
+    if (from.len == 0 || from.len > value.len) {
+        return value;
+    }
+    int count = 0;
+    for (int i = 0; i <= value.len - from.len;) {
+        if (StrEq(Str(value.s + i, from.len), from)) {
+            count++;
+            i += from.len;
+        } else {
+            i++;
+        }
+    }
+    if (count == 0) {
+        return value;
+    }
+    int resultLen = value.len + count * (to.len - from.len);
+    Str result = AllocStrTemp(resultLen + 1);
+    if (!result.s) {
+        return value;
+    }
+    int src = 0;
+    int dst = 0;
+    while (src < value.len) {
+        if (src <= value.len - from.len &&
+            StrEq(Str(value.s + src, from.len), from)) {
+            memcpy(result.s + dst, to.s, (size_t)to.len);
+            src += from.len;
+            dst += to.len;
+        } else {
+            result.s[dst++] = value.s[src++];
+        }
+    }
+    result.s[dst] = 0;
+    result.len = dst;
+    return result;
+}
+
+Str SeqStrAt(SeqStrings strs, int off) {
+    if (!strs || off < 0 || !strs[off]) {
+        return {};
+    }
+    return Str(strs + off);
+}
+
+bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut) {
+    if (!strs || off < 0 || !strs[off]) {
+        off = -1;
+        if (idxInOut) {
+            *idxInOut = -1;
+        }
+        return false;
+    }
+    off += (int)strlen(strs + off) + 1;
+    if (!strs[off]) {
+        off = -1;
+        return false;
+    }
+    if (idxInOut) {
+        (*idxInOut)++;
+    }
+    return true;
+}
+
+static int SeqStrIndexCmp(SeqStrings strs, Str toFind, bool ignoreCase) {
+    if (!strs || !toFind) {
+        return -1;
+    }
+    int off = 0;
+    int idx = 0;
+    while (strs[off]) {
+        Str at = SeqStrAt(strs, off);
+        bool same = ignoreCase ? StrEqI(at, toFind) : StrEq(at, toFind);
+        if (same) {
+            return idx;
+        }
+        if (!SeqStrAdvance(strs, off)) {
+            break;
+        }
+        idx++;
+    }
+    return -1;
+}
+
+int SeqStrIndex(SeqStrings strs, Str toFind) {
+    return SeqStrIndexCmp(strs, toFind, false);
+}
+
+int SeqStrIndexIS(SeqStrings strs, Str toFind) {
+    return SeqStrIndexCmp(strs, toFind, true);
+}
+
+Str SeqStrByIndex(SeqStrings strs, int idx) {
+    if (idx < 0) {
+        return {};
+    }
+    int off = 0;
+    while (idx > 0) {
+        if (!SeqStrAdvance(strs, off)) {
+            return {};
+        }
+        idx--;
+    }
+    return SeqStrAt(strs, off);
+}
+
+int SeqStrCount(SeqStrings strs) {
+    if (!strs || !strs[0]) {
+        return 0;
+    }
+    int off = 0;
+    int n = 1;
+    while (SeqStrAdvance(strs, off)) {
+        n++;
+    }
+    return n;
+}
+
+static bool IsDigit(char c) {
+    return ('0' <= c) && (c <= '9');
+}
+
+static constexpr int kPadding = 1;
+
+static bool IsNotOurHeapBlock(const StrBuilder& b) {
+    return !b.els || b.cap < 0;
+}
+
+static void StrBuilderTerminate(StrBuilder& b) {
+    if (b.els) {
+        b.els[b.len] = 0;
+    }
+}
+
+static char* StrBuilderEnsureCap(Arena* a, StrBuilder& b, int needed) {
+    char* els = VecReserve(a, b, needed);
+    if (!els) {
+        return nullptr;
+    }
+    if (a && b.cap > 0) {
+        b.cap = -b.cap;
+    }
+    return els;
+}
+
+void StrBuilder::Reset(Str s) {
+
+    len = 0;
+    StrBuilderTerminate(*this);
+    Append(s);
+}
+
+void StrBuilderUseExternalBuffer(StrBuilder& b, Str buf) {
+    if (b.els || b.len != 0) {
+        return;
+    }
+    if (buf.s && buf.len > kPadding) {
+        b.els = buf.s;
+        b.cap = -(buf.len - kPadding);
+        b.els[0] = 0;
+    }
+}
+
+bool StrBuilderReserve(Arena* a, StrBuilder& b, int cap) {
+    if (!StrBuilderEnsureCap(a, b, cap)) {
+        return false;
+    }
+    StrBuilderTerminate(b);
+    return true;
+}
+
+bool StrBuilderAppendChar(Arena* a, StrBuilder& b, char c) {
+    if (!StrBuilderEnsureCap(a, b, b.len + 1)) {
+        return false;
+    }
+    b.els[b.len++] = c;
+    StrBuilderTerminate(b);
+    return true;
+}
+
+bool StrBuilderAppend(Arena* a, StrBuilder& b, Str src) {
+    if (StrIsNull(src) || 0 == src.len) {
+        return true;
+    }
+    if (!StrBuilderEnsureCap(a, b, b.len + src.len)) {
+        return false;
+    }
+    memcpy(b.els + b.len, src.s, (size_t)src.len);
+    b.len += src.len;
+    StrBuilderTerminate(b);
+    return true;
+}
+
+bool StrBuilder::AppendChar(char c) {
+    return StrBuilderAppendChar(nullptr, *this, c);
+}
+
+bool StrBuilder::Append(Str src) {
+    return StrBuilderAppend(nullptr, *this, src);
+}
+
+char StrBuilder::RemoveAt(int idx, int count) {
+    char result = els[idx];
+
+    VecRemoveAtN(*this, idx, count);
+    return result;
+}
+
+char StrBuilder::RemoveLast() {
+    return len == 0 ? 0 : RemoveAt(len - 1);
+}
+
+Str StrBuilderTakeStr(Arena* a, StrBuilder& b) {
+    int n = b.len;
+    char* res = b.els;
+    if (!b.els || n == 0) {
+        b.Reset();
+        return Str{};
+    }
+    if (IsNotOurHeapBlock(b)) {
+
+        res = (char*)MemDup(a, b.els, (size_t)n + kPadding);
+    } else {
+
+        b.els = nullptr;
+        b.cap = 0;
+    }
+    b.Reset();
+    return Str(res, n);
+}
+
+Str StrBuilder::TakeStr() {
+    return StrBuilderTakeStr(nullptr, *this);
+}
+
+char StrBuilder::LastChar() const {
+    return len == 0 ? 0 : els[len - 1];
+}
+
+struct Inst {
+    FmtArg::Kind t = FmtArg::Kind::None;
+    int argNo = 0;
+    int rawOff = 0;
+
+    int sLen = 0;
+
+    char conv = 0;
+    int intBits = 0;
+    int fwpOff = 0;
+    int fwpLen = 0;
+    int width = 0;
+    int prec = -1;
+    bool leftJust = false;
+};
+
+struct Fmt {
+    Fmt() = default;
+    ~Fmt() = default;
+
+    Arena* a = nullptr;
+
+    bool Eval(const FmtArg** args, int nArgs);
+
+    bool isOk =
+        true;
+
+    Str format;
+    Inst instructions[32]{};
+    int nInst = 0;
+
+    int currArgNo = 0;
+    int currPercArgNo = 0;
+    StrBuilder res;
+
+    char buf[256] = {};
+};
+
+static void addRawStr(Fmt& fmt, int off, size_t n) {
+    if (n == 0) {
+        return;
+    }
+    auto& i = fmt.instructions[fmt.nInst++];
+    i.t = FmtArg::Kind::RawStr;
+    i.rawOff = off;
+    i.sLen = (int)n;
+    i.argNo = -1;
+}
+
+static int parseArgDefBrace(Fmt& fmt, int off) {
+    off++;
+    int n = 0;
+    bool positional = false;
+
+    while (off < fmt.format.len && fmt.format.s[off] != '}') {
+        if (!IsDigit(fmt.format.s[off])) {
+            fmt.isOk = false;
+            return off;
+        }
+        n = (n * 10) + (fmt.format.s[off] - '0');
+        positional = true;
+        off++;
+    }
+    if (off >= fmt.format.len) {
+        fmt.isOk = false;
+        return off;
+    }
+    if (fmt.nInst >= (int)dimof(fmt.instructions)) {
+        fmt.isOk = false;
+        return off;
+    }
+    auto& i = fmt.instructions[fmt.nInst++];
+    i.t = FmtArg::Kind::Any;
+
+    i.argNo = positional ? n : fmt.currPercArgNo++;
+    return off + 1;
+}
+
+static FmtArg::Kind typeFromConv(char c) {
+    switch (c) {
+        case 'c':
+            return FmtArg::Kind::Char;
+        case 'd':
+        case 'i':
+        case 'u':
+        case 'o':
+        case 'x':
+        case 'X':
+            return FmtArg::Kind::Int;
+        case 'p':
+            return FmtArg::Kind::Ptr;
+        case 'f':
+        case 'F':
+        case 'e':
+        case 'E':
+        case 'g':
+        case 'G':
+        case 'a':
+        case 'A':
+            return FmtArg::Kind::Float;
+        case 's':
+        case 'S':
+            return FmtArg::Kind::Str;
+        case 'v':
+            return FmtArg::Kind::Any;
+        default:
+            break;
+    }
+    return FmtArg::Kind::None;
+}
+
+static bool startsWith(Str s, int off, const char* prefix) {
+    int i = 0;
+    while (prefix[i]) {
+        if (off + i >= s.len || s.s[off + i] != prefix[i]) {
+            return false;
+        }
+        i++;
+    }
+    return true;
+}
+
+static int parseArgDefPerc(Fmt& fmt, int off) {
+    Str f = fmt.format;
+    off++;
+    int fwpStart = off;
+    bool leftJust = false;
+
+    while (off < f.len &&
+           (f.s[off] == '-' || f.s[off] == '+' || f.s[off] == ' ' ||
+            f.s[off] == '0' || f.s[off] == '#')) {
+        if (f.s[off] == '-') {
+            leftJust = true;
+        }
+        off++;
+    }
+
+    int width = 0;
+    while (off < f.len && IsDigit(f.s[off])) {
+        width = (width * 10) + (f.s[off] - '0');
+        off++;
+    }
+
+    int prec = -1;
+    if (off < f.len && f.s[off] == '.') {
+        off++;
+        prec = 0;
+        while (off < f.len && IsDigit(f.s[off])) {
+            prec = (prec * 10) + (f.s[off] - '0');
+            off++;
+        }
+    }
+    int fwpEnd = off;
+
+    int bits = 32;
+    char lenMod = (off < f.len) ? f.s[off] : 0;
+    bool is32BitLenMod =
+        lenMod == 'l' || lenMod == 'h' || lenMod == 'L' || lenMod == 'w';
+
+    bool is64BitLenMod =
+        lenMod == 'z' || lenMod == 'j' || lenMod == 't' || lenMod == 'I';
+    if (startsWith(f, off, "I64")) {
+        bits = 64;
+        off += 3;
+    } else if (startsWith(f, off, "I32")) {
+        off += 3;
+    } else if (startsWith(f, off, "ll")) {
+        bits = 64;
+        off += 2;
+    } else if (startsWith(f, off, "hh")) {
+        off += 2;
+    } else if (is32BitLenMod) {
+        off++;
+    } else if (is64BitLenMod) {
+        bits = 64;
+        off++;
+    }
+    char conv = (off < f.len) ? f.s[off] : 0;
+    off++;
+
+    auto& i = fmt.instructions[fmt.nInst++];
+    i.t = typeFromConv(conv);
+    i.argNo = fmt.currPercArgNo++;
+    i.conv = conv;
+    i.intBits = bits;
+    i.fwpOff = fwpStart;
+    i.fwpLen = fwpEnd - fwpStart;
+    i.width = width;
+    i.prec = prec;
+    i.leftJust = leftJust;
+    return off;
+}
+
+static bool hasInstructionWithArgNo(Inst* insts, int nInst, int argNo) {
+    for (int i = 0; i < nInst; i++) {
+        if (insts[i].argNo == argNo) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool isIntLike(FmtArg::Kind t) {
+    return t == FmtArg::Kind::Char || t == FmtArg::Kind::Int ||
+           t == FmtArg::Kind::Ptr;
+}
+
+static bool validArgTypes(FmtArg::Kind instType, FmtArg::Kind argType) {
+    if (instType == FmtArg::Kind::Any || instType == FmtArg::Kind::RawStr) {
+        return true;
+    }
+
+    if (instType == FmtArg::Kind::Char || instType == FmtArg::Kind::Int ||
+        instType == FmtArg::Kind::Ptr) {
+        return isIntLike(argType);
+    }
+    if (instType == FmtArg::Kind::Float) {
+        return argType == FmtArg::Kind::Float ||
+               argType == FmtArg::Kind::Double;
+    }
+    if (instType == FmtArg::Kind::Str) {
+        return argType == FmtArg::Kind::Str;
+    }
+    return false;
+}
+
+static bool ParseFormat(Fmt& o, Str fmtStr) {
+    o.format = fmtStr;
+    o.nInst = 0;
+    o.currPercArgNo = 0;
+    o.currArgNo = 0;
+    o.res.Reset();
+
+    int start = 0;
+    int off = 0;
+    while (off < fmtStr.len && fmtStr.s[off]) {
+        char c = fmtStr.s[off];
+        if ('%' == c) {
+
+            if (off + 1 < fmtStr.len && '%' == fmtStr.s[off + 1]) {
+                addRawStr(o, start, off - start);
+                start = off + 1;
+                off += 2;
+                continue;
+            }
+            addRawStr(o, start, off - start);
+            if (off + 1 < fmtStr.len && '{' == fmtStr.s[off + 1]) {
+                off = parseArgDefBrace(o, off + 1);
+            } else {
+                off = parseArgDefPerc(o, off);
+            }
+            start = off;
+            continue;
+        }
+        off++;
+    }
+    addRawStr(o, start, off - start);
+
+    int maxArgNo = -1;
+
+    for (int i = 0; i < o.nInst; i++) {
+        if (o.instructions[i].t == FmtArg::Kind::RawStr) {
+            continue;
+        }
+        maxArgNo = std::max(o.instructions[i].argNo, maxArgNo);
+    }
+
+    for (int i = 0; i <= maxArgNo; i++) {
+        bool isOk = hasInstructionWithArgNo(o.instructions, o.nInst, i);
+        if (!isOk) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static Str bufFmt(Str buf, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int n = VsnprintfUtf8(buf, fmt, args);
+    va_end(args);
+    buf.s[buf.len - 1] = 0;
+
+    if (n < 0 || n >= buf.len) {
+        n = (int)strlen(buf.s);
+    }
+    return Str(buf.s, n);
+}
+
+static void evalDefault(Fmt& fmt, const FmtArg& arg) {
+    Str buf(fmt.buf, (int)dimof(fmt.buf));
+    switch (arg.t) {
+        case FmtArg::Kind::Char:
+            StrBuilderAppendChar(fmt.a, fmt.res, arg.c);
+            break;
+        case FmtArg::Kind::Int:
+            StrBuilderAppend(fmt.a, fmt.res,
+                             bufFmt(buf, "%lld", (long long)arg.i));
+            break;
+        case FmtArg::Kind::Ptr:
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%p", arg.ptr));
+            break;
+        case FmtArg::Kind::Float:
+
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", (double)arg.f));
+            break;
+        case FmtArg::Kind::Double:
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", arg.d));
+            break;
+        case FmtArg::Kind::Str:
+            StrBuilderAppend(fmt.a, fmt.res, arg.str);
+            break;
+        default:
+            break;
+    }
+}
+
+static int64_t argToI64(const FmtArg& arg) {
+    switch (arg.t) {
+        case FmtArg::Kind::Char:
+            return (int64_t)arg.c;
+        case FmtArg::Kind::Ptr:
+            return (int64_t)(intptr_t)arg.ptr;
+        default:
+            return arg.i;
+    }
+}
+
+static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
+    Str bufS(fmt.buf, (int)dimof(fmt.buf));
+
+    if (inst.conv == 's' || inst.conv == 'S') {
+        Str sv = arg.str;
+        int slen = sv.len;
+        if (inst.prec >= 0 && inst.prec < slen) {
+            slen = inst.prec;
+        }
+        int pad = inst.width - slen;
+        pad = std::max(pad, 0);
+        if (!inst.leftJust) {
+            for (int j = 0; j < pad; j++) {
+                StrBuilderAppendChar(fmt.a, fmt.res, ' ');
+            }
+        }
+        StrBuilderAppend(fmt.a, fmt.res, Str(sv.s, slen));
+        if (inst.leftJust) {
+            for (int j = 0; j < pad; j++) {
+                StrBuilderAppendChar(fmt.a, fmt.res, ' ');
+            }
+        }
+        return;
+    }
+
+    char fbuf[64];
+    int k = 0;
+    fbuf[k++] = '%';
+    for (int j = 0; j < inst.fwpLen && k < (int)dimof(fbuf) - 5; j++) {
+        fbuf[k++] = fmt.format.s[inst.fwpOff + j];
+    }
+    char conv = inst.conv;
+    int64_t ival = argToI64(arg);
+
+    Str out;
+    switch (conv) {
+        case 'd':
+        case 'i':
+            if (inst.intBits == 64) {
+                fbuf[k++] = 'l';
+                fbuf[k++] = 'l';
+                fbuf[k++] = 'd';
+                fbuf[k] = 0;
+                out = bufFmt(bufS, fbuf, (long long)ival);
+            } else {
+                fbuf[k++] = 'd';
+                fbuf[k] = 0;
+                out = bufFmt(bufS, fbuf, (int)ival);
+            }
+            StrBuilderAppend(fmt.a, fmt.res, out);
+            break;
+        case 'u':
+        case 'o':
+        case 'x':
+        case 'X':
+            if (inst.intBits == 64) {
+                fbuf[k++] = 'l';
+                fbuf[k++] = 'l';
+                fbuf[k++] = conv;
+                fbuf[k] = 0;
+                out = bufFmt(bufS, fbuf, (unsigned long long)ival);
+            } else {
+                fbuf[k++] = conv;
+                fbuf[k] = 0;
+                out =
+                    bufFmt(bufS, fbuf, (unsigned int)(unsigned long long)ival);
+            }
+            StrBuilderAppend(fmt.a, fmt.res, out);
+            break;
+        case 'c':
+            fbuf[k++] = 'c';
+            fbuf[k] = 0;
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, fbuf, (int)ival));
+            break;
+        case 'f':
+        case 'F':
+        case 'e':
+        case 'E':
+        case 'g':
+        case 'G':
+        case 'a':
+        case 'A': {
+            fbuf[k++] = conv;
+            fbuf[k] = 0;
+            double dv = (arg.t == FmtArg::Kind::Double) ? arg.d : (double)arg.f;
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, fbuf, dv));
+        } break;
+        case 'p': {
+
+            const void* pv = (arg.t == FmtArg::Kind::Ptr)
+                                 ? arg.ptr
+                                 : (const void*)(intptr_t)ival;
+            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, "%p", pv));
+        } break;
+        default:
+            break;
+    }
+}
+
+bool Fmt::Eval(const FmtArg** args, int nArgs) {
+    if (!isOk) {
+
+        return false;
+    }
+
+    for (int n = 0; n < nInst; n++) {
+        auto& inst = instructions[n];
+
+        if (inst.t == FmtArg::Kind::RawStr) {
+            StrBuilderAppend(a, res, Str(format.s + inst.rawOff, inst.sLen));
+            continue;
+        }
+
+        int argNo = inst.argNo;
+        if (argNo < 0 || argNo >= nArgs) {
+            isOk = false;
+            return false;
+        }
+
+        const FmtArg& arg = *args[argNo];
+        isOk = validArgTypes(inst.t, arg.t);
+        if (!isOk) {
+            return false;
+        }
+
+        if (inst.t == FmtArg::Kind::Any) {
+            evalDefault(*this, arg);
+        } else {
+            evalPercInst(*this, inst, arg);
+        }
+    }
+    return true;
+}
+
+static Str FormatArgs(Arena* a, const char* fmt, const FmtArg** args,
+                      int nArgs) {
+
+    while (nArgs > 0 && args[nArgs - 1]->t == FmtArg::Kind::None) {
+        nArgs--;
+    }
+
+    if (nArgs == 0) {
+
+        bool hasDirective = false;
+        for (const char* p = fmt; p && *p; p++) {
+            if (*p == '%') {
+                hasDirective = true;
+                break;
+            }
+        }
+        if (!hasDirective) {
+            return StrDup(a, Str(fmt));
+        }
+    }
+
+    Fmt f;
+
+    f.a = a;
+    bool ok = ParseFormat(f, Str(fmt));
+    if (!ok) {
+        return {};
+    }
+    ok = f.Eval(args, nArgs);
+    if (!ok) {
+        return {};
+    }
+    return StrBuilderTakeStr(f.a, f.res);
+}
+
+TempStr FormatTempArgs(const char* fmt, const FmtArg** args, int nArgs) {
+    return FormatArgs(GetTempArena(), fmt, args, nArgs);
+}
+
+#if defined(_MSC_VER)
+static _locale_t GetUtf8FormatLocale() {
+
+    struct Locale {
+        _locale_t loc = _create_locale(LC_ALL, ".UTF-8");
+        ~Locale() {
+            if (loc) {
+                _free_locale(loc);
+                loc = nullptr;
+            }
+        }
+    };
+    static Locale l;
+    return l.loc;
+}
+#endif
+
+static int VsnprintfUtf8(Str buf, const char* fmt, va_list args) {
+#if defined(_MSC_VER)
+    _locale_t loc = GetUtf8FormatLocale();
+    if (loc) {
+        return _vsnprintf_l(buf.s, (size_t)buf.len, fmt, loc, args);
+    }
+#endif
+    return vsnprintf(buf.s, (size_t)buf.len, fmt, args);
+}
+}
+
+#line 1 "src/markdown-mini/markdown.cpp"
+
+namespace markdown {
+
+using base::Alloc;
+
+struct MiniParser {
+    Arena* a = nullptr;
+    Str source = {};
+    const ParseOptions* options = nullptr;
+};
+
+struct MiniLine {
+    int32_t start = 0;
+    int32_t end = 0;
+    int32_t next = 0;
+};
+
+struct MiniListMarker {
+    bool valid = false;
+    bool ordered = false;
+    int32_t start = 1;
+    int32_t indent = 0;
+    int32_t content = 0;
+};
+
+static bool MiniSpace(char c) {
+    return c == ' ' || c == '\t';
+}
+
+static bool MiniDigit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static bool MiniHex(char c) {
+    return MiniDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static bool MiniPunctuation(char c) {
+    switch (c) {
+        case '!':
+        case '"':
+        case '#':
+        case '$':
+        case '%':
+        case '&':
+        case '\'':
+        case '(':
+        case ')':
+        case '*':
+        case '+':
+        case ',':
+        case '-':
+        case '.':
+        case '/':
+        case ':':
+        case ';':
+        case '<':
+        case '=':
+        case '>':
+        case '?':
+        case '@':
+        case '[':
+        case '\\':
+        case ']':
+        case '^':
+        case '_':
+        case '`':
+        case '{':
+        case '|':
+        case '}':
+        case '~':
+            return true;
+        default:
+            return false;
+    }
+}
+
+static Str MiniSlice(Str s, int32_t start, int32_t end) {
+    if (!s.s || start < 0 || end < start || end > s.len) {
+        return {};
+    }
+    return Str(s.s + start, end - start);
+}
+
+static Str MiniTrim(Str s) {
+    int32_t start = 0;
+    int32_t end = s.len;
+    while (start < end && MiniSpace(s.s[start])) {
+        start++;
+    }
+    while (end > start && MiniSpace(s.s[end - 1])) {
+        end--;
+    }
+    return MiniSlice(s, start, end);
+}
+
+static Str MiniOwn(Arena* a, Str s) {
+    char* out = (char*)Alloc(a, s.len + 1);
+    if (!out) {
+        return {};
+    }
+    if (s.len > 0) {
+        memcpy(out, s.s, (size_t)s.len);
+    }
+    out[s.len] = 0;
+    return Str(out, s.len);
+}
+
+static MiniLine MiniReadLine(Str source, int32_t at) {
+    MiniLine line;
+    line.start = at;
+    while (at < source.len && source.s[at] != '\n' && source.s[at] != '\r') {
+        at++;
+    }
+    line.end = at;
+    if (at < source.len && source.s[at] == '\r') {
+        at++;
+        if (at < source.len && source.s[at] == '\n') {
+            at++;
+        }
+    } else if (at < source.len) {
+        at++;
+    }
+    line.next = at;
+    return line;
+}
+
+static Str MiniLineText(Str source, const MiniLine& line) {
+    return MiniSlice(source, line.start, line.end);
+}
+
+static int32_t MiniIndent(Str line) {
+    int32_t n = 0;
+    while (n < line.len && n < 4) {
+        if (line.s[n] == ' ') {
+            n++;
+        } else if (line.s[n] == '\t') {
+            return 4;
+        } else {
+            break;
+        }
+    }
+    return n;
+}
+
+static bool MiniBlank(Str line) {
+    for (int32_t i = 0; i < line.len; i++) {
+        if (!MiniSpace(line.s[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static Node* MiniNode(MiniParser* p, NodeKind kind, Node* parent) {
+    Node* node = NodeNew(p->a, kind);
+    if (node && parent) {
+        NodeAddChild(p->a, parent, node);
+    }
+    return node;
+}
+
+static void MiniText(MiniParser* p, Node* parent, Str value) {
+    if (value.len <= 0) {
+        return;
+    }
+    Node* text = MiniNode(p, NodeKind::Text, parent);
+    if (text) {
+        NodeSetStr(p->a, text, NodeStrKind::Value, value);
+    }
+}
+
+static int32_t MiniFind(Str text, int32_t at, char marker, int32_t count) {
+    for (int32_t i = at; i + count <= text.len; i++) {
+        if (text.s[i] == '\\') {
+            i++;
+            continue;
+        }
+        int32_t n = 0;
+        while (i + n < text.len && text.s[i + n] == marker) {
+            n++;
+        }
+        if (n >= count && i > at && !MiniSpace(text.s[i - 1])) {
+            return i;
+        }
+        i += n > 0 ? n - 1 : 0;
+    }
+    return -1;
+}
+
+static int32_t MiniBracketEnd(Str text, int32_t at) {
+    int32_t depth = 1;
+    for (int32_t i = at; i < text.len; i++) {
+        if (text.s[i] == '\\' && i + 1 < text.len) {
+            i++;
+            continue;
+        }
+        if (text.s[i] == '[') {
+            depth++;
+        } else if (text.s[i] == ']' && --depth == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int32_t MiniResourceEnd(Str text, int32_t at) {
+    int32_t depth = 1;
+    char quote = 0;
+    for (int32_t i = at; i < text.len; i++) {
+        char c = text.s[i];
+        if (c == '\\' && i + 1 < text.len) {
+            i++;
+            continue;
+        }
+        if (quote) {
+            if (c == quote) {
+                quote = 0;
+            }
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            quote = c;
+        } else if (c == '(') {
+            depth++;
+        } else if (c == ')' && --depth == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void MiniInline(MiniParser* p, Node* parent, Str text);
+
+static bool MiniLink(MiniParser* p, Node* parent, Str text, int32_t at,
+                     int32_t* after) {
+    bool image = text.s[at] == '!';
+    int32_t open = at + (image ? 1 : 0);
+    if (open >= text.len || text.s[open] != '[') {
+        return false;
+    }
+    if (image && !p->options->constructs.labelStartImage) {
+        return false;
+    }
+    if (!image && !p->options->constructs.labelStartLink) {
+        return false;
+    }
+    int32_t close = MiniBracketEnd(text, open + 1);
+    if (close < 0 || close + 1 >= text.len || text.s[close + 1] != '(') {
+        return false;
+    }
+    int32_t resourceEnd = MiniResourceEnd(text, close + 2);
+    if (resourceEnd < 0) {
+        return false;
+    }
+
+    Str body = MiniTrim(MiniSlice(text, close + 2, resourceEnd));
+    Str url = {};
+    Str title = {};
+    if (body.len > 1 && body.s[0] == '<') {
+        int32_t end = 1;
+        while (end < body.len && body.s[end] != '>') {
+            end++;
+        }
+        if (end >= body.len) {
+            return false;
+        }
+        url = MiniSlice(body, 1, end);
+        body = MiniTrim(MiniSlice(body, end + 1, body.len));
+    } else {
+        int32_t end = 0;
+        int32_t depth = 0;
+        while (end < body.len) {
+            char c = body.s[end];
+            if (c == '(') {
+                depth++;
+            } else if (c == ')' && depth > 0) {
+                depth--;
+            } else if (MiniSpace(c) && depth == 0) {
+                break;
+            }
+            end++;
+        }
+        url = MiniSlice(body, 0, end);
+        body = MiniTrim(MiniSlice(body, end, body.len));
+    }
+    if (body.len >= 2) {
+        char first = body.s[0];
+        char last = body.s[body.len - 1];
+        if ((first == '"' && last == '"') || (first == '\'' && last == '\'') ||
+            (first == '(' && last == ')')) {
+            title = MiniSlice(body, 1, body.len - 1);
+        }
+    }
+
+    Str label = MiniSlice(text, open + 1, close);
+    Node* node = MiniNode(p, image ? NodeKind::Image : NodeKind::Link, parent);
+    if (!node) {
+        return false;
+    }
+    NodeSetStr(p->a, node, NodeStrKind::Url, url);
+    NodeSetStr(p->a, node, NodeStrKind::Title, title);
+    if (image) {
+        NodeSetStr(p->a, node, NodeStrKind::Alt, label);
+    } else {
+        MiniInline(p, node, label);
+    }
+    *after = resourceEnd + 1;
+    return true;
+}
+
+static int32_t MiniUtf8(char out[4], uint32_t cp) {
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xc0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3f));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xe0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+        out[2] = (char)(0x80 | (cp & 0x3f));
+        return 3;
+    }
+    out[0] = (char)(0xf0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
+    out[3] = (char)(0x80 | (cp & 0x3f));
+    return 4;
+}
+
+static bool MiniEntity(MiniParser* p, Str text, int32_t at, int32_t* after,
+                       Str* value) {
+    int32_t semi = at + 1;
+    while (semi < text.len && semi - at <= 33 && text.s[semi] != ';' &&
+           !MiniSpace(text.s[semi])) {
+        semi++;
+    }
+    if (semi >= text.len || text.s[semi] != ';' || semi == at + 1) {
+        return false;
+    }
+    Str name = MiniSlice(text, at + 1, semi);
+    if (name.s[0] == '#') {
+        int32_t start = 1;
+        int radix = 10;
+        if (start < name.len &&
+            (name.s[start] == 'x' || name.s[start] == 'X')) {
+            start++;
+            radix = 16;
+        }
+        if (start == name.len) {
+            return false;
+        }
+        for (int32_t i = start; i < name.len; i++) {
+            if ((radix == 10 && !MiniDigit(name.s[i])) ||
+                (radix == 16 && !MiniHex(name.s[i]))) {
+                return false;
+            }
+        }
+        *value = DecodeNumeric(p->a, MiniSlice(name, start, name.len), radix);
+    } else {
+        *value = DecodeNamed(p->a, name);
+    }
+    if (!value->s) {
+        return false;
+    }
+    *after = semi + 1;
+    return true;
+}
+
+static void MiniInline(MiniParser* p, Node* parent, Str text) {
+    int32_t plain = 0;
+    int32_t at = 0;
+    while (at < text.len) {
+        int32_t after = at;
+        NodeKind markKind = NodeKind::Text;
+        int32_t close = -1;
+        char c = text.s[at];
+
+        bool linkStart = c == '[' || (c == '!' && at + 1 < text.len &&
+                                      text.s[at + 1] == '[');
+        bool linkEnabled = p->options->constructs.labelEnd &&
+                           (c == '!' ? p->options->constructs.labelStartImage
+                                     : p->options->constructs.labelStartLink);
+        if (linkStart && linkEnabled) {
+            int32_t labelOpen = at + (c == '!' ? 1 : 0);
+            int32_t labelClose = MiniBracketEnd(text, labelOpen + 1);
+            if (labelClose >= 0 && labelClose + 1 < text.len &&
+                text.s[labelClose + 1] == '(') {
+                int32_t resourceEnd = MiniResourceEnd(text, labelClose + 2);
+                if (resourceEnd >= 0) {
+                    if (at > plain) {
+                        MiniText(p, parent, MiniSlice(text, plain, at));
+                    }
+                    if (MiniLink(p, parent, text, at, &after)) {
+                        at = after;
+                        plain = at;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if (p->options->constructs.codeText && c == '`') {
+            int32_t count = 1;
+            while (at + count < text.len && text.s[at + count] == '`') {
+                count++;
+            }
+            close = MiniFind(text, at + count, '`', count);
+            if (close >= 0) {
+                if (at > plain) {
+                    MiniText(p, parent, MiniSlice(text, plain, at));
+                }
+                Node* code = MiniNode(p, NodeKind::InlineCode, parent);
+                Str value = MiniSlice(text, at + count, close);
+                char* normalized = (char*)Alloc(p->a, value.len + 1);
+                if (normalized) {
+                    for (int32_t i = 0; i < value.len; i++) {
+                        normalized[i] = value.s[i] == '\n' || value.s[i] == '\r'
+                                            ? ' '
+                                            : value.s[i];
+                    }
+                    normalized[value.len] = 0;
+                    NodeSetStr(p->a, code, NodeStrKind::Value,
+                               Str(normalized, value.len));
+                }
+                at = close + count;
+                plain = at;
+                continue;
+            }
+        }
+
+        if (p->options->constructs.attention && (c == '*' || c == '_')) {
+            int32_t count = 1;
+            while (count < 3 && at + count < text.len &&
+                   text.s[at + count] == c) {
+                count++;
+            }
+            bool intraword = c == '_' && at > 0 && at + count < text.len &&
+                             !MiniSpace(text.s[at - 1]) &&
+                             !MiniPunctuation(text.s[at - 1]) &&
+                             !MiniSpace(text.s[at + count]) &&
+                             !MiniPunctuation(text.s[at + count]);
+            if (!intraword && at + count < text.len &&
+                !MiniSpace(text.s[at + count])) {
+                close = MiniFind(text, at + count, c, count);
+            }
+            if (close >= 0) {
+                if (at > plain) {
+                    MiniText(p, parent, MiniSlice(text, plain, at));
+                }
+                if (count == 3) {
+                    Node* strong = MiniNode(p, NodeKind::Strong, parent);
+                    Node* emphasis = MiniNode(p, NodeKind::Emphasis, strong);
+                    MiniInline(p, emphasis, MiniSlice(text, at + 3, close));
+                } else {
+                    markKind =
+                        count == 2 ? NodeKind::Strong : NodeKind::Emphasis;
+                    Node* marked = MiniNode(p, markKind, parent);
+                    MiniInline(p, marked, MiniSlice(text, at + count, close));
+                }
+                at = close + count;
+                plain = at;
+                continue;
+            }
+        }
+
+        if (c == '\\' && at + 1 < text.len) {
+            char next = text.s[at + 1];
+            if (p->options->constructs.hardBreakEscape &&
+                (next == '\n' || next == '\r')) {
+                if (at > plain) {
+                    MiniText(p, parent, MiniSlice(text, plain, at));
+                }
+                MiniNode(p, NodeKind::Break, parent);
+                at +=
+                    next == '\r' && at + 2 < text.len && text.s[at + 2] == '\n'
+                        ? 3
+                        : 2;
+                plain = at;
+                continue;
+            }
+            if (p->options->constructs.characterEscape &&
+                MiniPunctuation(next)) {
+                if (at > plain) {
+                    MiniText(p, parent, MiniSlice(text, plain, at));
+                }
+                MiniText(p, parent, MiniSlice(text, at + 1, at + 2));
+                at += 2;
+                plain = at;
+                continue;
+            }
+        }
+
+        if (p->options->constructs.characterReference && c == '&') {
+            Str value = {};
+            if (MiniEntity(p, text, at, &after, &value)) {
+                if (at > plain) {
+                    MiniText(p, parent, MiniSlice(text, plain, at));
+                }
+                MiniText(p, parent, value);
+                at = after;
+                plain = at;
+                continue;
+            }
+        }
+
+        if (c == '\n' || c == '\r') {
+            int32_t textEnd = at;
+            bool hard = false;
+            if (p->options->constructs.hardBreakTrailing) {
+                int32_t spaces = 0;
+                while (textEnd > plain && text.s[textEnd - 1] == ' ') {
+                    textEnd--;
+                    spaces++;
+                }
+                hard = spaces >= 2;
+                if (!hard) {
+                    textEnd = at;
+                }
+            }
+            if (textEnd > plain) {
+                MiniText(p, parent, MiniSlice(text, plain, textEnd));
+            }
+            if (hard) {
+                MiniNode(p, NodeKind::Break, parent);
+            } else {
+                MiniText(p, parent, StrL(" "));
+            }
+            at += c == '\r' && at + 1 < text.len && text.s[at + 1] == '\n' ? 2
+                                                                           : 1;
+            plain = at;
+            continue;
+        }
+        at++;
+    }
+    if (text.len > plain) {
+        MiniText(p, parent, MiniSlice(text, plain, text.len));
+    }
+}
+
+static bool MiniAtx(Str line, int32_t* level, Str* content) {
+    int32_t at = MiniIndent(line);
+    if (at > 3) {
+        return false;
+    }
+    int32_t count = 0;
+    while (at + count < line.len && line.s[at + count] == '#' && count < 7) {
+        count++;
+    }
+    if (count < 1 || count > 6 ||
+        (at + count < line.len && !MiniSpace(line.s[at + count]))) {
+        return false;
+    }
+    int32_t start = at + count;
+    while (start < line.len && MiniSpace(line.s[start])) {
+        start++;
+    }
+    int32_t end = line.len;
+    while (end > start && MiniSpace(line.s[end - 1])) {
+        end--;
+    }
+    int32_t hashEnd = end;
+    while (end > start && line.s[end - 1] == '#') {
+        end--;
+    }
+    if (end == hashEnd || (end > start && !MiniSpace(line.s[end - 1]))) {
+        end = hashEnd;
+    } else {
+        while (end > start && MiniSpace(line.s[end - 1])) {
+            end--;
+        }
+    }
+    *level = count;
+    *content = MiniSlice(line, start, end);
+    return true;
+}
+
+static bool MiniSetext(Str line, int32_t* level) {
+    Str value = MiniTrim(line);
+    if (value.len <= 0 || (value.s[0] != '=' && value.s[0] != '-')) {
+        return false;
+    }
+    char marker = value.s[0];
+    int32_t count = 0;
+    for (int32_t i = 0; i < value.len; i++) {
+        if (value.s[i] == marker) {
+            count++;
+        } else if (!MiniSpace(value.s[i])) {
+            return false;
+        }
+    }
+    if (count == 0) {
+        return false;
+    }
+    *level = marker == '=' ? 1 : 2;
+    return true;
+}
+
+static bool MiniThematic(Str line) {
+    Str value = MiniTrim(line);
+    if (value.len < 3 ||
+        (value.s[0] != '*' && value.s[0] != '-' && value.s[0] != '_')) {
+        return false;
+    }
+    char marker = value.s[0];
+    int32_t count = 0;
+    for (int32_t i = 0; i < value.len; i++) {
+        if (value.s[i] == marker) {
+            count++;
+        } else if (!MiniSpace(value.s[i])) {
+            return false;
+        }
+    }
+    return count >= 3;
+}
+
+static bool MiniFence(Str line, char* marker, int32_t* count, Str* info) {
+    int32_t at = MiniIndent(line);
+    if (at > 3 || at >= line.len || (line.s[at] != '`' && line.s[at] != '~')) {
+        return false;
+    }
+    char c = line.s[at];
+    int32_t n = 0;
+    while (at + n < line.len && line.s[at + n] == c) {
+        n++;
+    }
+    if (n < 3) {
+        return false;
+    }
+    *marker = c;
+    *count = n;
+    *info = MiniTrim(MiniSlice(line, at + n, line.len));
+    return true;
+}
+
+static bool MiniFenceClose(Str line, char marker, int32_t count) {
+    int32_t at = MiniIndent(line);
+    if (at > 3) {
+        return false;
+    }
+    int32_t n = 0;
+    while (at + n < line.len && line.s[at + n] == marker) {
+        n++;
+    }
+    if (n < count) {
+        return false;
+    }
+    for (int32_t i = at + n; i < line.len; i++) {
+        if (!MiniSpace(line.s[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static MiniListMarker MiniList(Str line) {
+    MiniListMarker out;
+    int32_t at = MiniIndent(line);
+    if (at > 3 || at >= line.len) {
+        return out;
+    }
+    out.indent = at;
+    char c = line.s[at];
+    if (c == '-' || c == '+' || c == '*') {
+        if (at + 1 < line.len && !MiniSpace(line.s[at + 1])) {
+            return out;
+        }
+        out.valid = true;
+        out.content = at + 1 < line.len ? at + 2 : line.len;
+        while (out.content < line.len && MiniSpace(line.s[out.content]) &&
+               out.content < at + 5) {
+            out.content++;
+        }
+        return out;
+    }
+    if (!MiniDigit(c)) {
+        return out;
+    }
+    int32_t value = 0;
+    int32_t digits = 0;
+    while (at + digits < line.len && MiniDigit(line.s[at + digits]) &&
+           digits < 9) {
+        value = value * 10 + line.s[at + digits] - '0';
+        digits++;
+    }
+    int32_t mark = at + digits;
+    if (digits == 0 || mark >= line.len ||
+        (line.s[mark] != '.' && line.s[mark] != ')') ||
+        (mark + 1 < line.len && !MiniSpace(line.s[mark + 1]))) {
+        return out;
+    }
+    out.valid = true;
+    out.ordered = true;
+    out.start = value;
+    out.content = mark + 1 < line.len ? mark + 2 : line.len;
+    while (out.content < line.len && MiniSpace(line.s[out.content]) &&
+           out.content < mark + 5) {
+        out.content++;
+    }
+    return out;
+}
+
+static bool MiniQuote(Str line, int32_t* content) {
+    int32_t at = MiniIndent(line);
+    if (at > 3 || at >= line.len || line.s[at] != '>') {
+        return false;
+    }
+    at++;
+    if (at < line.len && line.s[at] == ' ') {
+        at++;
+    }
+    *content = at;
+    return true;
+}
+
+static Str MiniCopiedLines(MiniParser* p, int32_t start, int32_t end,
+                           int32_t stripFirst, int32_t stripRest) {
+    char* out = (char*)Alloc(p->a, end - start + 1);
+    if (!out) {
+        return {};
+    }
+    int32_t used = 0;
+    int32_t at = start;
+    bool first = true;
+    while (at < end) {
+        MiniLine line = MiniReadLine(p->source, at);
+        if (line.end > end) {
+            line.end = end;
+            line.next = end;
+        }
+        Str value = MiniLineText(p->source, line);
+        int32_t cut =
+            first ? (stripFirst < value.len ? stripFirst : value.len) : 0;
+        if (!first) {
+            while (cut < value.len && cut < stripRest &&
+                   MiniSpace(value.s[cut])) {
+                cut++;
+            }
+        }
+        if (value.len > cut) {
+            memcpy(out + used, value.s + cut, (size_t)(value.len - cut));
+            used += value.len - cut;
+        }
+        at = line.next;
+        if (at < end) {
+            out[used++] = '\n';
+        }
+        first = false;
+    }
+    out[used] = 0;
+    return Str(out, used);
+}
+
+static void MiniBlocks(MiniParser* p, Node* parent, int32_t start, int32_t end);
+
+static int32_t MiniCodeFence(MiniParser* p, Node* parent,
+                             const MiniLine& opening, char marker,
+                             int32_t count, Str info, int32_t end) {
+    int32_t contentStart = opening.next;
+    int32_t at = contentStart;
+    int32_t contentEnd = end;
+    int32_t after = end;
+    while (at < end) {
+        MiniLine line = MiniReadLine(p->source, at);
+        if (MiniFenceClose(MiniLineText(p->source, line), marker, count)) {
+            contentEnd = at;
+            after = line.next;
+            break;
+        }
+        at = line.next;
+    }
+    while (contentEnd > contentStart && (p->source.s[contentEnd - 1] == '\n' ||
+                                         p->source.s[contentEnd - 1] == '\r')) {
+        contentEnd--;
+    }
+    Node* code = MiniNode(p, NodeKind::Code, parent);
+    NodeSetStr(p->a, code, NodeStrKind::Value,
+               MiniSlice(p->source, contentStart, contentEnd));
+    int32_t split = 0;
+    while (split < info.len && !MiniSpace(info.s[split])) {
+        split++;
+    }
+    NodeSetStr(p->a, code, NodeStrKind::Lang, MiniSlice(info, 0, split));
+    NodeSetStr(p->a, code, NodeStrKind::Meta,
+               MiniTrim(MiniSlice(info, split, info.len)));
+    return after;
+}
+
+static int32_t MiniBlockquote(MiniParser* p, Node* parent, int32_t start,
+                              int32_t end) {
+    int32_t at = start;
+    int32_t cap = end - start + 1;
+    char* out = (char*)Alloc(p->a, cap);
+    if (!out) {
+        return end;
+    }
+    int32_t used = 0;
+    while (at < end) {
+        MiniLine line = MiniReadLine(p->source, at);
+        Str value = MiniLineText(p->source, line);
+        int32_t content = 0;
+        if (!MiniQuote(value, &content)) {
+            if (!MiniBlank(value)) {
+                break;
+            }
+            MiniLine next = MiniReadLine(p->source, line.next);
+            int32_t ignored = 0;
+            if (line.next >= end ||
+                !MiniQuote(MiniLineText(p->source, next), &ignored)) {
+                break;
+            }
+            content = value.len;
+        }
+        if (used > 0) {
+            out[used++] = '\n';
+        }
+        if (value.len > content) {
+            memcpy(out + used, value.s + content,
+                   (size_t)(value.len - content));
+            used += value.len - content;
+        }
+        at = line.next;
+    }
+    out[used] = 0;
+    Node* quote = MiniNode(p, NodeKind::Blockquote, parent);
+    MiniParser nested = *p;
+    nested.source = Str(out, used);
+    MiniBlocks(&nested, quote, 0, used);
+    return at;
+}
+
+static int32_t MiniListBlock(MiniParser* p, Node* parent, int32_t start,
+                             int32_t end, MiniListMarker first) {
+    Node* list = MiniNode(p, NodeKind::List, parent);
+    list->Set(NodeOrdered, first.ordered);
+    list->Set(NodeHasStart, first.ordered);
+    if (first.ordered) {
+        NodeSetPerKind(p->a, list, (uint32_t)first.start);
+    }
+    int32_t at = start;
+    while (at < end) {
+        MiniLine opening = MiniReadLine(p->source, at);
+        Str openingText = MiniLineText(p->source, opening);
+        MiniListMarker marker = MiniList(openingText);
+        if (!marker.valid || marker.ordered != first.ordered ||
+            marker.indent != first.indent) {
+            break;
+        }
+        int32_t itemStart = at;
+        int32_t scan = opening.next;
+        int32_t itemEnd = scan;
+        bool spread = false;
+        bool sawBlank = false;
+        while (scan < end) {
+            MiniLine line = MiniReadLine(p->source, scan);
+            Str value = MiniLineText(p->source, line);
+            if (MiniBlank(value)) {
+                sawBlank = true;
+                itemEnd = line.next;
+                scan = line.next;
+                continue;
+            }
+            MiniListMarker next = MiniList(value);
+            if (next.valid && next.ordered == first.ordered &&
+                next.indent == first.indent) {
+                spread = spread || sawBlank;
+                break;
+            }
+            int32_t indent = MiniIndent(value);
+            if (indent <= first.indent) {
+                break;
+            }
+            spread = spread || sawBlank;
+            itemEnd = line.next;
+            scan = line.next;
+        }
+        Node* item = MiniNode(p, NodeKind::ListItem, list);
+        item->Set(NodeSpread, spread);
+        list->Set(NodeSpread, list->Has(NodeSpread) || spread);
+
+        Str copied = MiniCopiedLines(p, itemStart, itemEnd, marker.content,
+                                     marker.content);
+        MiniParser nested = *p;
+        nested.source = copied;
+        MiniBlocks(&nested, item, 0, copied.len);
+        at = scan;
+    }
+    return at;
+}
+
+static bool MiniBlockStart(MiniParser* p, Str line) {
+    int32_t level = 0;
+    Str content = {};
+    char marker = 0;
+    int32_t count = 0;
+    Str info = {};
+    int32_t quote = 0;
+    return (p->options->constructs.headingAtx &&
+            MiniAtx(line, &level, &content)) ||
+           (p->options->constructs.codeFenced &&
+            MiniFence(line, &marker, &count, &info)) ||
+           (p->options->constructs.blockQuote && MiniQuote(line, &quote)) ||
+           (p->options->constructs.thematicBreak && MiniThematic(line)) ||
+           (p->options->constructs.listItem && MiniList(line).valid) ||
+           (p->options->constructs.codeIndented && MiniIndent(line) >= 4);
+}
+
+static void MiniBlocks(MiniParser* p, Node* parent, int32_t start,
+                       int32_t end) {
+    int32_t at = start;
+    while (at < end) {
+        MiniLine line = MiniReadLine(p->source, at);
+        Str text = MiniLineText(p->source, line);
+        if (MiniBlank(text)) {
+            at = line.next;
+            continue;
+        }
+
+        int32_t level = 0;
+        Str content = {};
+        if (p->options->constructs.headingAtx &&
+            MiniAtx(text, &level, &content)) {
+            Node* heading = MiniNode(p, NodeKind::Heading, parent);
+            NodeSetPerKind(p->a, heading, (uint32_t)level);
+            MiniInline(p, heading, content);
+            at = line.next;
+            continue;
+        }
+
+        char fenceMarker = 0;
+        int32_t fenceCount = 0;
+        Str info = {};
+        if (p->options->constructs.codeFenced &&
+            MiniFence(text, &fenceMarker, &fenceCount, &info)) {
+            at = MiniCodeFence(p, parent, line, fenceMarker, fenceCount, info,
+                               end);
+            continue;
+        }
+
+        int32_t quoteContent = 0;
+        if (p->options->constructs.blockQuote &&
+            MiniQuote(text, &quoteContent)) {
+            at = MiniBlockquote(p, parent, at, end);
+            continue;
+        }
+
+        if (p->options->constructs.thematicBreak && MiniThematic(text)) {
+            MiniNode(p, NodeKind::ThematicBreak, parent);
+            at = line.next;
+            continue;
+        }
+
+        MiniListMarker list = MiniList(text);
+        if (p->options->constructs.listItem && list.valid) {
+            at = MiniListBlock(p, parent, at, end, list);
+            continue;
+        }
+
+        if (p->options->constructs.codeIndented && MiniIndent(text) >= 4) {
+            int32_t scan = at;
+            while (scan < end) {
+                MiniLine codeLine = MiniReadLine(p->source, scan);
+                Str codeText = MiniLineText(p->source, codeLine);
+                if (!MiniBlank(codeText) && MiniIndent(codeText) < 4) {
+                    break;
+                }
+                scan = codeLine.next;
+            }
+            Str value = MiniCopiedLines(p, at, scan, 4, 4);
+            while (value.len > 0 && value.s[value.len - 1] == '\n') {
+                value.len--;
+            }
+            Node* code = MiniNode(p, NodeKind::Code, parent);
+            NodeSetStr(p->a, code, NodeStrKind::Value, value);
+            at = scan;
+            continue;
+        }
+
+        MiniLine next = MiniReadLine(p->source, line.next);
+        if (p->options->constructs.headingSetext && line.next < end &&
+            MiniSetext(MiniLineText(p->source, next), &level)) {
+            Node* heading = MiniNode(p, NodeKind::Heading, parent);
+            NodeSetPerKind(p->a, heading, (uint32_t)level);
+            MiniInline(p, heading, MiniTrim(text));
+            at = next.next;
+            continue;
+        }
+
+        int32_t paragraphEnd = line.end;
+        int32_t scan = line.next;
+        while (scan < end) {
+            MiniLine part = MiniReadLine(p->source, scan);
+            Str partText = MiniLineText(p->source, part);
+            if (MiniBlank(partText) || MiniBlockStart(p, partText)) {
+                break;
+            }
+            paragraphEnd = part.end;
+            scan = part.next;
+        }
+        Node* paragraph = MiniNode(p, NodeKind::Paragraph, parent);
+        MiniInline(p, paragraph,
+                   MiniSlice(p->source, line.start, paragraphEnd));
+        at = scan;
+    }
+}
+
+Constructs Constructs::Gfm() {
+    Constructs constructs;
+
+    constructs.gfmAutolinkLiteral = true;
+    constructs.gfmFootnoteDefinition = true;
+    constructs.gfmLabelStartFootnote = true;
+    constructs.gfmStrikethrough = true;
+    constructs.gfmTable = true;
+    constructs.gfmTaskListItem = true;
+    return constructs;
+}
+
+ParseOptions ParseOptions::Gfm() {
+    ParseOptions options;
+    options.constructs = Constructs::Gfm();
+    return options;
+}
+
+Node* ToMdast(Arena* a, Str source, const ParseOptions& options) {
+    if (!a) {
+        return nullptr;
+    }
+    MiniParser parser;
+    parser.a = a;
+    parser.source = source;
+    parser.options = &options;
+    Node* root = NodeNew(a, NodeKind::Root);
+    if (root && source.s && source.len > 0) {
+        MiniBlocks(&parser, root, 0, source.len);
+    }
+    return root;
+}
+
+Str DecodeNamed(Arena* a, Str name) {
+    const char* value = nullptr;
+    if (base::StrEq(name, "amp") || base::StrEq(name, "AMP")) {
+        value = "&";
+    } else if (base::StrEq(name, "lt") || base::StrEq(name, "LT")) {
+        value = "<";
+    } else if (base::StrEq(name, "gt") || base::StrEq(name, "GT")) {
+        value = ">";
+    } else if (base::StrEq(name, "quot") || base::StrEq(name, "QUOT")) {
+        value = "\"";
+    } else if (base::StrEq(name, "apos")) {
+        value = "'";
+    } else if (base::StrEq(name, "nbsp")) {
+        value = "\xc2\xa0";
+    }
+    return value ? MiniOwn(a, Str((char*)value)) : Str{};
+}
+
+Str DecodeNumeric(Arena* a, Str value, int radix) {
+    uint32_t cp = 0;
+    bool bad = value.len <= 0 || (radix != 10 && radix != 16);
+    for (int32_t i = 0; !bad && i < value.len; i++) {
+        uint8_t c = (uint8_t)value.s[i];
+        uint32_t digit = 0;
+        if (c >= '0' && c <= '9') {
+            digit = (uint32_t)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            digit = (uint32_t)(c - 'a' + 10);
+        } else if (c >= 'A' && c <= 'F') {
+            digit = (uint32_t)(c - 'A' + 10);
+        } else {
+            bad = true;
+            break;
+        }
+        if (digit >= (uint32_t)radix ||
+            cp > (0x10ffffu - digit) / (uint32_t)radix) {
+            bad = true;
+            break;
+        }
+        cp = cp * (uint32_t)radix + digit;
+    }
+    bad = bad || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ||
+          cp <= 0x08 || cp == 0x0b || (cp >= 0x0e && cp <= 0x1f) ||
+          (cp >= 0x7f && cp <= 0x9f);
+    if (bad) {
+        cp = 0xfffd;
+    }
+    char bytes[4];
+    return MiniOwn(a, Str(bytes, MiniUtf8(bytes, cp)));
+}
+
+}
+
+#line 1 "src/markdown/mdast.cpp"
+
+namespace markdown {
+
+using base::Alloc;
+
+Node* NodeNew(Arena* a, NodeKind kind) {
+
+    void* mem = a->Push(sizeof(Node), alignof(Node), false);
+    if (!mem) {
+        return nullptr;
+    }
+    Node* node = new (mem) Node();
+    node->kind = kind;
+    return node;
+}
+
+bool NodeHasChildren(NodeKind kind) {
+    switch (kind) {
+        case NodeKind::Root:
+        case NodeKind::Paragraph:
+        case NodeKind::Heading:
+        case NodeKind::Blockquote:
+        case NodeKind::List:
+        case NodeKind::ListItem:
+        case NodeKind::Emphasis:
+        case NodeKind::Strong:
+        case NodeKind::Link:
+        case NodeKind::LinkReference:
+        case NodeKind::FootnoteDefinition:
+        case NodeKind::Table:
+        case NodeKind::TableRow:
+        case NodeKind::TableCell:
+        case NodeKind::Delete:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool NodeHasOwnValue(const Node* node) {
+    switch (node->kind) {
+        case NodeKind::Toml:
+        case NodeKind::Yaml:
+        case NodeKind::InlineCode:
+        case NodeKind::InlineMath:
+        case NodeKind::Html:
+        case NodeKind::Text:
+        case NodeKind::Code:
+        case NodeKind::Math:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static int32_t NodeToStringLen(Arena* a, const Node* node) {
+    if (NodeHasChildren(node->kind)) {
+        int32_t len = 0;
+        for (const Node* child : NodeKids(a, node)) {
+            len += NodeToStringLen(a, child);
+        }
+        return len;
+    }
+    if (!NodeHasOwnValue(node)) {
+        return 0;
+    }
+    return NodeGetStrLen(a, node, NodeStrKind::Value);
+}
+
+static int32_t NodeToStringFill(Arena* a, const Node* node, char* out,
+                                int32_t at) {
+    if (NodeHasChildren(node->kind)) {
+        for (const Node* child : NodeKids(a, node)) {
+            at = NodeToStringFill(a, child, out, at);
+        }
+        return at;
+    }
+    Str value = NodeHasOwnValue(node) ? NodeGetStr(a, node, NodeStrKind::Value)
+                                      : Str{};
+    if (value.len > 0) {
+        memcpy(out + at, value.s, (size_t)value.len);
+        at += value.len;
+    }
+    return at;
+}
+
+Str NodeToString(Arena* a, const Node* node) {
+
+    int32_t len = NodeToStringLen(a, node);
+    char* out = (char*)Alloc(a, len + 1);
+    if (!out) {
+        return {};
+    }
+    int32_t at = NodeToStringFill(a, node, out, 0);
+    out[at] = 0;
+    return Str(out, at);
+}
+
+constexpr int32_t kRecNext = 0;
+constexpr int32_t kRecKind = 4;
+constexpr int32_t kRecLen = 5;
+
+static char* RecAt(Arena* a, ArenaStr off) {
+    return off == kArenaStrNone ? nullptr : (char*)base::ArenaAtOffset(a, off);
+}
+
+static ArenaStr RecNext(const char* rec) {
+    ArenaStr next = kArenaStrNone;
+    memcpy(&next, rec + kRecNext, sizeof(next));
+    return next;
+}
+
+static void RecSetNext(char* rec, ArenaStr next) {
+    memcpy(rec + kRecNext, &next, sizeof(next));
+}
+
+static Str RecStr(const char* rec, int32_t* headOut = nullptr) {
+    uint32_t len = 0;
+    int32_t head = kRecLen + base::VarintGet(rec + kRecLen, &len);
+    if (headOut) {
+        *headOut = head;
+    }
+    return Str((char*)rec + head, (int32_t)len);
+}
+
+static char* FindRec(Arena* a, const Node* n, NodeStrKind k, char** prevOut) {
+    char* prev = nullptr;
+    for (ArenaStr at = n->firstStr; at != kArenaStrNone;) {
+        char* rec = RecAt(a, at);
+        if (!rec) {
+            break;
+        }
+        if ((NodeStrKind)(uint8_t)rec[kRecKind] == k) {
+            if (prevOut) {
+                *prevOut = prev;
+            }
+            return rec;
+        }
+        prev = rec;
+        at = RecNext(rec);
+    }
+    if (prevOut) {
+        *prevOut = nullptr;
+    }
+    return nullptr;
+}
+
+static char* RecNew(Arena* a, Node* n, NodeStrKind k, uint32_t len,
+                    int32_t* headOut) {
+    int32_t head = kRecLen + base::VarintSize(len);
+
+    char* rec = (char*)a->Push((uint64_t)head + len + 1, 1, false);
+    if (!rec) {
+        return nullptr;
+    }
+    ArenaStr at = (ArenaStr)base::ArenaOffsetOf(a, rec);
+    RecSetNext(rec, n->firstStr);
+    rec[kRecKind] = (char)(uint8_t)k;
+    base::VarintPut(rec + kRecLen, len);
+    rec[head + len] = 0;
+    n->firstStr = at;
+    *headOut = head;
+    return rec;
+}
+
+Str NodeGetStr(Arena* a, const Node* n, NodeStrKind k) {
+    char* rec = FindRec(a, n, k, nullptr);
+    return rec ? RecStr(rec) : Str{};
+}
+
+int32_t NodeGetStrLen(Arena* a, const Node* n, NodeStrKind k) {
+    char* rec = FindRec(a, n, k, nullptr);
+    return rec ? RecStr(rec).len : 0;
+}
+
+bool NodeHasStr(Arena* a, const Node* n, NodeStrKind k) {
+    return FindRec(a, n, k, nullptr) != nullptr;
+}
+
+void NodeClearStr(Arena* a, Node* n, NodeStrKind k) {
+    char* prev = nullptr;
+    char* rec = FindRec(a, n, k, &prev);
+    if (!rec) {
+        return;
+    }
+
+    if (prev) {
+        RecSetNext(prev, RecNext(rec));
+    } else {
+        n->firstStr = RecNext(rec);
+    }
+}
+
+void NodeSetStr(Arena* a, Node* n, NodeStrKind k, Str s) {
+    if (!a || !n) {
+        return;
+    }
+    NodeClearStr(a, n, k);
+    if (!s.s || s.len <= 0) {
+        return;
+    }
+    int32_t head = 0;
+    char* rec = RecNew(a, n, k, (uint32_t)s.len, &head);
+    if (rec) {
+        memcpy(rec + head, s.s, (size_t)s.len);
+    }
+}
+
+void NodeGrowStr(Arena* a, Node* n, NodeStrKind k, Str more) {
+    if (!a || !n || !more.s || more.len <= 0) {
+        return;
+    }
+    char* prev = nullptr;
+    char* rec = FindRec(a, n, k, &prev);
+    if (!rec) {
+        NodeSetStr(a, n, k, more);
+        return;
+    }
+
+    int32_t head = 0;
+    Str had = RecStr(rec, &head);
+    uint32_t nlen = (uint32_t)had.len + (uint32_t)more.len;
+    int32_t nhead = kRecLen + base::VarintSize(nlen);
+
+    uint64_t used = base::ArenaUsed(a);
+    uint64_t end = (uint64_t)base::ArenaOffsetOf(a, rec) + (uint64_t)head +
+                   (uint64_t)had.len + 1;
+
+    bool newest = end == used;
+    uint64_t want = newest ? (uint64_t)(nhead - head) + (uint64_t)more.len
+                           : (uint64_t)nhead + nlen + 1;
+    char* dst = (char*)a->Push(want, 1, false);
+    if (!dst) {
+        return;
+    }
+    uint64_t at = base::ArenaOffsetOf(a, dst);
+
+    if (newest && at == used) {
+        if (nhead != head) {
+            memmove(rec + nhead, rec + head, (size_t)had.len);
+        }
+        base::VarintPut(rec + kRecLen, nlen);
+        memcpy(rec + nhead + had.len, more.s, (size_t)more.len);
+        rec[nhead + nlen] = 0;
+        return;
+    }
+
+    dst[kRecKind] = (char)(uint8_t)k;
+    base::VarintPut(dst + kRecLen, nlen);
+    memcpy(dst + nhead, had.s, (size_t)had.len);
+    memcpy(dst + nhead + had.len, more.s, (size_t)more.len);
+    dst[nhead + nlen] = 0;
+    if (prev) {
+        RecSetNext(prev, RecNext(rec));
+    } else {
+        n->firstStr = RecNext(rec);
+    }
+    RecSetNext(dst, n->firstStr);
+    n->firstStr = (ArenaStr)at;
+}
+
+uint32_t NodePerKind(Arena* a, const Node* n) {
+    char* rec = FindRec(a, n, NodeStrKind::PerKind, nullptr);
+    if (!rec) {
+        return 0;
+    }
+    uint32_t word = 0;
+    Str bytes = RecStr(rec);
+    base::VarintGet(bytes.s, &word);
+    return word;
+}
+
+void NodeSetPerKind(Arena* a, Node* n, uint32_t word) {
+    char buf[8];
+    int len = base::VarintPut(buf, word);
+    NodeSetStr(a, n, NodeStrKind::PerKind, Str(buf, len));
+}
+
+static uint8_t* AlignAt(Arena* a, ArenaAlign al, int32_t* count) {
+    *count = 0;
+    if (al == kArenaAlignNone) {
+        return nullptr;
+    }
+    char* p = (char*)base::ArenaAtOffset(a, al);
+    if (!p) {
+        return nullptr;
+    }
+    uint32_t n = 0;
+    int head = base::VarintGet(p, &n);
+    *count = (int32_t)n;
+    return (uint8_t*)p + head;
+}
+
+ArenaAlign ArenaAlignNew(Arena* a, int32_t count) {
+    if (!a || count <= 0) {
+        return kArenaAlignNone;
+    }
+    int32_t head = base::VarintSize((uint32_t)count);
+    int32_t bytes = (count + 3) / 4;
+
+    char* mem = (char*)a->Push((uint64_t)head + (uint64_t)bytes, 1, false);
+    if (!mem) {
+        return kArenaAlignNone;
+    }
+    memset(mem, 0, (size_t)head + (size_t)bytes);
+    base::VarintPut(mem, (uint32_t)count);
+    return (ArenaAlign)base::ArenaOffsetOf(a, mem);
+}
+
+int32_t ArenaAlignCount(Arena* a, ArenaAlign al) {
+    int32_t count = 0;
+    AlignAt(a, al, &count);
+    return count;
+}
+
+AlignKind ArenaAlignAt(Arena* a, ArenaAlign al, int32_t i) {
+    int32_t count = 0;
+    uint8_t* bits = AlignAt(a, al, &count);
+    if (!bits || i < 0 || i >= count) {
+        return AlignKind::None;
+    }
+    return (AlignKind)((bits[i / 4] >> ((i % 4) * 2)) & 3);
+}
+
+void ArenaAlignSet(Arena* a, ArenaAlign al, int32_t i, AlignKind k) {
+    int32_t count = 0;
+    uint8_t* bits = AlignAt(a, al, &count);
+    if (!bits || i < 0 || i >= count) {
+        return;
+    }
+    int32_t shift = (i % 4) * 2;
+    uint8_t was = (uint8_t)(bits[i / 4] & ~(3 << shift));
+    bits[i / 4] = (uint8_t)(was | (((uint8_t)k & 3) << shift));
+}
+
+UnistPosition GetUnistPosition(Str md, uint32_t start, uint32_t end) {
+    UnistPosition out;
+    int32_t line = 1;
+    int32_t column = 1;
+    int32_t at = 0;
+    int32_t stop = (int32_t)end;
+    if (!md.s) {
+        return out;
+    }
+    if (stop > md.len) {
+        stop = md.len;
+    }
+    bool haveStart = false;
+    while (at <= stop) {
+        if (!haveStart && at == (int32_t)start) {
+            out.start = UnistPoint{line, column, at};
+            haveStart = true;
+        }
+        if (at == stop) {
+            break;
+        }
+        uint8_t byte = (uint8_t)md.s[at];
+        if (byte == '\r' && at + 1 < md.len && md.s[at + 1] == '\n') {
+
+            at += 1;
+            continue;
+        }
+        if (byte == '\n' || byte == '\r') {
+            line += 1;
+            column = 1;
+            at += 1;
+            continue;
+        }
+        if (byte == '\t') {
+            int32_t remainder = column % kTabSize;
+            column += remainder == 0 ? 1 : 1 + kTabSize - remainder;
+            at += 1;
+            continue;
+        }
+        column += 1;
+        at += 1;
+    }
+    if (!haveStart) {
+
+        out.start = UnistPoint{line, column, at};
+    }
+    out.end = UnistPoint{line, column, at};
+    return out;
+}
+
+}
+
+#if GPUI_OS_LINUX
+#line 1 "src/base_linux.cpp"
+
+#include <stdio.h>
+#include <sys/resource.h>
+#include <unistd.h>
+
+namespace base {
+
+void PlatDirNameInPlace(char* path);
+
+void PlatGetExeDir(char* out, int cap) {
+    if (!out || cap <= 0) {
+        return;
+    }
+    out[0] = 0;
+    ssize_t n = readlink("/proc/self/exe", out, (size_t)cap - 1);
+    if (n <= 0) {
+        return;
+    }
+    out[n] = 0;
+    PlatDirNameInPlace(out);
+}
+
+bool PlatSelfUsage(uint64_t* cpu100ns, uint64_t* memBytes) {
+
+    struct rusage ru = {};
+    if (getrusage(RUSAGE_SELF, &ru) != 0) {
+        return false;
+    }
+    if (cpu100ns) {
+        uint64_t us = (uint64_t)ru.ru_utime.tv_sec * 1000000ull +
+                      (uint64_t)ru.ru_utime.tv_usec +
+                      (uint64_t)ru.ru_stime.tv_sec * 1000000ull +
+                      (uint64_t)ru.ru_stime.tv_usec;
+        *cpu100ns = us * 10ull;
+    }
+    if (memBytes) {
+        *memBytes = 0;
+        FILE* f = fopen("/proc/self/statm", "rb");
+        if (f) {
+            unsigned long total = 0, resident = 0;
+            if (fscanf(f, "%lu %lu", &total, &resident) == 2) {
+                long page = sysconf(_SC_PAGESIZE);
+                *memBytes =
+                    (uint64_t)resident * (uint64_t)(page > 0 ? page : 4096);
+            }
+            fclose(f);
+        }
+    }
+    return true;
+}
+
+}
+
+#endif
+
+#if GPUI_OS_MAC
+#line 1 "src/base_mac.cpp"
+
+#include <mach/mach.h>
+#include <mach-o/dyld.h>
+
+namespace base {
+
+void PlatDirNameInPlace(char* path);
+
+void PlatGetExeDir(char* out, int cap) {
+    if (!out || cap <= 0) {
+        return;
+    }
+    out[0] = 0;
+    uint32_t n = (uint32_t)cap;
+    if (_NSGetExecutablePath(out, &n) != 0) {
+        out[0] = 0;
+        return;
+    }
+    out[cap - 1] = 0;
+    PlatDirNameInPlace(out);
+}
+
+bool PlatSelfUsage(uint64_t* cpu100ns, uint64_t* memBytes) {
+
+    mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+    task_basic_info_data_t basic = {};
+    if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&basic,
+                  &count) != KERN_SUCCESS) {
+        return false;
+    }
+    if (memBytes) {
+        *memBytes = (uint64_t)basic.resident_size;
+    }
+    if (cpu100ns) {
+        uint64_t us = (uint64_t)basic.user_time.seconds * 1000000ull +
+                      (uint64_t)basic.user_time.microseconds +
+                      (uint64_t)basic.system_time.seconds * 1000000ull +
+                      (uint64_t)basic.system_time.microseconds;
+        count = TASK_THREAD_TIMES_INFO_COUNT;
+        task_thread_times_info_data_t threads = {};
+        if (task_info(mach_task_self(), TASK_THREAD_TIMES_INFO,
+                      (task_info_t)&threads, &count) == KERN_SUCCESS) {
+            us += (uint64_t)threads.user_time.seconds * 1000000ull +
+                  (uint64_t)threads.user_time.microseconds +
+                  (uint64_t)threads.system_time.seconds * 1000000ull +
+                  (uint64_t)threads.system_time.microseconds;
+        }
+        *cpu100ns = us * 10ull;
+    }
+    return true;
+}
+
+}
+
+#endif
+
+#if GPUI_OS_LINUX || GPUI_OS_MAC
+#line 1 "src/base_mem_posix.cpp"
+
+#include <sys/mman.h>
+#include <unistd.h>
+
+namespace base {
+
+uint64_t PlatPageSize() {
+    static uint64_t pageSize = 0;
+    if (pageSize == 0) {
+        long n = sysconf(_SC_PAGESIZE);
+        pageSize = n > 0 ? (uint64_t)n : 4096;
+    }
+    return pageSize;
+}
+
+uint64_t PlatLargePageSize() {
+    return 2ull * 1024ull * 1024ull;
+}
+
+void* PlatMemReserve(uint64_t size) {
+    if (size == 0) {
+        return nullptr;
+    }
+    void* p = mmap(nullptr, (size_t)size, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    return p == MAP_FAILED ? nullptr : p;
+}
+
+bool PlatMemCommit(void* base, uint64_t size, bool largePages) {
+    (void)largePages;
+    if (size == 0) {
+        return true;
+    }
+    if (!base) {
+        return false;
+    }
+
+    uint64_t page = PlatPageSize();
+    uintptr_t start = (uintptr_t)base & ~(uintptr_t)(page - 1);
+    uintptr_t end =
+        ((uintptr_t)base + (uintptr_t)size + page - 1) & ~(uintptr_t)(page - 1);
+    return mprotect((void*)start, (size_t)(end - start),
+                    PROT_READ | PROT_WRITE) == 0;
+}
+
+void* PlatMemReserveCommit(uint64_t size, bool largePages) {
+    (void)largePages;
+    if (size == 0) {
+        return nullptr;
+    }
+    void* p = mmap(nullptr, (size_t)size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? nullptr : p;
+}
+
+void PlatMemRelease(void* base, uint64_t size) {
+    if (base && size > 0) {
+        munmap(base, (size_t)size);
+    }
+}
+
+uint64_t PlatArenaReserveSize() {
+    return 64ull * 1024ull * 1024ull;
+}
+
+}
+
+#endif
+
+#if GPUI_OS_LINUX || GPUI_OS_MAC || GPUI_OS_WASM
+#line 1 "src/base_posix.cpp"
+
+#include <dirent.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+namespace base {
+
+int StrCmpI(const char* a, const char* b) {
+    return strcasecmp(a ? a : "", b ? b : "");
+}
+
+int StrCmpNI(const char* a, const char* b, int n) {
+    if (n <= 0) {
+        return 0;
+    }
+    return strncasecmp(a ? a : "", b ? b : "", (size_t)n);
+}
+
+void StrCopyZ(char* dst, int cap, const char* src) {
+    if (!dst || cap <= 0) {
+        return;
+    }
+    if (!src) {
+        dst[0] = 0;
+        return;
+    }
+    int n = (int)strlen(src);
+    if (n > cap - 1) {
+        n = cap - 1;
+    }
+    memcpy(dst, src, (size_t)n);
+    dst[n] = 0;
+}
+
+bool PlatDirExists(const char* path) {
+    if (!path || !path[0]) {
+        return false;
+    }
+    struct stat st = {};
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+bool PlatFileExists(const char* path) {
+    if (!path || !path[0]) {
+        return false;
+    }
+    struct stat st = {};
+    return stat(path, &st) == 0 && !S_ISDIR(st.st_mode);
+}
+
+void PlatGetCwd(char* out, int cap) {
+    if (!out || cap <= 0) {
+        return;
+    }
+    out[0] = 0;
+    if (!getcwd(out, (size_t)cap)) {
+        out[0] = 0;
+    }
+}
+
+bool PlatCanonicalPath(const char* path, char* out, int cap) {
+    if (!path || !path[0] || !out || cap <= 0) {
+        return false;
+    }
+    out[0] = 0;
+    char* resolved = realpath(path, nullptr);
+    if (!resolved) {
+        return false;
+    }
+    int n = (int)strlen(resolved);
+    if (n >= cap) {
+        free(resolved);
+        return false;
+    }
+    memcpy(out, resolved, (size_t)n + 1);
+    free(resolved);
+    return true;
+}
+
+void PlatDirNameInPlace(char* path) {
+    if (!path) {
+        return;
+    }
+    int i = (int)strlen(path);
+    while (i > 0 && path[i - 1] != '/') {
+        path[--i] = 0;
+    }
+    while (i > 1 && path[i - 1] == '/') {
+        path[--i] = 0;
+    }
+}
+
+int PlatListDir(const char* dir, DirEntry* out, int max) {
+    if (!dir || !out || max <= 0) {
+        return 0;
+    }
+    DIR* d = opendir(dir);
+    if (!d) {
+        return 0;
+    }
+    int n = 0;
+    struct dirent* ent = nullptr;
+    while (n < max && (ent = readdir(d)) != nullptr) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        DirEntry& e = out[n];
+        StrCopyZ(e.name, (int)sizeof(e.name), ent->d_name);
+        char full[kMaxPath];
+        int fullLen = snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
+        struct stat st = {};
+        if (fullLen <= 0 || fullLen >= (int)sizeof(full) ||
+            lstat(full, &st) != 0) {
+            continue;
+        }
+        e.isSymlink = S_ISLNK(st.st_mode);
+        e.isDir = S_ISDIR(st.st_mode);
+        e.isFile = S_ISREG(st.st_mode);
+        e.size = e.isFile && st.st_size > 0 ? (uint64_t)st.st_size : 0;
+#if GPUI_OS_MAC
+        e.modified = (uint64_t)st.st_mtimespec.tv_sec * 1000000000ull +
+                     (uint64_t)st.st_mtimespec.tv_nsec;
+#else
+        e.modified = (uint64_t)st.st_mtim.tv_sec * 1000000000ull +
+                     (uint64_t)st.st_mtim.tv_nsec;
+#endif
+        n++;
+    }
+    closedir(d);
+    return n;
+}
+
+int PlatCoreCount() {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+}
+
+void CondVar::Wait(Mutex* m, int timeoutMs) {
+    if (timeoutMs < 0) {
+        pthread_cond_wait(&cv, &m->lock);
+        return;
+    }
+
+    struct timespec ts = {};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeoutMs / 1000;
+    ts.tv_nsec += (long)(timeoutMs % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec += 1;
+        ts.tv_nsec -= 1000000000L;
+    }
+    pthread_cond_timedwait(&cv, &m->lock, &ts);
+}
+
+static void* ThreadMain(void* arg) {
+    auto* call = (Func0*)arg;
+    call->Call();
+    free(call);
+    return nullptr;
+}
+
+bool PlatThreadRun(Func0 f) {
+    auto* call = (Func0*)calloc(1, sizeof(Func0));
+    if (!call) {
+        return false;
+    }
+    *call = f;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t th = {};
+    int err = pthread_create(&th, &attr, ThreadMain, call);
+    pthread_attr_destroy(&attr);
+    if (err != 0) {
+        free(call);
+        return false;
+    }
+    return true;
+}
+
+uint64_t PlatThreadId() {
+
+    pthread_t self = pthread_self();
+    uint64_t id = 0;
+    memcpy(&id, &self, sizeof(self) < sizeof(id) ? sizeof(self) : sizeof(id));
+    return id;
+}
+
+void PlatSleepMs(int ms) {
+    if (ms <= 0) {
+        return;
+    }
+    struct timespec ts = {};
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, nullptr);
+}
+
+}
+
+#endif
+
+#if GPUI_OS_WASM
+#line 1 "src/base_wasm.cpp"
+
+#include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
+#include <stdlib.h>
+
+namespace base {
+
+void PlatDirNameInPlace(char* path);
+
+uint64_t PlatPageSize() {
+    return 65536;
+}
+
+uint64_t PlatLargePageSize() {
+
+    return 65536;
+}
+
+void* PlatMemReserve(uint64_t size) {
+    if (size == 0) {
+        return nullptr;
+    }
+
+    return aligned_alloc((size_t)PlatPageSize(), (size_t)size);
+}
+
+bool PlatMemCommit(void* base, uint64_t size, bool largePages) {
+    (void)largePages;
+    if (size == 0) {
+        return true;
+    }
+    if (!base) {
+        return false;
+    }
+
+    memset(base, 0, (size_t)size);
+    return true;
+}
+
+void* PlatMemReserveCommit(uint64_t size, bool largePages) {
+    if (largePages) {
+
+        return nullptr;
+    }
+    void* p = PlatMemReserve(size);
+    if (p) {
+        memset(p, 0, (size_t)size);
+    }
+    return p;
+}
+
+void PlatMemRelease(void* base, uint64_t size) {
+    (void)size;
+    free(base);
+}
+
+uint64_t PlatArenaReserveSize() {
+    return 4ull * 1024ull * 1024ull;
+}
+
+void PlatGetExeDir(char* out, int cap) {
+    if (!out || cap <= 0) {
+        return;
+    }
+    StrCopyZ(out, cap, "/");
+}
+
+bool PlatSelfUsage(uint64_t* cpu100ns, uint64_t* memBytes) {
+    if (cpu100ns) {
+
+        *cpu100ns = (uint64_t)(emscripten_get_now() * 10000.0);
+    }
+    if (memBytes) {
+
+        *memBytes = (uint64_t)emscripten_get_heap_size();
+    }
+    return true;
+}
+
+}
+
+#endif
+
+#if GPUI_OS_WINDOWS
+#line 1 "src/base_win.cpp"
+
+#include <psapi.h>
+
+namespace base {
+
+uint64_t PlatPageSize() {
+    static uint64_t pageSize = 0;
+    if (pageSize == 0) {
+        SYSTEM_INFO info = {};
+        GetSystemInfo(&info);
+        pageSize = info.dwPageSize;
+    }
+    return pageSize;
+}
+
+uint64_t PlatLargePageSize() {
+    static uint64_t largePageSize = 0;
+    if (largePageSize == 0) {
+        SIZE_T size = GetLargePageMinimum();
+        largePageSize = size ? (uint64_t)size : PlatPageSize();
+    }
+    return largePageSize;
+}
+
+bool PlatMemCommit(void* base, uint64_t size, bool largePages) {
+    if (size == 0) {
+        return true;
+    }
+    DWORD flags = MEM_COMMIT;
+    if (largePages) {
+        flags |= MEM_LARGE_PAGES;
+    }
+    return VirtualAlloc(base, (SIZE_T)size, flags, PAGE_READWRITE) != nullptr;
+}
+
+void* PlatMemReserve(uint64_t size) {
+    return VirtualAlloc(nullptr, (SIZE_T)size, MEM_RESERVE, PAGE_READWRITE);
+}
+
+void* PlatMemReserveCommit(uint64_t size, bool largePages) {
+    DWORD flags = MEM_RESERVE | MEM_COMMIT;
+    if (largePages) {
+        flags |= MEM_LARGE_PAGES;
+    }
+    return VirtualAlloc(nullptr, (SIZE_T)size, flags, PAGE_READWRITE);
+}
+
+void PlatMemRelease(void* base, uint64_t size) {
+    (void)size;
+    VirtualFree(base, 0, MEM_RELEASE);
+}
+
+uint64_t PlatArenaReserveSize() {
+    return 64ull * 1024ull * 1024ull;
+}
+
+int StrCmpI(const char* a, const char* b) {
+    return _stricmp(a ? a : "", b ? b : "");
+}
+
+int StrCmpNI(const char* a, const char* b, int n) {
+    if (n <= 0) {
+        return 0;
+    }
+    return _strnicmp(a ? a : "", b ? b : "", (size_t)n);
+}
+
+void StrCopyZ(char* dst, int cap, const char* src) {
+    if (!dst || cap <= 0) {
+        return;
+    }
+    strncpy_s(dst, (size_t)cap, src ? src : "", _TRUNCATE);
+}
+
+WCHAR* ToCWstrTemp(Str s) {
+    Arena* arena = GetTempArena();
+    int n = 0;
+    if (s.s && s.len > 0) {
+        n = MultiByteToWideChar(CP_UTF8, 0, s.s, s.len, nullptr, 0);
+        if (n < 0) {
+            n = 0;
+        }
+    }
+    auto res = (WCHAR*)arena->Push((uint64_t)(n + 1) * sizeof(WCHAR),
+                                   alignof(WCHAR), false);
+    if (n > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, s.s, s.len, res, n);
+    }
+    res[n] = 0;
+    return res;
+}
+
+bool PlatDirExists(const char* path) {
+    if (!path || !path[0]) {
+        return false;
+    }
+    DWORD attr = GetFileAttributesA(path);
+    return attr != INVALID_FILE_ATTRIBUTES &&
+           (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+bool PlatFileExists(const char* path) {
+    if (!path || !path[0]) {
+        return false;
+    }
+    DWORD attr = GetFileAttributesA(path);
+    return attr != INVALID_FILE_ATTRIBUTES &&
+           (attr & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+void PlatGetCwd(char* out, int cap) {
+    if (!out || cap <= 0) {
+        return;
+    }
+    out[0] = 0;
+    GetCurrentDirectoryA((DWORD)cap, out);
+}
+
+bool PlatCanonicalPath(const char* path, char* out, int cap) {
+    if (!path || !path[0] || !out || cap <= 0) {
+        return false;
+    }
+    out[0] = 0;
+    HANDLE file = CreateFileW(
+        ToCWstrTemp(Str(path)), 0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    WCHAR wide[kMaxPath] = {};
+    DWORD n = GetFinalPathNameByHandleW(file, wide, kMaxPath,
+                                       FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(file);
+    if (n == 0 || n >= kMaxPath) {
+        return false;
+    }
+    const WCHAR* start = wide;
+    int prefixBytes = 0;
+    if (n >= 8 && wide[0] == L'\\' && wide[1] == L'\\' && wide[2] == L'?' &&
+        wide[3] == L'\\' && wide[4] == L'U' && wide[5] == L'N' &&
+        wide[6] == L'C' && wide[7] == L'\\') {
+        start += 8;
+        n -= 8;
+        prefixBytes = 2;
+    } else if (n >= 4 && wide[0] == L'\\' && wide[1] == L'\\' &&
+               wide[2] == L'?' && wide[3] == L'\\') {
+        start += 4;
+        n -= 4;
+    }
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, start, (int)n, nullptr, 0,
+                                    nullptr, nullptr);
+    if (bytes <= 0 || bytes + prefixBytes >= cap) {
+        return false;
+    }
+    if (prefixBytes) {
+        out[0] = '/';
+        out[1] = '/';
+    }
+    WideCharToMultiByte(CP_UTF8, 0, start, (int)n, out + prefixBytes,
+                        cap - prefixBytes - 1, nullptr, nullptr);
+    bytes += prefixBytes;
+    out[bytes] = 0;
+    for (int i = 0; i < bytes; i++) {
+        if (out[i] == '\\') {
+            out[i] = '/';
+        }
+    }
+    return true;
+}
+
+void PlatGetExeDir(char* out, int cap) {
+    if (!out || cap <= 0) {
+        return;
+    }
+    out[0] = 0;
+    GetModuleFileNameA(nullptr, out, (DWORD)cap);
+    int n = (int)strlen(out);
+    while (n > 0 && out[n - 1] != '\\' && out[n - 1] != '/') {
+        out[--n] = 0;
+    }
+    while (n > 0 && (out[n - 1] == '\\' || out[n - 1] == '/')) {
+        out[--n] = 0;
+    }
+}
+
+int PlatListDir(const char* dir, DirEntry* out, int max) {
+    if (!dir || !out || max <= 0) {
+        return 0;
+    }
+    char pattern[kMaxPath];
+    _snprintf_s(pattern, kMaxPath, _TRUNCATE, "%s\\*", dir);
+    WIN32_FIND_DATAW fd = {};
+    HANDLE h = FindFirstFileW(ToCWstrTemp(Str(pattern)), &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    int n = 0;
+    do {
+        if (fd.cFileName[0] == L'.' &&
+            (fd.cFileName[1] == 0 ||
+             (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) {
+            continue;
+        }
+        DirEntry& e = out[n];
+        int got = WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, e.name,
+                                      (int)sizeof(e.name), nullptr, nullptr);
+        if (got <= 0) {
+            continue;
+        }
+        e.isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        e.isFile = !e.isDir;
+        e.isSymlink =
+            (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+        e.size = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        e.modified = ((uint64_t)fd.ftLastWriteTime.dwHighDateTime << 32) |
+                     fd.ftLastWriteTime.dwLowDateTime;
+        n++;
+    } while (n < max && FindNextFileW(h, &fd));
+    FindClose(h);
+    return n;
+}
+
+int PlatCoreCount() {
+    SYSTEM_INFO si = {};
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}
+
+bool PlatSelfUsage(uint64_t* cpu100ns, uint64_t* memBytes) {
+    HANDLE self = GetCurrentProcess();
+    FILETIME creation = {}, exit = {}, kernel = {}, user = {};
+    if (!GetProcessTimes(self, &creation, &exit, &kernel, &user)) {
+        return false;
+    }
+    ULARGE_INTEGER k = {}, u = {};
+    k.LowPart = kernel.dwLowDateTime;
+    k.HighPart = kernel.dwHighDateTime;
+    u.LowPart = user.dwLowDateTime;
+    u.HighPart = user.dwHighDateTime;
+    if (cpu100ns) {
+        *cpu100ns = k.QuadPart + u.QuadPart;
+    }
+    PROCESS_MEMORY_COUNTERS mem = {};
+    mem.cb = sizeof(mem);
+    if (!GetProcessMemoryInfo(self, &mem, sizeof(mem))) {
+        return false;
+    }
+    if (memBytes) {
+        *memBytes = (uint64_t)mem.WorkingSetSize;
+    }
+    return true;
+}
+
+static DWORD WINAPI ThreadMain(LPVOID arg) {
+    auto* call = (Func0*)arg;
+    call->Call();
+    free(call);
+    return 0;
+}
+
+bool PlatThreadRun(Func0 f) {
+    auto* call = (Func0*)calloc(1, sizeof(Func0));
+    if (!call) {
+        return false;
+    }
+    *call = f;
+    HANDLE h = CreateThread(nullptr, 0, ThreadMain, call, 0, nullptr);
+    if (!h) {
+        free(call);
+        return false;
+    }
+
+    CloseHandle(h);
+    return true;
+}
+
+uint64_t PlatThreadId() {
+    return (uint64_t)GetCurrentThreadId();
+}
+
+void PlatSleepMs(int ms) {
+    Sleep((DWORD)(ms < 0 ? 0 : ms));
+}
+
+}
+
+#endif
