@@ -26869,44 +26869,27 @@ El* Input::New(Ctx* cx, InputState* state, const InputEditorStyle& projected) {
 static const float kFoldIcon = 14.f;
 static const float kFoldIconHitbox = 18.f;
 
-static bool GutterHovered(const InputState* s, Window* win, float gutterW) {
+static bool GutterHovered(const InputState* s, Window* win) {
     if (!win || s->gutterBox.w <= 0) {
         return false;
     }
     float x = win->mouseX;
-    if (x < s->gutterBox.x || x >= s->gutterBox.x + gutterW) {
+    if (x < s->gutterBox.x || x >= s->gutterBox.x + s->gutterBox.w) {
         return false;
     }
-    float top = 0, bottom = 0;
-    bool any = false;
-    for (int i = 0; i < s->rowBoxes.len; i++) {
-        const Bounds& b = s->rowBoxes[i];
-        if (b.h <= 0) {
-            continue;
-        }
-        if (!any || b.y < top) {
-            top = b.y;
-        }
-        if (!any || b.y + b.h > bottom) {
-            bottom = b.y + b.h;
-        }
-        any = true;
-    }
-    if (!any) {
+    const Bounds& clip = s->inputBounds.h > 0 ? s->inputBounds : s->contentBox;
+    if (clip.h <= 0) {
         return false;
     }
-    return win->mouseY >= top && win->mouseY < bottom;
+    return win->mouseY >= clip.y && win->mouseY < clip.y + clip.h;
 }
 
 static El* FoldChevron(Arena* a, InputState* state,
                        const InputEditorStyle& style, int row, int caretRow,
-                       bool gutterHover) {
+                       float lineH, bool gutterHover) {
 
-    El* cell = Div(a)
-                   ->W(kFoldIconHitbox)
-                   ->H(kInputLineH)
-                   ->ItemsCenter()
-                   ->JustifyCenter();
+    El* cell =
+        Div(a)->W(kFoldIconHitbox)->H(lineH)->ItemsCenter()->JustifyCenter();
     if (!FoldMapIsCandidate(&state->folds, row)) {
         return cell;
     }
@@ -26922,10 +26905,22 @@ static El* FoldChevron(Arena* a, InputState* state,
     if (!gutterHover && !folded && row != caretRow) {
         return cell;
     }
-    return cell->Child(
-        IconEl(a, folded ? IconName::ChevronRight : IconName::ChevronDown,
-               kFoldIcon)
-            ->Fg(style.mutedForeground));
+
+    El* icon = Div(a)
+                   ->W(kFoldIcon)
+                   ->H(kFoldIcon)
+                   ->Radius(4)
+                   ->ItemsCenter()
+                   ->JustifyCenter()
+                   ->PathClick(StrDup(a, fmt("fold-%d", row)))
+                   ->HoverBg(RgbaOpacity(style.mutedForeground, 0.25f))
+                   ->Cursor(CursorKind::Pointer)
+                   ->Child(IconEl(a,
+                                  folded ? IconName::ChevronRight
+                                         : IconName::ChevronDown,
+                                  kFoldIcon)
+                               ->Fg(style.mutedForeground));
+    return cell->Child(icon);
 }
 
 int InputComposeSpans(TextSpan* spans, int n, const TextSpan* decs, int nDecs,
@@ -27049,7 +27044,7 @@ El* Textarea::New(Ctx* cx, InputState* state, const InputEditorStyle& projected,
         FoldMapRebuild(&state->folds, rows);
     }
 
-    bool gutterHover = folding && GutterHovered(state, cx->win, numW + foldW);
+    bool gutterHover = folding && GutterHovered(state, cx->win);
     VecClear(state->foldIcons);
     if (folding) {
         VecReserve(state->foldIcons, state->folds.candidates.len);
@@ -27561,13 +27556,25 @@ El* Textarea::New(Ctx* cx, InputState* state, const InputEditorStyle& projected,
             num->Mono();
         }
         El* numCell = Div(a)->W(numW)->JustifyEnd()->Child(num);
-        if (row == 0) {
-            numCell->BoundsOut(&state->gutterBox);
-        }
-        band->Child(numCell);
         if (folding) {
-            band->Child(
-                FoldChevron(a, state, style, row, caretRow, gutterHover));
+
+            El* gutter = Div(a)->FlexRow()->Gap(8)->ItemsCenter()->PathClick(
+                StrDup(a, fmt("gutter-%d", row)));
+            if (!wrap) {
+                gutter->H(lineH);
+            }
+            gutter->Child(numCell);
+            gutter->Child(FoldChevron(a, state, style, row, caretRow, lineH,
+                                      gutterHover));
+            if (row == firstRow) {
+                gutter->BoundsOut(&state->gutterBox);
+            }
+            band->Child(gutter);
+        } else {
+            if (row == 0) {
+                numCell->BoundsOut(&state->gutterBox);
+            }
+            band->Child(numCell);
         }
         if (guides) {
             El* pane = Div(a)->Flex1()->Child(guides)->Child(el);
@@ -140278,8 +140285,7 @@ PaintApp* PaintAppNew() {
     }
 #endif
     hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-                             __uuidof(IDWriteFactory),
-                             (IUnknown**)&pa->dwrite);
+                             __uuidof(IDWriteFactory), (IUnknown**)&pa->dwrite);
     if (FAILED(hr)) {
         gpui_paint_win_Rel(&pa->d2d);
         delete pa;
@@ -141570,18 +141576,28 @@ void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
         return;
     }
 
+    IDWriteTextLayout* layout = Dw(tl);
+    FLOAT savedW = 0;
+    bool ellipsized = false;
     if (clip && clipW > 0) {
-        Dw(tl)->SetMaxWidth(clipW);
+        savedW = layout->GetMaxWidth();
+        layout->SetMaxWidth(clipW);
         DWRITE_TRIMMING trim = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
         IDWriteInlineObject* sign =
-            EllipsisSign(ctx->pa, FontFor(ctx->pa, Dw(tl)->GetFontSize(), 0));
+            EllipsisSign(ctx->pa, FontFor(ctx->pa, layout->GetFontSize(), 0));
         if (sign) {
-            Dw(tl)->SetTrimming(&trim, sign);
+            layout->SetTrimming(&trim, sign);
         }
+        ellipsized = true;
     }
     D2D1_DRAW_TEXT_OPTIONS opt =
         clip ? D2D1_DRAW_TEXT_OPTIONS_CLIP : D2D1_DRAW_TEXT_OPTIONS_NONE;
-    ctx->rt->rt->DrawTextLayout(D2D1::Point2F(x, y), Dw(tl), b, opt);
+    ctx->rt->rt->DrawTextLayout(D2D1::Point2F(x, y), layout, b, opt);
+    if (ellipsized) {
+        DWRITE_TRIMMING none = {DWRITE_TRIMMING_GRANULARITY_NONE, 0, 0};
+        layout->SetTrimming(&none, nullptr);
+        layout->SetMaxWidth(savedW);
+    }
 }
 
 int TextLayoutHitPoint(TextLayout* tl, Str s, float relX, float relY) {
