@@ -66,6 +66,9 @@ static const StoryInfo kMeta[StoryCount] = {
      "workflow."},
     {"alert-dialog", "AlertDialog",
      "Require a response before the user can continue."},
+    {"attachment", "Attachment",
+     "Composable file and media attachments with lifecycle states and "
+     "actions."},
     {"avatar", "Avatar",
      "Represent a person or organization with an image or fallback."},
     {"badge", "Badge",
@@ -73,6 +76,8 @@ static const StoryInfo kMeta[StoryCount] = {
     {"breadcrumb", "Breadcrumb",
      "A breadcrumb navigation element that shows the current location in a "
      "hierarchy."},
+    {"bubble", "Bubble",
+     "A styleable chat surface for text, rich content, and reactions."},
     {"button", "Button",
      "Displays a button or a component that looks like a button."},
     {"calendar", "Calendar", "A calendar to select a date or date range."},
@@ -119,7 +124,15 @@ static const StoryInfo kMeta[StoryCount] = {
     {"label", "Label",
      "Display concise text with hierarchy, highlighting, and masking."},
     {"list", "List", "A list displays a series of items."},
+    {"marker", "Marker",
+     "A compact row for conversation status, notifications, and separators."},
     {"menu", "Menu", "Popup menu and context menu"},
+    {"message", "Message",
+     "Compose sender identity, metadata, rich content, and message "
+     "actions."},
+    {"message-scroller", "MessageScroller",
+     "A virtualized message list with tail following, unread navigation, "
+     "and anchor preservation."},
     {"native-menu", "NativeMenu",
      "A menu rendered by the operating system. Unlike `PopupMenu`, "
      "it is drawn by the OS and can extend beyond the window "
@@ -152,6 +165,9 @@ static const StoryInfo kMeta[StoryCount] = {
      "A collection of settings groups and items for the "
      "application."},
     {"sheet", "Sheet", "Sheet for open a popup in the edge of the window"},
+    {"shimmer", "Shimmer",
+     "Reusable, theme-aware text loading effects with composable timing "
+     "and appearance."},
     {"sidebar", "Sidebar",
      "A composable, themeable and customizable sidebar component."},
     {"skeleton", "Skeleton",
@@ -1062,6 +1078,12 @@ static Window* StoryOpenWindow(App* app, int story) {
     // Windows and X11 have none, so component::TitleBar draws the minimize /
     // maximize / close controls there itself.
     opts.clientTitleBar = true;
+    // `story_window_background()`: upstream stopped advertising an alpha
+    // surface on Linux, because a compositor was showing the desktop through
+    // a light theme even though every story is designed against an opaque
+    // canvas. There is nothing to change here — `window_linux.cpp` asks X11
+    // for an ordinary opaque visual and never sets an ARGB one — so this is
+    // where that decision would live if the seam existed.
     Window* win =
         WindowOpenView(app, StoryWindowTitle(), 1600, 1200, view.id, opts);
     if (!win) {
