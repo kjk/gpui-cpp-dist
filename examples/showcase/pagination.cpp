@@ -17,17 +17,17 @@ static El* PageBtn(Ctx* cx, int p, bool on) {
                 ->H(28)
                 ->ItemsCenter()
                 ->JustifyCenter()
-                ->Border(1, ExampleRgb(0xd4d4d4));
+                ->Border(1, Rgb(0xd4, 0xd4, 0xd4));
     if (on) {
-        b->Bg(ExampleRgb(0x171717))
+        b->Bg(Rgb(0x17, 0x17, 0x17))
             ->Child(TextEl(a, DupFmt(cx, "%d", p))
                         ->Font(12)
-                        ->Fg(ExampleRgb(0xffffff)));
+                        ->Fg(Rgb(0xff, 0xff, 0xff)));
     } else {
-        b->HoverBg(ExampleRgb(0xf5f5f5))
+        b->HoverBg(Rgb(0xf5, 0xf5, 0xf5))
             ->Child(TextEl(a, DupFmt(cx, "%d", p))
                         ->Font(12)
-                        ->Fg(ExampleRgb(0x171717)));
+                        ->Fg(Rgb(0x17, 0x17, 0x17)));
     }
     return b;
 }
@@ -63,14 +63,14 @@ El* ShowcasePagination(ShowcaseApp* app, Ctx* cx) {
     row->Child(PageBtn(cx, 1, cur == 1));
     if (start > 2) {
         row->Child(Div(a)->W(20)->H(28)->ItemsCenter()->JustifyCenter()->Child(
-            TextEl(a, StrL("…"))->Font(12)->Fg(ExampleRgb(0x171717))));
+            TextEl(a, StrL("…"))->Font(12)->Fg(Rgb(0x17, 0x17, 0x17))));
     }
     for (int p = start; p <= end; p++) {
         row->Child(PageBtn(cx, p, p == cur));
     }
     if (end < n - 1) {
         row->Child(Div(a)->W(20)->H(28)->ItemsCenter()->JustifyCenter()->Child(
-            TextEl(a, StrL("…"))->Font(12)->Fg(ExampleRgb(0x171717))));
+            TextEl(a, StrL("…"))->Font(12)->Fg(Rgb(0x17, 0x17, 0x17))));
     }
     row->Child(PageBtn(cx, n, cur == n));
     return row;

@@ -55,8 +55,8 @@ El* ShowcaseNumberInput(ShowcaseApp* app, Ctx* cx) {
             ->ItemsCenter()
             ->JustifyCenter()
             ->Bg(Rgb(0, 0, 0))
-            ->HoverBg(ExampleRgb(0x404040))
-            ->Child(TextEl(a, StrL("+"))->Font(12)->Fg(ExampleRgb(0xffffff))));
+            ->HoverBg(Rgb(0x40, 0x40, 0x40))
+            ->Child(TextEl(a, StrL("+"))->Font(12)->Fg(Rgb(0xff, 0xff, 0xff))));
     controls->Child(
         ScButton(cx, StrL("dec"))
             ->OnClick(Listen(cx, &StepNum, -1))
@@ -65,22 +65,22 @@ El* ShowcaseNumberInput(ShowcaseApp* app, Ctx* cx) {
             ->ItemsCenter()
             ->JustifyCenter()
             ->Bg(Rgb(0, 0, 0))
-            ->HoverBg(ExampleRgb(0x404040))
-            ->Child(TextEl(a, StrL("−"))->Font(12)->Fg(ExampleRgb(0xffffff))));
+            ->HoverBg(Rgb(0x40, 0x40, 0x40))
+            ->Child(TextEl(a, StrL("−"))->Font(12)->Fg(Rgb(0xff, 0xff, 0xff))));
 
     return Div(a)
         ->FlexCol()
         ->W(200)
         ->Gap(4)
         ->Child(
-            TextEl(a, StrL("Quantity"))->Font(12)->Fg(ExampleRgb(0x171717)))
+            TextEl(a, StrL("Quantity"))->Font(12)->Fg(Rgb(0x17, 0x17, 0x17)))
         ->Child(NumberInput::New(cx, StrL("quantity"))
                     ->FlexRow()
                     ->W(kFill)
                     ->H(28)
                     ->ItemsCenter()
-                    ->Border(1, valid ? ExampleRgb(0x171717)
-                                      : ExampleRgb(0x737373))
+                    ->Border(1, valid ? Rgb(0x17, 0x17, 0x17)
+                                      : Rgb(0x73, 0x73, 0x73))
                     ->Child(InputBase::New(cx, StrL("number-field"), true)
                                 ->OnClick(Listen(cx, &FocusNum))
                                 ->FocusId(0)
@@ -92,7 +92,7 @@ El* ShowcaseNumberInput(ShowcaseApp* app, Ctx* cx) {
                     ->Child(controls))
         ->Child(TextEl(a, valid ? StrL("Step: 1") : StrL("Enter a number"))
                     ->Font(12)
-                    ->Fg(ExampleRgb(0x737373)));
+                    ->Fg(Rgb(0x73, 0x73, 0x73)));
 }
 
 SHOWCASE_PAGE(CompNumberInput, ShowcaseNumberInput);

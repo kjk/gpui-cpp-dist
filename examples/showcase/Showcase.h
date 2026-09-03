@@ -1,7 +1,6 @@
 /* GPUI Base showcase — C++ port of crates/base/examples/showcase. */
 
 #include "gpui.h"
-#include "palette.h"
 
 using namespace gpui;
 
@@ -23,7 +22,6 @@ enum {
     CompHoverCard,
     CompInput,
     CompLink,
-    CompNavStack,
     CompNumberInput,
     CompOtpInput,
     CompPagination,
@@ -41,7 +39,6 @@ enum {
     CompTable,
     CompTabs,
     CompTextSelection,
-    CompTextView,
     CompTextarea,
     CompToast,
     CompToggle,
@@ -54,34 +51,30 @@ enum {
 
 // crates/base is the *unstyled* layer, so its showcase supplies the colors
 // itself: the Rust pages write rgb(0x171717), rgb(0xd4d4d4) and friends
-// inline. These name those literals; they are not theme tokens. Every one of
-// them goes through the shared example palette, which is what turns a page
-// full of light values into one that reads on a dark desktop —
-// crates/base/examples/shared/palette.rs, and `super::example_rgb` at the
-// call sites over there.
+// inline. These mirror those literals; they are not theme tokens.
 inline Rgba ScInk() {
-    return ExampleRgb(0x171717);
+    return Rgb(0x17, 0x17, 0x17);
 }
 inline Rgba ScWhite() {
-    return ExampleRgb(0xffffff);
+    return Rgb(0xff, 0xff, 0xff);
 }
 inline Rgba ScMutedC() {
-    return ExampleRgb(0x737373);
+    return Rgb(0x73, 0x73, 0x73);
 }
 inline Rgba ScGray() {
-    return ExampleRgb(0x525252);
+    return Rgb(0x52, 0x52, 0x52);
 }
 inline Rgba ScBorder() {
-    return ExampleRgb(0xd4d4d4);
+    return Rgb(0xd4, 0xd4, 0xd4);
 }
 inline Rgba ScLine() {
-    return ExampleRgb(0xe5e5e5);
+    return Rgb(0xe5, 0xe5, 0xe5);
 }
 inline Rgba ScHover() {
-    return ExampleRgb(0xf5f5f5);
+    return Rgb(0xf5, 0xf5, 0xf5);
 }
 inline Rgba ScSilver() {
-    return ExampleRgb(0xa3a3a3);
+    return Rgb(0xa3, 0xa3, 0xa3);
 }
 
 // A button that reacts to the pointer. Hover, focus and hit-testing all key
@@ -161,22 +154,8 @@ struct ShowcaseApp {
     // page, built once, since rebuilding it every frame would discard the
     // layout the viewer arranged.
     Entity<DockState> dock = {};
-    // The nav-stack page's state, which is the stack's own: the pages on it
-    // and the ones popped off it — `self.stack` in the Rust page, made once,
-    // since rebuilding it every frame would lose where the viewer navigated.
-    Entity<NavStackState> navStack = {};
     int selA = -1;
     int selB = -1;
-    // The TextView page's document, which is the view's own state: made on
-    // the page's first frame and kept, so scrolling and selection survive.
-    Entity<TextViewState> textView = {};
-    // `text_selection_active` / `text_selection_text`: what the window says
-    // is selected, kept on the page the way Rust keeps it — Rust fills these
-    // from a TextSelectionEvent subscription; the window's selection here is
-    // copied out of the frame that painted it, so the page takes it from the
-    // mouse seams below rather than while it is building its tree.
-    bool selActive = false;
-    char selText[2048] = {};
     // `self.tooltip_visible`, set by the trigger's on_hover. A page is told
     // what the pointer is doing; it does not ask the window.
     bool tooltipVisible = false;
@@ -209,7 +188,6 @@ El* ShowcaseEditor(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseHoverCard(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseInput(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseLink(ShowcaseApp* app, Ctx* cx);
-El* ShowcaseNavStack(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseNumberInput(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseOtpInput(ShowcaseApp* app, Ctx* cx);
 El* ShowcasePagination(ShowcaseApp* app, Ctx* cx);
@@ -227,7 +205,6 @@ El* ShowcaseSwitch(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseTable(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseTabs(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseTextSelection(ShowcaseApp* app, Ctx* cx);
-El* ShowcaseTextView(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseTextarea(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseToast(ShowcaseApp* app, Ctx* cx);
 El* ShowcaseToggle(ShowcaseApp* app, Ctx* cx);

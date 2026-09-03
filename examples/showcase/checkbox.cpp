@@ -21,10 +21,10 @@ El* ShowcaseCheckbox(ShowcaseApp* app, Ctx* cx) {
                         ->Shrink0()
                         ->ItemsCenter()
                         ->JustifyCenter()
-                        ->Border(1, ExampleRgb(0x171717));
+                        ->Border(1, Rgb(0x17, 0x17, 0x17));
     if (on) {
-        indicator->Bg(ExampleRgb(0x171717))
-            ->Child(TextEl(a, StrL("✓"))->Font(11)->Fg(ExampleRgb(0xffffff)));
+        indicator->Bg(Rgb(0x17, 0x17, 0x17))
+            ->Child(TextEl(a, StrL("✓"))->Font(11)->Fg(Rgb(0xff, 0xff, 0xff)));
     }
     return Checkbox::New(cx, StrL("example-checkbox"),
                          on ? CheckboxState::Checked : CheckboxState::Unchecked,
@@ -35,7 +35,7 @@ El* ShowcaseCheckbox(ShowcaseApp* app, Ctx* cx) {
         ->Child(indicator)
         ->Child(TextEl(a, StrL("Enable product updates"))
                     ->Font(12)
-                    ->Fg(ExampleRgb(0x171717)));
+                    ->Fg(Rgb(0x17, 0x17, 0x17)));
 }
 
 SHOWCASE_PAGE(CompCheckbox, ShowcaseCheckbox);

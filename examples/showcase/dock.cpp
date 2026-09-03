@@ -13,19 +13,19 @@ namespace {
 // The page's own palette, the way every base showcase page supplies its own:
 // crates/base is the unstyled layer and has no theme to read.
 Rgba Surface() {
-    return ExampleRgb(0xffffff);
+    return Rgb(0xff, 0xff, 0xff);
 }
 Rgba Chrome() {
-    return ExampleRgb(0xf4f4f5);
+    return Rgb(0xf4, 0xf4, 0xf5);
 }
 Rgba Border() {
-    return ExampleRgb(0xd4d4d8);
+    return Rgb(0xd4, 0xd4, 0xd8);
 }
 Rgba Muted() {
-    return ExampleRgb(0x71717a);
+    return Rgb(0x71, 0x71, 0x7a);
 }
 Rgba Accent() {
-    return ExampleRgb(0x2563eb);
+    return Rgb(0x25, 0x63, 0xeb);
 }
 // DROP_TARGET: the accent at 0x33.
 Rgba DropTarget() {
@@ -63,7 +63,7 @@ El* RenderPanel(Ctx* cx, void* data) {
         ->FlexCol()
         ->Gap(4)
         ->Pad(12)
-        ->Child(ScTxt(cx, Str(d->title), 12, ExampleRgb(0x171717)))
+        ->Child(ScTxt(cx, Str(d->title), 12, Rgb(0x17, 0x17, 0x17)))
         ->Child(ScTxt(cx, Str(d->body), 12, Muted())->Wrap());
 }
 
