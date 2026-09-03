@@ -5181,6 +5181,8 @@ void WindowSetActive(Window* win, bool active) {
         win->eatChar = false;
         win->keyPressPending = false;
     }
+    win->pendingInvalidate = false;
+    win->lastDrawTime = 0;
     AppInvalidate(win);
 }
 
@@ -7859,8 +7861,35 @@ void TextMeasEndFrame(PaintCtx* ctx) {
         return;
     }
     uint32_t frame = c->frame;
-    TextMeasSlot* old = (TextMeasSlot*)c->slots;
-    int oldCap = c->cap;
+    TextMeasSlot* slots = (TextMeasSlot*)c->slots;
+    int cap = c->cap;
+
+    const uint32_t kLayoutKeepFrames = 30;
+    const int kMaxLiveLayouts = 256;
+    int liveLayouts = 0;
+    for (int i = 0; i < cap; i++) {
+        if (!slots[i].occupied || !slots[i].layout) {
+            continue;
+        }
+        if (frame > kLayoutKeepFrames && slots[i].lastUsed + kLayoutKeepFrames < frame) {
+            TextLayoutRelease(slots[i].layout);
+            slots[i].layout = nullptr;
+        } else {
+            liveLayouts++;
+        }
+    }
+    if (liveLayouts > kMaxLiveLayouts) {
+        for (int i = 0; i < cap && liveLayouts > kMaxLiveLayouts; i++) {
+            if (slots[i].occupied && slots[i].layout && slots[i].lastUsed < frame) {
+                TextLayoutRelease(slots[i].layout);
+                slots[i].layout = nullptr;
+                liveLayouts--;
+            }
+        }
+    }
+
+    TextMeasSlot* old = slots;
+    int oldCap = cap;
 
     const int kMaxKeep = 4096;
     if (c->used <= kMaxKeep) {
@@ -8002,7 +8031,7 @@ Size MeasureText(PaintCtx* ctx, Str s, float fontSize, float maxW, bool wrap,
     TextMeasCache* c = &ctx->textCache;
     TextMeasSlot* hit = TextMeasFind(c, s, fontSize, maxW, wrap,
                                      (uint8_t)weight, lineH, nullptr);
-    if (hit && hit->layout) {
+    if (hit) {
         hit->lastUsed = c->frame;
         size.w = hit->w;
         size.h = hit->h;
@@ -8354,10 +8383,9 @@ static taffy::Style ToTaffyStyle(const El* e) {
 
     t.minSize = {ToMinDim(s.minW), ToMinDim(s.minH)};
 
-    t.maxSize = {s.maxWFrac > 0
-                     ? taffy::Dimension::Percent(s.maxWFrac)
-                     : (s.maxW < 1e9f ? ToDim(s.maxW, 0)
-                                      : taffy::Dimension::Auto()),
+    t.maxSize = {s.maxWFrac > 0 ? taffy::Dimension::Percent(s.maxWFrac)
+                                : (s.maxW < 1e9f ? ToDim(s.maxW, 0)
+                                                 : taffy::Dimension::Auto()),
                  s.maxH < 1e9f ? ToDim(s.maxH, 0) : taffy::Dimension::Auto()};
 
     t.flexGrow = s.flexGrow;
@@ -10525,6 +10553,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
         hr.stopClick = e->stopClick;
         hr.stopMouseDown = e->stopMouseDown;
         hr.suppressTextSelection = e->suppressTextSelection;
+        hr.paintLayer = ctx->paintLayer;
         VecAppend(ctx->hits, hr);
 
         ctx->hitParent = ctx->hits.len - 1;
@@ -10692,6 +10721,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
         th.join = e->selJoin;
         th.atom = true;
         th.scope = e->style.trapId;
+        th.paintLayer = ctx->paintLayer;
         VecAppend(ctx->texts, th);
         ctx->textDocLen += 1;
     }
@@ -10721,6 +10751,7 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
             th.join = e->selJoin;
 
             th.scope = e->style.trapId;
+            th.paintLayer = ctx->paintLayer;
             VecAppend(ctx->texts, th);
             ctx->textDocLen += e->text.len + 1;
             int a = ctx->selA;
@@ -11118,7 +11149,8 @@ static float DistToInterval(float v, float lo, float hi) {
 }
 
 static const TextHit* TextHitFind(PaintCtx* ctx, float x, float y, bool nearest,
-                                  Point* outRel, int scope = -1) {
+                                  Point* outRel, int scope = -1,
+                                  int minLayer = 0) {
     if (!ctx) {
         return nullptr;
     }
@@ -11126,6 +11158,9 @@ static const TextHit* TextHitFind(PaintCtx* ctx, float x, float y, bool nearest,
     float bestScore = 1e9f;
     for (int i = ctx->texts.len - 1; i >= 0; i--) {
         const TextHit& h = ctx->texts[i];
+        if (h.paintLayer < minLayer) {
+            continue;
+        }
         if (scope >= 0 && h.scope != scope) {
             continue;
         }
@@ -11185,9 +11220,9 @@ int TextHitOffsetAt(PaintCtx* ctx, float x, float y, bool nearest) {
 }
 
 int TextHitOffsetIn(PaintCtx* ctx, float x, float y, bool nearest, int scope,
-                    int* outScope) {
+                    int* outScope, int minLayer) {
     Point rel = {};
-    const TextHit* h = TextHitFind(ctx, x, y, nearest, &rel, scope);
+    const TextHit* h = TextHitFind(ctx, x, y, nearest, &rel, scope, minLayer);
     if (!h) {
         return -1;
     }
@@ -11452,7 +11487,7 @@ int CopyTextHitsInEntity(PaintCtx* ctx, int a, int b, int scope, EntityId owner,
 
 static void CollectFocus(El* e, Window* win, int trap, Listener increment,
                          Listener decrement, Func0 incrementDirect,
-                         Func0 decrementDirect) {
+                         Func0 decrementDirect, int depth) {
     if (!e) {
         return;
     }
@@ -11476,12 +11511,14 @@ static void CollectFocus(El* e, Window* win, int trap, Listener increment,
     if (e->style.keyContext) {
         DispatchNode n;
         n.context = e->style.keyContext;
+        n.depth = depth;
         VecAppend(win->dispatch, n);
     }
     for (ActionSlot* slot = e->actions; slot; slot = slot->next) {
         DispatchNode n;
         n.action = slot->action;
         n.fn = slot->fn;
+        n.depth = depth;
         VecAppend(win->dispatch, n);
     }
     if (e->style.focusId) {
@@ -11494,6 +11531,7 @@ static void CollectFocus(El* e, Window* win, int trap, Listener increment,
         fr.focusOnPress = e->style.focusOnPress;
 
         DispatchNode marker;
+        marker.depth = depth;
         fr.dispatchIx = win->dispatch.len;
         VecAppend(win->dispatch, marker);
         fr.bounds = e->Bounds();
@@ -11505,7 +11543,7 @@ static void CollectFocus(El* e, Window* win, int trap, Listener increment,
     }
     for (El* c = e->first; c; c = c->next) {
         CollectFocus(c, win, trap, increment, decrement, incrementDirect,
-                     decrementDirect);
+                     decrementDirect, depth + 1);
     }
 
     for (int i = first; i < win->dispatch.len; i++) {
@@ -11525,7 +11563,15 @@ static AppAction gAppActions[kMaxAppActions];
 static int gNAppActions = 0;
 
 void AppOnAction(uint32_t action, ActionFn fn) {
-    if (!action || !fn || gNAppActions >= kMaxAppActions) {
+    if (!action || !fn) {
+        return;
+    }
+    for (int i = 0; i < gNAppActions; i++) {
+        if (gAppActions[i].action == action && gAppActions[i].fn == fn) {
+            return;
+        }
+    }
+    if (gNAppActions >= kMaxAppActions) {
         return;
     }
     gAppActions[gNAppActions].action = action;
@@ -11537,6 +11583,14 @@ static void ToggleInspectorAction(Window* win, ActionEvent*) {
     WindowToggleInspector(win);
 }
 
+#ifdef __APPLE__
+static void QuitAction(Window* win, ActionEvent*) {
+    if (win && win->app) {
+        AppQuitAll(win->app);
+    }
+}
+#endif
+
 static void KeymapDefaults() {
     static uint32_t done = 0;
     if (done == KeymapGeneration()) {
@@ -11544,15 +11598,23 @@ static void KeymapDefaults() {
     }
     done = KeymapGeneration();
     uint32_t toggle = ActionOf(StrL("inspector::ToggleInspector"));
-    KeyBinding bindings[] = {
 #ifdef __APPLE__
+    uint32_t quit = ActionOf(StrL("gpui::Quit"));
+    KeyBinding bindings[] = {
         {"cmd-alt-i", toggle, nullptr},
-#else
-        {"ctrl-shift-i", toggle, nullptr},
-#endif
+
+        {"cmd-q", quit, nullptr},
     };
+#else
+    KeyBinding bindings[] = {
+        {"ctrl-shift-i", toggle, nullptr},
+    };
+#endif
     KeymapBind(bindings, (int)(sizeof(bindings) / sizeof(bindings[0])));
     AppOnAction(toggle, &ToggleInspectorAction);
+#ifdef __APPLE__
+    AppOnAction(quit, &QuitAction);
+#endif
 }
 
 static int DispatchAnchor(Window* win) {
@@ -11563,7 +11625,13 @@ static int DispatchAnchor(Window* win) {
             }
         }
     }
-    return win->dispatch.len;
+
+    int n = win->dispatch.len;
+    int i = 0;
+    while (i < n && win->dispatch[i].depth == 0) {
+        i++;
+    }
+    return i;
 }
 
 static uint32_t KeyDownAction() {
@@ -11606,8 +11674,8 @@ bool WindowDispatchKeyUpEvent(Window* win, KeyEvent* ev) {
 }
 
 uint32_t WindowResolveKeyAction(Window* win, int vk, bool shift, bool ctrl,
-                                bool alt, bool platform, intptr_t* arg,
-                                bool* pending) {
+                                bool alt, bool platform, bool function,
+                                intptr_t* arg, bool* pending) {
     if (arg) {
         *arg = 0;
     }
@@ -11635,6 +11703,7 @@ uint32_t WindowResolveKeyAction(Window* win, int vk, bool shift, bool ctrl,
     chord.ctrl = ctrl;
     chord.alt = alt;
     chord.platform = platform;
+    chord.function = function;
     KeyMatch m = KeymapMatch(chord, contexts, nContexts);
     if (m.pending) {
 
@@ -11650,11 +11719,11 @@ uint32_t WindowResolveKeyAction(Window* win, int vk, bool shift, bool ctrl,
 }
 
 bool WindowDispatchKeyAction(Window* win, int vk, bool shift, bool ctrl,
-                             bool alt, bool platform) {
+                             bool alt, bool platform, bool function) {
     intptr_t arg = 0;
     bool pending = false;
-    uint32_t action = WindowResolveKeyAction(win, vk, shift, ctrl, alt,
-                                             platform, &arg, &pending);
+    uint32_t action = WindowResolveKeyAction(
+        win, vk, shift, ctrl, alt, platform, function, &arg, &pending);
     if (pending) {
         return true;
     }
@@ -12060,7 +12129,7 @@ void AccessibilityCollect(El* root, Vec<AccessibilityNode>* out) {
 void FocusCollect(Window* win, El* root) {
     VecClear(win->focusEls);
     VecClear(win->dispatch);
-    CollectFocus(root, win, 0, {}, {}, {}, {});
+    CollectFocus(root, win, 0, {}, {}, {}, {}, 0);
 
     for (int i = 1; i < win->focusEls.len; i++) {
         FocusRect fr = win->focusEls[i];
@@ -12519,6 +12588,9 @@ static ImageCacheSlot* ImageSlotFor(PaintApp* pa, Str src) {
     slot->ops = ops;
     slot->opsLen = opsLen;
     slot->tried = true;
+    if (HttpUrlIsRemote(src)) {
+        HttpFetchDrop(src);
+    }
     return slot;
 }
 
@@ -12584,6 +12656,8 @@ static bool IsNameChar(char c) {
 struct NamedKey {
     const char* name;
     int vk;
+
+    bool shift = false;
 };
 
 static const NamedKey kNamedKeys[] = {
@@ -12601,28 +12675,72 @@ static const NamedKey kNamedKeys[] = {
     {"up", KeyUp},
     {"right", KeyRight},
     {"down", KeyDown},
+    {"insert", KeyInsert},
     {"delete", KeyDelete},
+    {"back", KeyBrowserBack},
+    {"forward", KeyBrowserForward},
+    {"menu", KeyApps},
 
-    {"-", 189},
-    {"=", 187},
+    {"cut", KeyCut},
+    {"copy", KeyCopy},
+    {"paste", KeyPaste},
+    {"new", KeyNew},
+    {"open", KeyOpen},
+    {"save", KeySave},
+
+    {"add", KeyKpAdd},
+    {"subtract", KeyKpSubtract},
+    {"multiply", KeyKpMultiply},
+    {"divide", KeyKpDivide},
+    {"decimal", KeyKpDecimal},
+    {"separator", KeyKpSeparator},
+    {"equal", KeyKpEqual},
+    {"begin", KeyKpBegin},
+
+    {"-", KeyMinus},
+    {"=", KeyEqual},
     {"[", KeyLeftBracket},
     {"]", KeyRightBracket},
-    {"\\", 220},
-    {";", 186},
-    {"'", 222},
-    {",", 188},
-    {".", 190},
-    {"/", 191},
-    {"`", 192},
+    {"\\", KeyBackslash},
+    {";", KeySemicolon},
+    {"'", KeyQuote},
+    {",", KeyComma},
+    {".", KeyPeriod},
+    {"/", KeySlash},
+    {"`", KeyBacktick},
+    {"_", KeyMinus, true},
+    {"+", KeyEqual, true},
+    {"{", KeyLeftBracket, true},
+    {"}", KeyRightBracket, true},
+    {"|", KeyBackslash, true},
+    {":", KeySemicolon, true},
+    {"\"", KeyQuote, true},
+    {"<", KeyComma, true},
+    {">", KeyPeriod, true},
+    {"?", KeySlash, true},
+    {"~", KeyBacktick, true},
+    {"!", '1', true},
+    {"@", '2', true},
+    {"#", '3', true},
+    {"$", '4', true},
+    {"%", '5', true},
+    {"^", '6', true},
+    {"&", '7', true},
+    {"*", '8', true},
+    {"(", '9', true},
+    {")", '0', true},
 };
 
-static int VkForName(Str name) {
+static int VkForName(Str name, bool* shift) {
     if (name.len == 0) {
         return 0;
     }
     for (int i = 0; i < (int)(sizeof(kNamedKeys) / sizeof(kNamedKeys[0]));
          i++) {
         if (base::StrEqI(name, kNamedKeys[i].name)) {
+            if (shift && kNamedKeys[i].shift) {
+                *shift = true;
+            }
             return kNamedKeys[i].vk;
         }
     }
@@ -12636,8 +12754,11 @@ static int VkForName(Str name) {
             }
             n = n * 10 + (name.s[i] - '0');
         }
-        if (n >= 1 && n <= 12) {
-            return 111 + n;
+        if (n >= 1 && n <= 24) {
+            return KeyF1 + n - 1;
+        }
+        if (n >= 25 && n <= 35) {
+            return KeyF25 + n - 25;
         }
         return 0;
     }
@@ -12649,6 +12770,9 @@ static int VkForName(Str name) {
         return c - 'a' + 'A';
     }
     if (c >= 'A' && c <= 'Z') {
+        if (shift) {
+            *shift = true;
+        }
         return c;
     }
     if (c >= '0' && c <= '9') {
@@ -12693,12 +12817,14 @@ bool KeyChordParse(Str spec, KeyChord* out) {
             c.alt = true;
         } else if (base::StrEqI(part, "shift")) {
             c.shift = true;
+        } else if (base::StrEqI(part, "fn")) {
+            c.function = true;
         } else {
             return false;
         }
         i = dash + 1;
     }
-    c.vk = VkForName(Str(spec.s + i, spec.len - i));
+    c.vk = VkForName(Str(spec.s + i, spec.len - i), &c.shift);
     if (!c.vk) {
         return false;
     }
@@ -12708,7 +12834,8 @@ bool KeyChordParse(Str spec, KeyChord* out) {
 
 bool KeyChordEq(const KeyChord& a, const KeyChord& b) {
     return a.vk == b.vk && a.shift == b.shift && a.ctrl == b.ctrl &&
-           a.alt == b.alt && a.platform == b.platform;
+           a.alt == b.alt && a.platform == b.platform &&
+           a.function == b.function;
 }
 
 int KeyChordsParse(Str spec, KeyChord* out, int maxChords) {
@@ -13076,21 +13203,26 @@ void KeymapClearPending() {
 
 Str KeyName(int vk) {
     for (size_t i = 0; i < sizeof(kNamedKeys) / sizeof(kNamedKeys[0]); i++) {
-        if (kNamedKeys[i].vk == vk) {
+        if (kNamedKeys[i].vk == vk && !kNamedKeys[i].shift) {
             return Str(kNamedKeys[i].name);
         }
     }
 
-    if (vk >= 112 && vk <= 123) {
+    int n = 0;
+    if (vk >= KeyF1 && vk <= KeyF24) {
+        n = vk - KeyF1 + 1;
+    } else if (vk >= KeyF25 && vk <= KeyF35) {
+        n = vk - KeyF25 + 25;
+    }
+    if (n) {
         static char fkey[4] = {};
-        int n = vk - 111;
         fkey[0] = 'f';
         if (n < 10) {
             fkey[1] = (char)('0' + n);
             return Str(fkey, 2);
         }
-        fkey[1] = '1';
-        fkey[2] = (char)('0' + (n - 10));
+        fkey[1] = (char)('0' + n / 10);
+        fkey[2] = (char)('0' + n % 10);
         return Str(fkey, 3);
     }
 
@@ -14111,7 +14243,7 @@ static Path* BuildPath(PaintCtx* ctx, const PathRec& pr, bool relative) {
     return p;
 }
 
-static Path* PathFor(PaintCtx* ctx, const Prim& prim, bool* owned, float* dx,
+static Path* gpui_scene_PathFor(PaintCtx* ctx, const Prim& prim, bool* owned, float* dx,
                      float* dy) {
     *owned = true;
     *dx = 0;
@@ -14406,7 +14538,7 @@ void Replay(PaintCtx* ctx, const Bounds* damage) {
             case kPPathStroke: {
                 bool owned = false;
                 float dx = 0, dy = 0;
-                Path* path = PathFor(ctx, p, &owned, &dx, &dy);
+                Path* path = gpui_scene_PathFor(ctx, p, &owned, &dx, &dy);
                 if (!path) {
                     break;
                 }
@@ -16571,6 +16703,8 @@ void WindowDrawFrame(Window* win, void* native, int pxW, int pxH, float dipW,
     bool presented = !(SceneOn() && scene::SkipPresent(&win->paint));
     timing.presentAt = presented ? drawEnd : -1;
     win->frameTrace[win->frameSeq % (uint64_t)kFrameTraceCap] = timing;
+    win->lastDrawTime = drawEnd;
+    win->pendingInvalidate = false;
     InteractionBenchRecord(win, timing);
     win->frameSeq++;
     FrameBenchTick(win, timing.drawSecs);
@@ -16681,10 +16815,10 @@ static void SetMouseDown(Window* win, bool down) {
 static bool SliderKeyStep(Window* win, int key, bool ctrl, bool alt);
 static bool SemanticKeyStep(Window* win, int key, bool ctrl, bool alt);
 
-void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
-                   bool platform) {
+bool WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
+                   bool platform, bool function) {
     if (!win) {
-        return;
+        return false;
     }
 
     bool held = KeymapPending();
@@ -16696,14 +16830,14 @@ void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
     uint32_t action = 0;
     if (!held) {
         action = WindowResolveKeyAction(win, key, shift, ctrl, alt, platform,
-                                        &actionArg, &actionPending);
+                                        function, &actionArg, &actionPending);
     }
     if (actionPending) {
 
         win->eatChar = true;
         win->eatReturn = false;
         AppInvalidate(win);
-        return;
+        return true;
     }
 
     if (!held && action && win->input && win->input->focused) {
@@ -16724,12 +16858,12 @@ void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
 
     if (!held && !eaten && SliderKeyStep(win, key, ctrl, alt)) {
         win->eatChar = true;
-        return;
+        return true;
     }
 
     if (!held && !eaten && SemanticKeyStep(win, key, ctrl, alt)) {
         win->eatChar = true;
-        return;
+        return true;
     }
 
     if (!held && !eaten) {
@@ -16739,11 +16873,13 @@ void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
         kd.shift = shift;
         kd.ctrl = ctrl;
         kd.alt = alt;
+        kd.platform = platform;
+        kd.function = function;
         if (WindowDispatchKeyEvent(win, &kd)) {
 
             win->eatChar = true;
             AppInvalidate(win);
-            return;
+            return true;
         }
     }
 
@@ -16752,14 +16888,15 @@ void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
         win->eatChar = true;
         win->eatReturn = false;
         AppInvalidate(win);
-        return;
+        return true;
     }
 
     if (!eaten && key == KeyTab) {
         FocusTrapTab(win, shift);
         AppInvalidate(win);
-        return;
+        return true;
     }
+    bool windowHandled = false;
     if (win->onKey.IsValid()) {
         KeyEvent ev = {};
         ev.vk = key;
@@ -16768,20 +16905,23 @@ void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
         ev.ctrl = ctrl;
         ev.alt = alt;
         ev.platform = platform;
+        ev.function = function;
         ListenerCall(win->app, win, win->onKey, &ev);
+        windowHandled = !ev.propagate;
     }
 
     bool activates = (key == KeyReturn && !win->eatReturn) ||
                      (key == KeySpace && !(win->input && win->input->focused));
-    bool modified = shift || ctrl || alt;
+    bool modified = shift || ctrl || alt || platform || function;
     win->keyPressPending = activates && !modified && !eaten && win->focusId;
     win->keyPressGen = win->focusGen;
     win->eatReturn = false;
     AppInvalidate(win);
+    return eaten || windowHandled || win->keyPressPending;
 }
 
 void WindowKeyUp(Window* win, int key, bool shift, bool ctrl, bool alt,
-                 bool platform) {
+                 bool platform, bool function) {
     if (!win) {
         return;
     }
@@ -16794,6 +16934,7 @@ void WindowKeyUp(Window* win, int key, bool shift, bool ctrl, bool alt,
         ku.ctrl = ctrl;
         ku.alt = alt;
         ku.platform = platform;
+        ku.function = function;
         WindowDispatchKeyUpEvent(win, &ku);
     }
 
@@ -16801,7 +16942,7 @@ void WindowKeyUp(Window* win, int key, bool shift, bool ctrl, bool alt,
     int gen = win->keyPressGen;
     win->keyPressPending = false;
     if (!ClickFromKeyRelease(pending, gen, win->focusGen, key,
-                             shift || ctrl || alt)) {
+                             shift || ctrl || alt || platform || function)) {
         return;
     }
 
@@ -17330,8 +17471,8 @@ static void DispatchMouseMove(Window* win, const MouseMoveEvent& in) {
 
     for (int i = 0; i < win->paint.inputs.len; i++) {
         InputState* f = win->paint.inputs[i];
-        if (f->hoverDef.locations.len > 0 && f->hoverDef.bounds
-                                                 .Contains({x, y})) {
+        if (f->hoverDef.locations.len > 0 &&
+            f->hoverDef.bounds.Contains({x, y})) {
             if (win->cursor != CursorKind::Pointer) {
                 win->cursor = CursorKind::Pointer;
                 PlatSetCursor(win, CursorKind::Pointer);
@@ -17349,7 +17490,10 @@ static void DispatchMouseMove(Window* win, const MouseMoveEvent& in) {
 
     if (under && under->cursor != CursorKind::Arrow) {
         want = under->cursor;
-    } else if (TextHitOffsetAt(&win->paint, x, y, false) >= 0) {
+    } else if (under && under->suppressTextSelection) {
+        want = CursorKind::Arrow;
+    } else if (TextHitOffsetIn(&win->paint, x, y, false, -1, nullptr,
+                               under ? under->paintLayer : 0) >= 0) {
         want = CursorKind::IBeam;
     }
     if (want != win->cursor) {
@@ -18163,7 +18307,6 @@ void WindowTimerTick(Window* win) {
         }
         TickEvent ev = {ms};
         ListenerCall(win->app, win, l, &ev);
-        repaint = true;
     }
 
     int keep = 0;
@@ -18178,7 +18321,8 @@ void WindowTimerTick(Window* win) {
     }
     win->timers.len = keep;
 
-    if (win->anim || win->animFrame || repaint) {
+    if (win->anim || win->animFrame || win->pendingInvalidate || repaint) {
+        win->pendingInvalidate = false;
         AppInvalidate(win);
     }
     PlatSetTimer(win, WindowTimerMs(win));
@@ -18203,9 +18347,16 @@ int WindowTimerMs(Window* win) {
 
     double now = TimeNow();
     double soonest = -1;
-    if (win->anim || win->opts.anim || win->animFrame) {
+    if (win->anim || win->opts.anim || win->animFrame || win->pendingInvalidate) {
 
-        soonest = now + (win->active ? 0.016 : kInactiveFrameInterval);
+        double interval = win->active ? 0.016 : kInactiveFrameInterval;
+        double target = (win->lastDrawTime > 0) ? (win->lastDrawTime + interval) : now;
+        if (target < now) {
+            target = now;
+        }
+        if (soonest < 0 || target < soonest) {
+            soonest = target;
+        }
     }
 
     for (int i = 0; i < win->timers.len; i++) {
@@ -18601,6 +18752,7 @@ static PlatMenuItem* AppMenuToPlat(AppMenuState* state, Arena* a,
                 p.keyMods.alt = chord.alt;
                 p.keyMods.shift = chord.shift;
                 p.keyMods.platform = chord.platform;
+                p.keyMods.function = chord.function;
             }
         }
     }
@@ -58767,8 +58919,8 @@ PopupMenu* PopupMenu::Link(Str label, Str href, IconName icon) {
 }
 PopupMenu* PopupMenu::Separator() {
 
-    if (items.len == 0 || items[items.len - 1]
-                                  .kind == MenuItemKind::Separator) {
+    if (items.len == 0 ||
+        items[items.len - 1].kind == MenuItemKind::Separator) {
         return this;
     }
     MenuAdd(this, MenuItemKind::Separator);
@@ -59001,7 +59153,9 @@ El* PopupMenu::IntoEl() {
                 ->Gap(4)
                 ->ItemsCenter()
                 ->JustifyBetween()
-                ->Radius(radius);
+                ->Radius(radius)
+
+                ->SuppressTextSelection();
         if (lit) {
             row->Bg(th.tokens.accent);
         }
@@ -59128,9 +59282,9 @@ El* DropdownMenu::IntoEl() {
                 trigger->PathClick(StrL("trigger"));
             }
 
-            trigger
-                ->OnClick(ListenTo(menu->state, &PopupMenuState::OnTriggerClick,
-                                   (intptr_t)st->open));
+            trigger->OnClick(ListenTo(menu->state,
+                                      &PopupMenuState::OnTriggerClick,
+                                      (intptr_t)st->open));
         }
         wrap->Child(trigger);
     }
@@ -59218,8 +59372,8 @@ El* ContextMenu::IntoEl() {
     context->open = st->open;
     context->position = {st->x, st->y};
 
-    box->PathClick(id)
-        ->OnMouseDown(ListenTo(state, &ContextMenuState::OnMouseDown));
+    box->PathClick(id)->OnMouseDown(
+        ListenTo(state, &ContextMenuState::OnMouseDown));
     if (st->open) {
         box->Child(
             menu->IntoEl()->Absolute()->Left(st->x)->Top(st->y)->Deferred());
@@ -76828,6 +76982,111 @@ bool HttpUrlIsRemote(Str url) {
            base::StrStartsWithI(url, "https://");
 }
 
+struct HttpAsyncJob {
+    HttpReq req;
+    Str url;
+    Str method;
+    Str body;
+    Vec<HttpHeader> headers;
+    HttpRsp response;
+    Func1<HttpAsyncResult> done;
+    bool ok = false;
+};
+
+static void HttpAsyncJobFree(HttpAsyncJob* job) {
+    if (!job) {
+        return;
+    }
+    StrFree(job->url);
+    StrFree(job->method);
+    StrFree(job->body);
+    for (int i = 0; i < job->headers.len; i++) {
+        StrFree(job->headers[i].name);
+        StrFree(job->headers[i].value);
+    }
+    VecReset(job->headers);
+    HttpRspFree(&job->response);
+    delete job;
+}
+
+static HttpAsyncJob* HttpAsyncJobNew(const HttpReq& req,
+                                     Func1<HttpAsyncResult> done) {
+    HttpAsyncJob* job = new HttpAsyncJob();
+    job->url = StrDup(req.url);
+    job->method = StrDup(req.method);
+    job->body = StrDup(req.body);
+    bool ok = (job->url.s || req.url.len == 0) &&
+              (job->method.s || req.method.len == 0) &&
+              (job->body.s || req.body.len == 0);
+    for (int i = 0; i < req.nHeaders && ok; i++) {
+        HttpHeader header;
+        header.name = StrDup(req.headers[i].name);
+        header.value = StrDup(req.headers[i].value);
+        if ((!header.name.s && req.headers[i].name.len != 0) ||
+            (!header.value.s && req.headers[i].value.len != 0) ||
+            !VecAppend(job->headers, header)) {
+            StrFree(header.name);
+            StrFree(header.value);
+            ok = false;
+        }
+    }
+    if (!ok) {
+        HttpAsyncJobFree(job);
+        return nullptr;
+    }
+    job->req.url = job->url;
+    job->req.method = job->method;
+    job->req.headers = job->headers.len ? job->headers.els : nullptr;
+    job->req.nHeaders = job->headers.len;
+    job->req.body = job->body;
+    job->req.noRedirect = req.noRedirect;
+    job->done = done;
+    return job;
+}
+
+#if GPUI_OS_WASM
+
+bool HttpWasmSendAsync(const HttpReq& req, Func1<HttpAsyncResult> done);
+
+static void HttpAsyncWasmDone(HttpAsyncJob* job, HttpAsyncResult result) {
+    job->done.Call(result);
+    HttpAsyncJobFree(job);
+}
+#else
+static void HttpAsyncWork(HttpAsyncJob* job) {
+    job->ok = HttpSend(job->req, &job->response);
+}
+
+static void HttpAsyncDone(HttpAsyncJob* job) {
+    HttpAsyncResult result = {job->ok, &job->response};
+    job->done.Call(result);
+    HttpAsyncJobFree(job);
+}
+#endif
+
+bool HttpSendAsync(const HttpReq& req, Func1<HttpAsyncResult> done) {
+    if (!done.IsValid()) {
+        return false;
+    }
+    HttpAsyncJob* job = HttpAsyncJobNew(req, done);
+    if (!job) {
+        return false;
+    }
+#if GPUI_OS_WASM
+    if (!HttpWasmSendAsync(job->req, MkFunc1(HttpAsyncWasmDone, job))) {
+        HttpAsyncJobFree(job);
+        return false;
+    }
+    return true;
+#else
+    if (!ExecSpawn(MkFunc0(HttpAsyncWork, job), MkFunc0(HttpAsyncDone, job))) {
+        HttpAsyncJobFree(job);
+        return false;
+    }
+    return true;
+#endif
+}
+
 struct FetchSlot {
     Str url = {};
     FetchState state = FetchState::None;
@@ -76873,7 +77132,9 @@ int HttpFetchPending() {
 
 struct FetchJob {
     int slot = 0;
+#if !GPUI_OS_WASM
     Str url = {};
+#endif
 };
 
 static void SlotDrop(FetchSlot* s) {
@@ -76889,20 +77150,22 @@ static void SlotDrop(FetchSlot* s) {
     s->state = FetchState::None;
 }
 
-static void FetchWorker(FetchJob* job) {
-    HttpRsp r;
-    bool ok = HttpGet(job->url, &r);
-    bool got = ok && r.status >= 200 && r.status < 300 && r.body.len > 0;
+#if GPUI_OS_WASM
+
+static void FetchDone(FetchJob* job, HttpAsyncResult result) {
+    HttpRsp* response = result.response;
+    bool got = result.ok && response && response->status >= 200 &&
+               response->status < 300 && response->body.len > 0;
 
     gFetchLock.Lock();
     FetchSlot* s = &gFetch[job->slot];
     if (got) {
 
-        s->body = r.body.els;
-        s->len = r.body.len;
-        r.body.els = nullptr;
-        r.body.len = 0;
-        r.body.cap = 0;
+        s->body = response->body.els;
+        s->len = response->body.len;
+        response->body.els = nullptr;
+        response->body.len = 0;
+        response->body.cap = 0;
         s->state = FetchState::Done;
     } else {
         s->state = FetchState::Failed;
@@ -76910,10 +77173,37 @@ static void FetchWorker(FetchJob* job) {
     gFetchPending--;
     gFetchLock.Unlock();
 
-    HttpRspFree(&r);
+    Free(nullptr, job);
+    gOnFetchDone.Call();
+}
+#else
+
+static void FetchWorker(FetchJob* job) {
+    HttpRsp response;
+    bool ok = HttpGet(job->url, &response);
+    bool got = ok && response.status >= 200 && response.status < 300 &&
+               response.body.len > 0;
+
+    gFetchLock.Lock();
+    FetchSlot* s = &gFetch[job->slot];
+    if (got) {
+        s->body = response.body.els;
+        s->len = response.body.len;
+        response.body.els = nullptr;
+        response.body.len = 0;
+        response.body.cap = 0;
+        s->state = FetchState::Done;
+    } else {
+        s->state = FetchState::Failed;
+    }
+    gFetchPending--;
+    gFetchLock.Unlock();
+
+    HttpRspFree(&response);
     StrFree(job->url);
     Free(nullptr, job);
 }
+#endif
 
 static FetchSlot* SlotFree() {
     for (int i = 0; i < kFetchSlots; i++) {
@@ -76976,16 +77266,26 @@ FetchState HttpFetch(Str url, const uint8_t** bytes, int* len) {
     s->url = StrDup(url);
     s->state = FetchState::Pending;
     job->slot = (int)(s - gFetch);
+#if !GPUI_OS_WASM
     job->url = StrDup(url);
+#endif
     gFetchPending++;
     gFetchLock.Unlock();
 
-    if (!ExecSpawn(MkFunc0(FetchWorker, job), gOnFetchDone)) {
+#if GPUI_OS_WASM
+    HttpReq req;
+    req.url = url;
+    if (!HttpSendAsync(req, MkFunc1(FetchDone, job))) {
+#else
+    if (!job->url.s || !ExecSpawn(MkFunc0(FetchWorker, job), gOnFetchDone)) {
+#endif
         gFetchLock.Lock();
         gFetchPending--;
         SlotDrop(s);
         gFetchLock.Unlock();
+#if !GPUI_OS_WASM
         StrFree(job->url);
+#endif
         Free(nullptr, job);
         return FetchState::None;
     }
@@ -77008,6 +77308,19 @@ void HttpFetchClear() {
         }
     }
     gFetchNext = 0;
+    gFetchLock.Unlock();
+}
+
+void HttpFetchDrop(Str url) {
+    gFetchLock.Lock();
+    for (int i = 0; i < kFetchSlots; i++) {
+        FetchSlot* s = &gFetch[i];
+        if (s->state != FetchState::None && s->state != FetchState::Pending &&
+            base::StrEq(s->url, url)) {
+            SlotDrop(s);
+            break;
+        }
+    }
     gFetchLock.Unlock();
 }
 
@@ -77659,8 +77972,8 @@ static void UpdateReadout(FpsMonitor* self) {
     self->readout.frameMillis = FrameSamplerMeanDraw(s) * 1000.f;
     self->readout.percentileMillis =
         FrameSamplerPercentileDraw(s, kFramePercentile) * 1000.f;
-    self->readout
-        .droppedPercent = FrameSamplerOverBudget(s, self->frameBudget) * 100.f;
+    self->readout.droppedPercent =
+        FrameSamplerOverBudget(s, self->frameBudget) * 100.f;
     self->readout.invalidations = FrameSamplerMeanInvalidations(s);
     self->readoutAt = now;
 }
@@ -77856,19 +78169,20 @@ static El* FpsHeadline(Ctx* cx, FpsMonitor* self, float fps, Rgba color,
         ->W(kFill)
         ->H(kHeadlineHeight)
         ->Child(trace)
-        ->Child(Div(cx->a)
-                    ->FlexRow()
-                    ->SizeFull()
-                    ->ItemsEnd()
-                    ->JustifyCenter()
-                    ->Gap(4)
+        ->Child(
+            Div(cx->a)
+                ->FlexRow()
+                ->SizeFull()
+                ->ItemsEnd()
+                ->JustifyCenter()
+                ->Gap(4)
 
-                    ->Child(Div(cx->a)->W(kUnitWidth)->H(kTextSize))
-                    ->Child(figure)
-                    ->Child(Div(cx->a)
-                                ->W(kUnitWidth)
-                                ->Child(TextEl(cx->a, StrL("FPS"))
-                                            ->Fg(style.muted))));
+                ->Child(Div(cx->a)->W(kUnitWidth)->H(kTextSize))
+                ->Child(figure)
+                ->Child(
+                    Div(cx->a)
+                        ->W(kUnitWidth)
+                        ->Child(TextEl(cx->a, StrL("FPS"))->Fg(style.muted))));
 }
 
 void FpsMonitor::OnToggleCompact(FpsMonitor* self, Ctx* cx, const ClickEvent*) {
@@ -77882,8 +78196,8 @@ El* FpsMonitor::Render(FpsMonitor* self, Ctx* cx) {
     UpdateAxis(self);
     StartResourceSampling(self, cx);
 
-    if (self->continuous && cx->win && !cx->win->anim) {
-        AppRequestAnim(cx->win, true);
+    if (self->continuous && cx->win) {
+        WindowRequestAnimationFrame(cx->win);
     }
 
     const FpsStyle& style = FpsStyleDark();
@@ -77899,6 +78213,7 @@ El* FpsMonitor::Render(FpsMonitor* self, Ctx* cx) {
                   ->Bg(style.background)
                   ->Mono()
                   ->Font(kTextSize)
+                  ->SuppressTextSelection()
                   ->OnClick(Listen(cx, &FpsMonitor::OnToggleCompact));
 
     if (self->compact) {
@@ -90373,7 +90688,7 @@ void NodeSetPerKind(Arena* a, Node* n, uint32_t word) {
     NodeSetStr(a, n, NodeStrKind::PerKind, Str(buf, len));
 }
 
-static uint8_t* AlignAt(Arena* a, ArenaAlign al, int32_t* count) {
+static uint8_t* markdown_mdast_AlignAt(Arena* a, ArenaAlign al, int32_t* count) {
     *count = 0;
     if (al == kArenaAlignNone) {
         return nullptr;
@@ -90406,13 +90721,13 @@ ArenaAlign ArenaAlignNew(Arena* a, int32_t count) {
 
 int32_t ArenaAlignCount(Arena* a, ArenaAlign al) {
     int32_t count = 0;
-    AlignAt(a, al, &count);
+    markdown_mdast_AlignAt(a, al, &count);
     return count;
 }
 
 AlignKind ArenaAlignAt(Arena* a, ArenaAlign al, int32_t i) {
     int32_t count = 0;
-    uint8_t* bits = AlignAt(a, al, &count);
+    uint8_t* bits = markdown_mdast_AlignAt(a, al, &count);
     if (!bits || i < 0 || i >= count) {
         return AlignKind::None;
     }
@@ -90421,7 +90736,7 @@ AlignKind ArenaAlignAt(Arena* a, ArenaAlign al, int32_t i) {
 
 void ArenaAlignSet(Arena* a, ArenaAlign al, int32_t i, AlignKind k) {
     int32_t count = 0;
-    uint8_t* bits = AlignAt(a, al, &count);
+    uint8_t* bits = markdown_mdast_AlignAt(a, al, &count);
     if (!bits || i < 0 || i >= count) {
         return;
     }
@@ -96043,6 +96358,221 @@ bool FetchSend(const FetchRequest& request, const Capabilities& capabilities,
         walk.Free();
         return true;
     }
+}
+
+struct FetchAsyncState {
+    FetchWalk walk;
+    Capabilities capabilities;
+    FetchResult result;
+    Vec<HttpHeader> wire;
+    Func1<FetchAsyncResult> done;
+    int redirects = 0;
+
+    HttpRsp testResponse;
+    bool testOk = false;
+};
+
+static void FetchAsyncStateFree(FetchAsyncState* state) {
+    if (!state) return;
+    state->walk.Free();
+    state->result.Free();
+    VecReset(state->wire);
+    HttpRspFree(&state->testResponse);
+    delete state;
+}
+
+static bool FetchAsyncInit(FetchAsyncState* state, const FetchRequest& request,
+                           const Capabilities& capabilities) {
+    state->walk.url = StrDup(request.url);
+    state->walk
+        .method = StrDup(request.method.len > 0 ? request.method : StrL("GET"));
+    state->walk.body = StrDup(request.body);
+    bool allocated = state->walk.url.s && state->walk.method.s &&
+                     (state->walk.body.s || request.body.len == 0);
+    for (int i = 0; i < request.headers.len && allocated; i++) {
+        FetchHeader copy;
+        copy.name = StrDup(request.headers[i].name);
+        copy.value = StrDup(request.headers[i].value);
+        if (!copy.name.s || !copy.value.s ||
+            !VecAppend(state->walk.headers, copy)) {
+            StrFree(copy.name);
+            StrFree(copy.value);
+            allocated = false;
+        }
+    }
+    if (!allocated) {
+        FetchError(&state->result.error,
+                   StrL("allocating the fetch request failed"));
+        return false;
+    }
+    if (state->walk.body.len > kFetchMaxRequestBody) {
+        FetchError(&state->result.error,
+                   fmt("fetch request body exceeded the %d byte limit",
+                       kFetchMaxRequestBody));
+        return false;
+    }
+    state->capabilities = capabilities;
+    return FetchAuthorize(state->walk.url, state->walk.method,
+                          state->capabilities, &state->result.error);
+}
+
+static void FetchAsyncFinish(FetchAsyncState* state, bool ok) {
+    FetchAsyncResult result = {ok, &state->result};
+    state->done.Call(result);
+    FetchAsyncStateFree(state);
+}
+
+static bool FetchAsyncStart(FetchAsyncState* state);
+
+static void FetchAsyncResponse(FetchAsyncState* state, HttpAsyncResult landed) {
+    HttpRsp* response = landed.response;
+    if (!landed.ok || !response) {
+        FetchError(&state->result.error,
+                   fmt("fetching %s failed", state->walk.url));
+        FetchAsyncFinish(state, false);
+        return;
+    }
+
+    if (FetchFollowsLocation(response->status)) {
+        bool ok = true;
+        if (!response->redirectUrl) {
+            FetchError(&state->result.error,
+                       fmt("redirect from %s has no valid Location header",
+                           state->walk.url));
+            ok = false;
+        } else if (state->redirects >= kFetchMaxRedirects) {
+            FetchError(&state->result.error,
+                       fmt("fetch exceeded the %d redirect limit",
+                           kFetchMaxRedirects));
+            ok = false;
+        }
+        if (ok) {
+            FetchRewriteRedirect(response->status, &state->walk.method,
+                                 &state->walk.headers, &state->walk.body);
+            ok = FetchAuthorizeRedirect(state->capabilities, state->walk.method,
+                                        state->walk.url, response->redirectUrl,
+                                        state->walk.headers,
+                                        &state->result.error);
+        }
+        Str next = ok ? StrDup(response->redirectUrl) : Str{};
+        if (ok && !next.s) {
+            FetchError(&state->result.error,
+                       StrL("allocating the redirect URL failed"));
+            ok = false;
+        }
+        if (!ok) {
+            StrFree(next);
+            FetchAsyncFinish(state, false);
+            return;
+        }
+        StrFree(state->walk.url);
+        state->walk.url = next;
+        state->redirects++;
+        if (!FetchAsyncStart(state)) {
+            FetchAsyncFinish(state, false);
+        }
+        return;
+    }
+
+    if (response->body.len > kFetchMaxBody) {
+        FetchError(&state->result.error,
+                   fmt("response body from %s exceeded the %d byte limit",
+                       state->walk.url, kFetchMaxBody));
+        FetchAsyncFinish(state, false);
+        return;
+    }
+    state->result.status = response->status;
+    state->result.body =
+        StrDup(Str((const char*)response->body.els, response->body.len));
+    if (!state->result.body.s && response->body.len != 0) {
+        state->result.status = 0;
+        FetchError(&state->result.error,
+                   StrL("allocating the fetch response failed"));
+        FetchAsyncFinish(state, false);
+        return;
+    }
+    state->result.url = state->walk.url;
+    state->walk.url = {};
+    FetchAsyncFinish(state, true);
+}
+
+static void FetchAsyncTestWork(FetchAsyncState* state) {
+    state->testOk =
+        gFetchHttpSendForTests
+            ? gFetchHttpSendForTests(
+                  HttpReq{state->walk.url, state->walk.method, state->wire.els,
+                          state->wire.len, state->walk.body, true},
+                  &state->testResponse)
+            : false;
+}
+
+static void FetchAsyncTestDone(FetchAsyncState* state) {
+    HttpRsp response;
+    response.status = state->testResponse.status;
+    response.body.els = state->testResponse.body.els;
+    response.body.len = state->testResponse.body.len;
+    response.body.cap = state->testResponse.body.cap;
+    response.contentType = state->testResponse.contentType;
+    response.redirectUrl = state->testResponse.redirectUrl;
+    state->testResponse.status = 0;
+    state->testResponse.body.els = nullptr;
+    state->testResponse.body.len = 0;
+    state->testResponse.body.cap = 0;
+    state->testResponse.contentType = {};
+    state->testResponse.redirectUrl = {};
+    HttpAsyncResult landed = {state->testOk, &response};
+    FetchAsyncResponse(state, landed);
+    HttpRspFree(&response);
+}
+
+static bool FetchAsyncStart(FetchAsyncState* state) {
+    VecReset(state->wire);
+    for (int i = 0; i < state->walk.headers.len; i++) {
+        HttpHeader header;
+        header.name = state->walk.headers[i].name;
+        header.value = state->walk.headers[i].value;
+        if (!VecAppend(state->wire, header)) {
+            FetchError(&state->result.error,
+                       StrL("allocating the fetch headers failed"));
+            return false;
+        }
+    }
+    HttpReq request;
+    request.url = state->walk.url;
+    request.method = state->walk.method;
+    request.headers = state->wire.len ? state->wire.els : nullptr;
+    request.nHeaders = state->wire.len;
+    request.body = state->walk.body;
+    request.noRedirect = true;
+    if (gFetchHttpSendForTests) {
+        if (!ExecSpawn(MkFunc0(FetchAsyncTestWork, state),
+                       MkFunc0(FetchAsyncTestDone, state))) {
+            FetchError(&state->result.error,
+                       StrL("the fetch test transport could not start"));
+            return false;
+        }
+        return true;
+    }
+    if (!HttpSendAsync(request, MkFunc1(FetchAsyncResponse, state))) {
+        FetchError(&state->result.error,
+                   fmt("fetching %s could not start", state->walk.url));
+        return false;
+    }
+    return true;
+}
+
+bool FetchSendAsync(const FetchRequest& request,
+                    const Capabilities& capabilities,
+                    Func1<FetchAsyncResult> done) {
+    if (!done.IsValid()) return false;
+    FetchAsyncState* state = new FetchAsyncState();
+    state->done = done;
+    if (!FetchAsyncInit(state, request, capabilities) ||
+        !FetchAsyncStart(state)) {
+        FetchAsyncStateFree(state);
+        return false;
+    }
+    return true;
 }
 
 }
@@ -102090,10 +102620,6 @@ static void FsJobWork(FsJob* job) {
                  job->recursive, &job->result, &job->error);
 }
 
-static void FetchJobWork(ShellFetchJob* job) {
-    shell::FetchSend(job->request, job->capabilities, &job->result);
-}
-
 static void StorageWriteWork(StorageWriteJob* job) {
     job->ok = shell::StoragePersist(job->write, &job->error);
 }
@@ -102185,11 +102711,30 @@ static JSValue FetchJobResolved(ShellRuntimeImpl* impl, void* user) {
     return FetchJobValue(impl->context, (ShellFetchJob*)user);
 }
 
+#if !GPUI_OS_WASM
+static void FetchJobWork(ShellFetchJob* job) {
+    shell::FetchSend(job->request, job->capabilities, &job->result);
+}
+#endif
+
 static void ShellFetchJobDestroy(void* job) {
     ShellFetchJob* self = (ShellFetchJob*)job;
     self->Free();
     delete self;
 }
+
+#if GPUI_OS_WASM
+
+static void ShellFetchDone(ShellFetchJob* job, shell::FetchAsyncResult landed) {
+    if (landed.result) {
+        job->result = *landed.result;
+        *landed.result = {};
+    }
+    ShellTaskLease lease{&job->head, job, ShellFetchJobDestroy};
+    bool failed = !landed.ok || job->result.error.s != nullptr;
+    SettleShellTask(&lease, failed, job->result.error, FetchJobResolved, job);
+}
+#else
 
 static Task ShellFetchTask(TaskGuard guard, ShellFetchJob* job) {
     (void)guard;
@@ -102198,6 +102743,7 @@ static Task ShellFetchTask(TaskGuard guard, ShellFetchJob* job) {
     bool failed = job->result.error.s != nullptr;
     SettleShellTask(&lease, failed, job->result.error, FetchJobResolved, job);
 }
+#endif
 
 static void StorageFlushDone(StorageFlushState* state,
                              shell::StorageOutcome outcome) {
@@ -107170,16 +107716,28 @@ static JSValue NativeFetch(JSContext* ctx, JSValueConst, int argc,
     ControlRetain(job->head.control);
     job->head.task = task;
     job->head.kind = ShellTaskKind::Fetch;
+#if GPUI_OS_WASM
+    if (!shell::FetchSendAsync(job->request, job->capabilities,
+                               MkFunc1(ShellFetchDone, job))) {
+        ForgetTask(impl, task, false);
+        ControlRelease(job->head.control);
+        job->Free();
+        delete job;
+        JS_FreeValue(ctx, promise);
+        return JS_ThrowInternalError(ctx,
+                                     "fetch could not start asynchronous work");
+    }
+#else
     TaskGuard guard;
     guard.alive = ShellTaskOwnerAlive;
     guard.user = &job->head;
-
     Task work = ShellFetchTask(guard, job);
     if (!work.IsRunning()) {
         JS_FreeValue(ctx, promise);
         return JS_ThrowInternalError(ctx,
                                      "fetch could not start background work");
     }
+#endif
     return promise;
 }
 
@@ -111349,6 +111907,7 @@ static const float kShellWheelNotch = 48.f;
 
 static Str ScriptKeystroke(Arena* arena, const KeyEvent& event) {
     StrBuilder out;
+    if (event.function) StrBuilderAppend(arena, out, StrL("fn-"));
     if (event.ctrl) StrBuilderAppend(arena, out, StrL("ctrl-"));
     if (event.alt) StrBuilderAppend(arena, out, StrL("alt-"));
     if (event.platform) StrBuilderAppend(arena, out, StrL("cmd-"));
@@ -111365,12 +111924,13 @@ static Str ScriptKeystroke(Arena* arena, const KeyEvent& event) {
 }
 
 static JSValue JsModifiers(JSContext* ctx, bool shift, bool control, bool alt,
-                           bool platform) {
+                           bool platform, bool function) {
     JSValue modifiers = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, modifiers, "shift", JS_NewBool(ctx, shift));
     JS_SetPropertyStr(ctx, modifiers, "control", JS_NewBool(ctx, control));
     JS_SetPropertyStr(ctx, modifiers, "alt", JS_NewBool(ctx, alt));
     JS_SetPropertyStr(ctx, modifiers, "platform", JS_NewBool(ctx, platform));
+    JS_SetPropertyStr(ctx, modifiers, "function", JS_NewBool(ctx, function));
     return modifiers;
 }
 
@@ -111414,7 +111974,7 @@ void ShellRuntime::DispatchKey(shell::CallbackId callback,
     }
     JS_SetPropertyStr(impl->context, payload, "modifiers",
                       JsModifiers(impl->context, event.shift, event.ctrl,
-                                  event.alt, event.platform));
+                                  event.alt, event.platform, event.function));
     ArenaDelete(arena);
     ShellPropagationGuard guard(propagate);
     Dispatch(this, callback, payload, window, app);
@@ -111438,7 +111998,7 @@ void ShellRuntime::DispatchMouseButton(shell::CallbackId callback,
     JS_SetPropertyStr(
         impl->context, payload, "modifiers",
         JsModifiers(impl->context, modifiers.shift, modifiers.control,
-                    modifiers.alt, modifiers.platform));
+                    modifiers.alt, modifiers.platform, modifiers.function));
     Dispatch(this, callback, payload, window, app);
 }
 
@@ -111467,10 +112027,11 @@ void ShellRuntime::DispatchScrollWheel(shell::CallbackId callback,
                       JS_NewString(impl->context, phase));
     SetPointerGeometry(impl->context, payload, event.x, event.y, bounds,
                        hasBounds);
-    JS_SetPropertyStr(impl->context, payload, "modifiers",
-                      JsModifiers(impl->context, event.modifiers.shift,
-                                  event.modifiers.control, event.modifiers.alt,
-                                  event.modifiers.platform));
+    JS_SetPropertyStr(
+        impl->context, payload, "modifiers",
+        JsModifiers(impl->context, event.modifiers.shift,
+                    event.modifiers.control, event.modifiers.alt,
+                    event.modifiers.platform, event.modifiers.function));
     ShellPropagationGuard guard(propagate);
     Dispatch(this, callback, payload, window, app);
 }
@@ -147012,6 +147573,27 @@ Str RevertUriWorkAround(Str uri, Str httpOrHttps, Str protocol) {
 
 }
 
+#if GPUI_OS_LINUX
+#include <cairo/cairo-xlib.h>
+#include <cairo/cairo.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <pango/pangocairo.h>
+#include <poll.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/statvfs.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <X11/cursorfont.h>
+#include <X11/keysym.h>
+#include <X11/Xatom.h>
+#include <X11/XF86keysym.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#endif
+
 #if GPUI_OS_WINDOWS
 #include <commctrl.h>
 #include <d2d1_1.h>
@@ -147039,29 +147621,13 @@ Str RevertUriWorkAround(Str uri, Str httpOrHttps, Str protocol) {
 #include <winhttp.h>
 #endif
 
-#if GPUI_OS_LINUX
-#include <cairo/cairo-xlib.h>
-#include <cairo/cairo.h>
-#include <dirent.h>
-#include <fcntl.h>
-#include <pango/pangocairo.h>
-#include <poll.h>
-#include <sys/resource.h>
-#include <sys/statvfs.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include <X11/cursorfont.h>
-#include <X11/keysym.h>
-#include <X11/Xatom.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#endif
-
 #if GPUI_OS_MAC
 #import <AppKit/AppKit.h>
 #import <Cocoa/Cocoa.h>
+#include <CoreFoundation/CoreFoundation.h>
 #import <CoreText/CoreText.h>
 #import <Foundation/Foundation.h>
+#include <IOKit/IOKitLib.h>
 #include <IOKit/ps/IOPowerSources.h>
 #include <IOKit/ps/IOPSKeys.h>
 #include <libproc.h>
@@ -147112,12 +147678,2142 @@ Str RevertUriWorkAround(Str uri, Str httpOrHttps, Str protocol) {
 #include <unistd.h>
 #endif
 
+#if GPUI_OS_LINUX
+#line 1 "src/gpui/accessibility_linux.cpp"
+
+namespace gpui {
+
+static constexpr const char* kRootPath = "/org/a11y/atspi/accessible/root";
+static constexpr const char* kNullPath = "/org/a11y/atspi/null";
+static constexpr const char* kAccessible = "org.a11y.atspi.Accessible";
+static constexpr const char* kApplication = "org.a11y.atspi.Application";
+static constexpr const char* kComponent = "org.a11y.atspi.Component";
+static constexpr const char* kAction = "org.a11y.atspi.Action";
+static constexpr const char* kValue = "org.a11y.atspi.Value";
+static constexpr const char* kSelection = "org.a11y.atspi.Selection";
+static constexpr const char* kText = "org.a11y.atspi.Text";
+static constexpr const char* kEditableText = "org.a11y.atspi.EditableText";
+
+struct DbusWriter {
+    Vec<uint8_t> bytes;
+};
+
+static void PutBytes(DbusWriter* w, const void* data, int n) {
+    if (n > 0) {
+        memcpy(VecAppendBlanks(w->bytes, n), data, (size_t)n);
+    }
+}
+
+static void PutAlign(DbusWriter* w, int alignment) {
+    int n = (alignment - (w->bytes.len % alignment)) % alignment;
+    if (n) {
+        memset(VecAppendBlanks(w->bytes, n), 0, (size_t)n);
+    }
+}
+
+static void PutByte(DbusWriter* w, uint8_t value) {
+    PutBytes(w, &value, 1);
+}
+
+static void PutU32(DbusWriter* w, uint32_t value) {
+    PutAlign(w, 4);
+    PutBytes(w, &value, 4);
+}
+
+static void PutI32(DbusWriter* w, int32_t value) {
+    PutU32(w, (uint32_t)value);
+}
+
+static void PutI16(DbusWriter* w, int16_t value) {
+    PutAlign(w, 2);
+    PutBytes(w, &value, 2);
+}
+
+static void PutDouble(DbusWriter* w, double value) {
+    PutAlign(w, 8);
+    PutBytes(w, &value, 8);
+}
+
+static void PutBool(DbusWriter* w, bool value) {
+    PutU32(w, value ? 1u : 0u);
+}
+
+static void PutString(DbusWriter* w, Str value) {
+    PutAlign(w, 4);
+    PutU32(w, (uint32_t)std::max(0, value.len));
+    PutBytes(w, value.s, std::max(0, value.len));
+    PutByte(w, 0);
+}
+
+static void PutString(DbusWriter* w, const char* value) {
+    PutString(w, value ? Str(value, (int)strlen(value)) : Str{});
+}
+
+static void PutSignature(DbusWriter* w, const char* signature) {
+    int n = signature ? (int)strlen(signature) : 0;
+    PutByte(w, (uint8_t)n);
+    PutBytes(w, signature, n);
+    PutByte(w, 0);
+}
+
+static void PutVariantString(DbusWriter* w, const char* signature, Str value) {
+    PutSignature(w, signature);
+    PutString(w, value);
+}
+
+static void PutVariantU32(DbusWriter* w, uint32_t value) {
+    PutSignature(w, "u");
+    PutU32(w, value);
+}
+
+static void PutVariantI32(DbusWriter* w, int32_t value) {
+    PutSignature(w, "i");
+    PutI32(w, value);
+}
+
+static void PutVariantDouble(DbusWriter* w, double value) {
+    PutSignature(w, "d");
+    PutDouble(w, value);
+}
+
+static void PutHeaderString(DbusWriter* fields, uint8_t code,
+                            const char* signature, Str value) {
+    PutAlign(fields, 8);
+    PutByte(fields, code);
+    PutSignature(fields, signature);
+    if (signature[0] == 'g') {
+        char copy[256] = {};
+        int n = std::min(value.len, (int)sizeof(copy) - 1);
+        memcpy(copy, value.s, (size_t)n);
+        PutSignature(fields, copy);
+    } else {
+        PutString(fields, value);
+    }
+}
+
+static void PutHeaderU32(DbusWriter* fields, uint8_t code, uint32_t value) {
+    PutAlign(fields, 8);
+    PutByte(fields, code);
+    PutVariantU32(fields, value);
+}
+
+struct AccessibilityLinuxState {
+    App* app = nullptr;
+    int fd = -1;
+    uint32_t serial = 1;
+    uint32_t helloSerial = 0;
+    uint32_t embedSerial = 0;
+    Str busName = {};
+    Str busAddress = {};
+    Vec<uint8_t> rx;
+    int32_t applicationId = 0;
+    bool ready = false;
+};
+
+static AccessibilityLinuxState gA11y;
+
+static bool SendAll(const uint8_t* data, int n) {
+    while (n > 0 && gA11y.fd >= 0) {
+        ssize_t sent = send(gA11y.fd, data, (size_t)n, MSG_NOSIGNAL);
+        if (sent < 0 && errno == EINTR) {
+            continue;
+        }
+        if (sent <= 0) {
+            return false;
+        }
+        data += sent;
+        n -= (int)sent;
+    }
+    return n == 0;
+}
+
+static uint32_t SendMessage(uint8_t type, uint8_t flags, DbusWriter* fields,
+                            DbusWriter* body) {
+    if (gA11y.fd < 0) {
+        return 0;
+    }
+    DbusWriter message;
+    PutByte(&message, 'l');
+    PutByte(&message, type);
+    PutByte(&message, flags);
+    PutByte(&message, 1);
+    PutU32(&message, body ? (uint32_t)body->bytes.len : 0);
+    uint32_t serial = gA11y.serial++;
+    PutU32(&message, serial);
+    PutU32(&message, (uint32_t)fields->bytes.len);
+    PutBytes(&message, fields->bytes.els, fields->bytes.len);
+    PutAlign(&message, 8);
+    if (body) {
+        PutBytes(&message, body->bytes.els, body->bytes.len);
+    }
+    bool ok = SendAll(message.bytes.els, message.bytes.len);
+    VecReset(message.bytes);
+    return ok ? serial : 0;
+}
+
+static uint32_t SendCall(const char* destination, const char* path,
+                         const char* interfaceName, const char* member,
+                         const char* signature, DbusWriter* body) {
+    DbusWriter fields;
+    PutHeaderString(&fields, 1, "o", Str(path));
+    PutHeaderString(&fields, 2, "s", Str(interfaceName));
+    PutHeaderString(&fields, 3, "s", Str(member));
+    PutHeaderString(&fields, 6, "s", Str(destination));
+    if (signature && *signature) {
+        PutHeaderString(&fields, 8, "g", Str(signature));
+    }
+    uint32_t serial = SendMessage(1, 0, &fields, body);
+    VecReset(fields.bytes);
+    return serial;
+}
+
+static void SendReply(uint32_t replySerial, Str destination,
+                      const char* signature, DbusWriter* body) {
+    DbusWriter fields;
+    PutHeaderU32(&fields, 5, replySerial);
+    PutHeaderString(&fields, 6, "s", destination);
+    if (signature && *signature) {
+        PutHeaderString(&fields, 8, "g", Str(signature));
+    }
+    SendMessage(2, 0, &fields, body);
+    VecReset(fields.bytes);
+}
+
+static void SendError(uint32_t replySerial, Str destination, const char* name,
+                      const char* message) {
+    DbusWriter fields;
+    DbusWriter body;
+    PutHeaderString(&fields, 4, "s", Str(name));
+    PutHeaderU32(&fields, 5, replySerial);
+    PutHeaderString(&fields, 6, "s", destination);
+    PutHeaderString(&fields, 8, "g", Str("s"));
+    PutString(&body, message);
+    SendMessage(3, 0, &fields, &body);
+    VecReset(fields.bytes);
+    VecReset(body.bytes);
+}
+
+static int gpui_accessibility_linux_AlignAt(int at, int alignment) {
+    return at + (alignment - (at % alignment)) % alignment;
+}
+
+static uint32_t ReadU32(const uint8_t* data, int size, int* at) {
+    *at = gpui_accessibility_linux_AlignAt(*at, 4);
+    if (*at < 0 || *at + 4 > size) {
+        *at = size;
+        return 0;
+    }
+    uint32_t value = 0;
+    memcpy(&value, data + *at, 4);
+    *at += 4;
+    return value;
+}
+
+static int32_t ReadI32(const uint8_t* data, int size, int* at) {
+    return (int32_t)ReadU32(data, size, at);
+}
+
+static double ReadDouble(const uint8_t* data, int size, int* at) {
+    *at = gpui_accessibility_linux_AlignAt(*at, 8);
+    if (*at < 0 || *at + 8 > size) {
+        *at = size;
+        return 0;
+    }
+    double value = 0;
+    memcpy(&value, data + *at, 8);
+    *at += 8;
+    return value;
+}
+
+static Str ReadString(const uint8_t* data, int size, int* at) {
+    uint32_t n = ReadU32(data, size, at);
+    if (n > (uint32_t)(size - *at) || *at + (int)n + 1 > size) {
+        *at = size;
+        return {};
+    }
+    Str value((const char*)data + *at, (int)n);
+    *at += (int)n + 1;
+    return value;
+}
+
+static Str ReadSignature(const uint8_t* data, int size, int* at) {
+    if (*at < 0 || *at >= size) return {};
+    uint8_t n = data[(*at)++];
+    if (*at + n + 1 > size) {
+        *at = size;
+        return {};
+    }
+    Str value((const char*)data + *at, n);
+    *at += n + 1;
+    return value;
+}
+
+static void ArrayBegin(DbusWriter* w, int elementAlign, int* lengthAt,
+                       int* contentsAt) {
+    PutAlign(w, 4);
+    *lengthAt = w->bytes.len;
+    PutU32(w, 0);
+    PutAlign(w, elementAlign);
+    *contentsAt = w->bytes.len;
+}
+
+static void ArrayEnd(DbusWriter* w, int lengthAt, int contentsAt) {
+    uint32_t n = (uint32_t)(w->bytes.len - contentsAt);
+    memcpy(w->bytes.els + lengthAt, &n, 4);
+}
+
+static bool StrIs(Str value, const char* literal) {
+    return StrEq(value, literal);
+}
+
+static bool ParseUnixAddress(Str address, sockaddr_un* out, socklen_t* outLen) {
+    if (!address.s || !out || !outLen) {
+        return false;
+    }
+    char copy[512] = {};
+    int copyLen = std::min(address.len, (int)sizeof(copy) - 1);
+    memcpy(copy, address.s, (size_t)copyLen);
+    const char* key = strstr(copy, "unix:path=");
+    bool abstract = false;
+    if (!key) {
+        key = strstr(copy, "unix:abstract=");
+        abstract = true;
+    }
+    if (!key) {
+        return false;
+    }
+    key += abstract ? 14 : 10;
+    const char* end = key;
+    while (end < copy + copyLen && *end != ',' && *end != ';') {
+        end++;
+    }
+    memset(out, 0, sizeof(*out));
+    out->sun_family = AF_UNIX;
+    int at = abstract ? 1 : 0;
+    for (const char* p = key; p < end && at < (int)sizeof(out->sun_path) - 1;
+         p++) {
+        if (*p == '%' && p + 2 < end) {
+            auto hex = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+                if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+                return -1;
+            };
+            int hi = hex(p[1]);
+            int lo = hex(p[2]);
+            if (hi >= 0 && lo >= 0) {
+                out->sun_path[at++] = (char)((hi << 4) | lo);
+                p += 2;
+                continue;
+            }
+        }
+        out->sun_path[at++] = *p;
+    }
+    *outLen =
+        (socklen_t)(offsetof(sockaddr_un, sun_path) + at + (abstract ? 0 : 1));
+    return at > (abstract ? 1 : 0);
+}
+
+static bool Authenticate() {
+    char uid[32] = {};
+    snprintf(uid, sizeof(uid), "%u", (unsigned)getuid());
+    char auth[160] = {};
+    int at = 0;
+    auth[at++] = 0;
+    memcpy(auth + at, "AUTH EXTERNAL ", 14);
+    at += 14;
+    for (const char* p = uid; *p && at + 4 < (int)sizeof(auth); p++) {
+        static const char hex[] = "0123456789abcdef";
+        auth[at++] = hex[((uint8_t)*p) >> 4];
+        auth[at++] = hex[((uint8_t)*p) & 15];
+    }
+    auth[at++] = '\r';
+    auth[at++] = '\n';
+    if (!SendAll((const uint8_t*)auth, at)) {
+        return false;
+    }
+    char reply[256] = {};
+    int n = 0;
+    while (n < (int)sizeof(reply) - 1) {
+        ssize_t got = recv(gA11y.fd, reply + n, sizeof(reply) - 1 - n, 0);
+        if (got <= 0) {
+            return false;
+        }
+        n += (int)got;
+        reply[n] = 0;
+        if (strstr(reply, "\r\n")) {
+            break;
+        }
+    }
+    if (strncmp(reply, "OK ", 3) != 0) {
+        return false;
+    }
+    return SendAll((const uint8_t*)"BEGIN\r\n", 7);
+}
+
+struct LinuxAccessible {
+    Window* win = nullptr;
+    int windowIndex = -1;
+    int nodeIndex = -1;
+    bool root = false;
+};
+
+static LinuxAccessible AccessibleForPath(Str path) {
+    LinuxAccessible result;
+    if (StrIs(path, kRootPath)) {
+        result.root = true;
+        return result;
+    }
+    char value[128] = {};
+    int n = std::min(path.len, (int)sizeof(value) - 1);
+    if (n > 0) {
+        memcpy(value, path.s, (size_t)n);
+    }
+    int windowIndex = -1;
+    unsigned nodeId = 0;
+    if (sscanf(value, "/org/a11y/atspi/accessible/w%d/n%u", &windowIndex,
+               &nodeId) != 2 ||
+        !gA11y.app || windowIndex < 0 ||
+        windowIndex >= gA11y.app->windows.len) {
+        return result;
+    }
+    Window* win = gA11y.app->windows[windowIndex];
+    if (!win || !win->plat) {
+        return result;
+    }
+    for (int i = 0; i < win->accessibility.len; i++) {
+        if (win->accessibility[i].id == nodeId) {
+            result.win = win;
+            result.windowIndex = windowIndex;
+            result.nodeIndex = i;
+            break;
+        }
+    }
+    return result;
+}
+
+static TempStr gpui_accessibility_linux_PathFor(int windowIndex, uint32_t nodeId) {
+    return fmt("/org/a11y/atspi/accessible/w%d/n%u", windowIndex, nodeId);
+}
+
+static void PutObjectRef(DbusWriter* body, Str path) {
+    PutAlign(body, 8);
+    PutString(body, gA11y.busName);
+    PutString(body, path);
+}
+
+static void PutNullObjectRef(DbusWriter* body) {
+    PutAlign(body, 8);
+    PutString(body, "");
+    PutString(body, kNullPath);
+}
+
+static int ChildCount(const LinuxAccessible& object) {
+    if (object.root) {
+        int n = 0;
+        if (gA11y.app) {
+            for (int wi = 0; wi < gA11y.app->windows.len; wi++) {
+                Window* win = gA11y.app->windows[wi];
+                if (!win || !win->plat) continue;
+                for (int i = 0; i < win->accessibility.len; i++) {
+                    n += win->accessibility[i].parent < 0 ? 1 : 0;
+                }
+            }
+        }
+        return n;
+    }
+    if (!object.win || object.nodeIndex < 0) {
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < object.win->accessibility.len; i++) {
+        n += object.win->accessibility[i].parent == object.nodeIndex ? 1 : 0;
+    }
+    return n;
+}
+
+static bool ChildAt(const LinuxAccessible& object, int wanted, int* windowIndex,
+                    int* nodeIndex) {
+    if (wanted < 0) {
+        return false;
+    }
+    if (object.root) {
+        if (!gA11y.app) return false;
+        for (int wi = 0; wi < gA11y.app->windows.len; wi++) {
+            Window* win = gA11y.app->windows[wi];
+            if (!win || !win->plat) continue;
+            for (int i = 0; i < win->accessibility.len; i++) {
+                if (win->accessibility[i].parent < 0 && wanted-- == 0) {
+                    *windowIndex = wi;
+                    *nodeIndex = i;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    for (int i = 0; object.win && i < object.win->accessibility.len; i++) {
+        if (object.win->accessibility[i].parent == object.nodeIndex &&
+            wanted-- == 0) {
+            *windowIndex = object.windowIndex;
+            *nodeIndex = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsTextRole(AccessibilityRole role) {
+    switch (role) {
+        case AccessibilityRole::TextInput:
+        case AccessibilityRole::SearchInput:
+        case AccessibilityRole::MultilineTextInput:
+        case AccessibilityRole::DateInput:
+        case AccessibilityRole::DateTimeInput:
+        case AccessibilityRole::WeekInput:
+        case AccessibilityRole::MonthInput:
+        case AccessibilityRole::TimeInput:
+        case AccessibilityRole::EmailInput:
+        case AccessibilityRole::NumberInput:
+        case AccessibilityRole::PasswordInput:
+        case AccessibilityRole::PhoneNumberInput:
+        case AccessibilityRole::UrlInput:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool IsSelectionRole(AccessibilityRole role) {
+    return role == AccessibilityRole::ListBox ||
+           role == AccessibilityRole::RadioGroup ||
+           role == AccessibilityRole::TabList ||
+           role == AccessibilityRole::Tree;
+}
+
+static uint32_t AtspiRole(AccessibilityRole role) {
+    switch (role) {
+        case AccessibilityRole::Alert:
+            return 2;
+        case AccessibilityRole::Canvas:
+            return 6;
+        case AccessibilityRole::CheckBox:
+        case AccessibilityRole::Switch:
+            return 7;
+        case AccessibilityRole::ColumnHeader:
+            return 10;
+        case AccessibilityRole::ComboBox:
+        case AccessibilityRole::EditableComboBox:
+            return 11;
+        case AccessibilityRole::DateInput:
+        case AccessibilityRole::DateTimeInput:
+            return 12;
+        case AccessibilityRole::Dialog:
+        case AccessibilityRole::AlertDialog:
+            return 16;
+        case AccessibilityRole::Image:
+            return 27;
+        case AccessibilityRole::Label:
+        case AccessibilityRole::TextRun:
+            return 29;
+        case AccessibilityRole::List:
+            return 31;
+        case AccessibilityRole::ListItem:
+        case AccessibilityRole::ListBoxOption:
+            return 32;
+        case AccessibilityRole::Menu:
+            return 33;
+        case AccessibilityRole::MenuBar:
+            return 34;
+        case AccessibilityRole::MenuItem:
+            return 35;
+        case AccessibilityRole::Tab:
+            return 37;
+        case AccessibilityRole::TabList:
+            return 38;
+        case AccessibilityRole::Pane:
+        case AccessibilityRole::Group:
+        case AccessibilityRole::RadioGroup:
+        case AccessibilityRole::RowGroup:
+            return 39;
+        case AccessibilityRole::PasswordInput:
+            return 40;
+        case AccessibilityRole::ProgressIndicator:
+            return 42;
+        case AccessibilityRole::Button:
+        case AccessibilityRole::DefaultButton:
+            return 43;
+        case AccessibilityRole::RadioButton:
+            return 44;
+        case AccessibilityRole::RowHeader:
+            return 47;
+        case AccessibilityRole::ScrollBar:
+            return 48;
+        case AccessibilityRole::ScrollView:
+            return 49;
+        case AccessibilityRole::Slider:
+            return 51;
+        case AccessibilityRole::SpinButton:
+            return 52;
+        case AccessibilityRole::Splitter:
+            return 53;
+        case AccessibilityRole::Status:
+            return 54;
+        case AccessibilityRole::Table:
+        case AccessibilityRole::Grid:
+            return 55;
+        case AccessibilityRole::Cell:
+        case AccessibilityRole::GridCell:
+            return 56;
+        case AccessibilityRole::Terminal:
+            return 60;
+        case AccessibilityRole::MultilineTextInput:
+            return 61;
+        case AccessibilityRole::Toolbar:
+            return 63;
+        case AccessibilityRole::Tooltip:
+            return 64;
+        case AccessibilityRole::Tree:
+            return 65;
+        case AccessibilityRole::TreeGrid:
+            return 66;
+        case AccessibilityRole::Window:
+            return 69;
+        case AccessibilityRole::Header:
+            return 71;
+        case AccessibilityRole::Footer:
+            return 72;
+        case AccessibilityRole::Paragraph:
+            return 73;
+        case AccessibilityRole::Application:
+            return 75;
+        case AccessibilityRole::TextInput:
+        case AccessibilityRole::SearchInput:
+        case AccessibilityRole::EmailInput:
+        case AccessibilityRole::NumberInput:
+        case AccessibilityRole::PhoneNumberInput:
+        case AccessibilityRole::UrlInput:
+            return 79;
+        case AccessibilityRole::Heading:
+            return 83;
+        case AccessibilityRole::Section:
+        case AccessibilityRole::Region:
+            return 85;
+        case AccessibilityRole::Link:
+            return 88;
+        case AccessibilityRole::Row:
+            return 90;
+        case AccessibilityRole::TreeItem:
+            return 91;
+        case AccessibilityRole::Comment:
+            return 97;
+        case AccessibilityRole::ListBox:
+            return 98;
+        case AccessibilityRole::TitleBar:
+            return 104;
+        case AccessibilityRole::Blockquote:
+            return 105;
+        case AccessibilityRole::Audio:
+            return 106;
+        case AccessibilityRole::Video:
+            return 107;
+        case AccessibilityRole::Definition:
+            return 108;
+        case AccessibilityRole::Article:
+            return 109;
+        default:
+            return 67;
+    }
+}
+
+static const char* AtspiRoleName(uint32_t role) {
+    switch (role) {
+        case 7:
+            return "check box";
+        case 10:
+            return "column header";
+        case 11:
+            return "combo box";
+        case 16:
+            return "dialog";
+        case 27:
+            return "image";
+        case 29:
+            return "label";
+        case 31:
+            return "list";
+        case 32:
+            return "list item";
+        case 35:
+            return "menu item";
+        case 37:
+            return "page tab";
+        case 38:
+            return "page tab list";
+        case 40:
+            return "password text";
+        case 42:
+            return "progress bar";
+        case 43:
+            return "push button";
+        case 44:
+            return "radio button";
+        case 51:
+            return "slider";
+        case 52:
+            return "spin button";
+        case 55:
+            return "table";
+        case 56:
+            return "table cell";
+        case 61:
+            return "text";
+        case 65:
+            return "tree";
+        case 69:
+            return "window";
+        case 73:
+            return "paragraph";
+        case 75:
+            return "application";
+        case 79:
+            return "entry";
+        case 83:
+            return "heading";
+        case 88:
+            return "link";
+        case 90:
+            return "table row";
+        case 91:
+            return "tree item";
+        case 98:
+            return "list box";
+        default:
+            return "unknown";
+    }
+}
+
+static int ActionCount(const AccessibilityNode& node) {
+    int n = 0;
+    n += (node.actions & AccessibilityActionDefault) ? 1 : 0;
+    n += (node.actions & AccessibilityActionIncrement) ? 1 : 0;
+    n += (node.actions & AccessibilityActionDecrement) ? 1 : 0;
+    return n;
+}
+
+static AccessibilityAction ActionAt(const AccessibilityNode& node, int index,
+                                    const char** name) {
+    struct Entry {
+        uint8_t bit;
+        AccessibilityAction action;
+        const char* name;
+    } entries[] = {
+        {AccessibilityActionDefault, AccessibilityAction::Default, "click"},
+        {AccessibilityActionIncrement, AccessibilityAction::Increment,
+         "increment"},
+        {AccessibilityActionDecrement, AccessibilityAction::Decrement,
+         "decrement"},
+    };
+    for (const Entry& entry : entries) {
+        if (node.actions & entry.bit) {
+            if (index-- == 0) {
+                *name = entry.name;
+                return entry.action;
+            }
+        }
+    }
+    *name = "";
+    return AccessibilityAction::Default;
+}
+
+struct Incoming {
+    uint8_t type = 0;
+    uint32_t serial = 0;
+    uint32_t replySerial = 0;
+    Str path = {};
+    Str interfaceName = {};
+    Str member = {};
+    Str sender = {};
+    Str signature = {};
+    const uint8_t* body = nullptr;
+    int bodyLen = 0;
+};
+
+static void ParseHeaderField(Incoming* in, uint8_t code, char signature,
+                             const uint8_t* data, int size, int* at) {
+    if (signature == 'u') {
+        uint32_t value = ReadU32(data, size, at);
+        if (code == 5) in->replySerial = value;
+        return;
+    }
+    Str value = signature == 'g' ? ReadSignature(data, size, at)
+                                 : ReadString(data, size, at);
+    if (code == 1)
+        in->path = value;
+    else if (code == 2)
+        in->interfaceName = value;
+    else if (code == 3)
+        in->member = value;
+    else if (code == 7)
+        in->sender = value;
+    else if (code == 8)
+        in->signature = value;
+}
+
+static bool ParseIncoming(const uint8_t* data, int size, Incoming* in,
+                          int* messageLen) {
+    if (size < 16 || data[0] != 'l' || data[3] != 1) {
+        return false;
+    }
+    int at = 4;
+    uint32_t bodyLen = ReadU32(data, size, &at);
+    in->serial = ReadU32(data, size, &at);
+    uint32_t fieldsLen = ReadU32(data, size, &at);
+    int bodyAt = gpui_accessibility_linux_AlignAt(16 + (int)fieldsLen, 8);
+    uint64_t total = (uint64_t)bodyAt + bodyLen;
+    if (total > (uint64_t)size) {
+        return false;
+    }
+    in->type = data[1];
+    int fieldAt = 16;
+    int fieldEnd = 16 + (int)fieldsLen;
+    while (fieldAt < fieldEnd) {
+        fieldAt = gpui_accessibility_linux_AlignAt(fieldAt, 8);
+        if (fieldAt + 4 > fieldEnd) break;
+        uint8_t code = data[fieldAt++];
+        uint8_t sigLen = data[fieldAt++];
+        if (sigLen != 1 || fieldAt + sigLen + 1 > fieldEnd) break;
+        char signature = (char)data[fieldAt];
+        fieldAt += sigLen + 1;
+        ParseHeaderField(in, code, signature, data, fieldEnd, &fieldAt);
+    }
+    in->body = data + bodyAt;
+    in->bodyLen = (int)bodyLen;
+    *messageLen = (int)total;
+    return true;
+}
+
+static void PutInterfaces(DbusWriter* body, const LinuxAccessible& object) {
+    int lengthAt = 0;
+    int contentsAt = 0;
+    ArrayBegin(body, 4, &lengthAt, &contentsAt);
+    PutString(body, kAccessible);
+    if (object.root) {
+        PutString(body, kApplication);
+    } else if (object.win && object.nodeIndex >= 0) {
+        PutString(body, kComponent);
+        const AccessibilityNode& node = object.win
+                                            ->accessibility[object.nodeIndex];
+        if (ActionCount(node)) PutString(body, kAction);
+        if (node.info.hasNumericValue) PutString(body, kValue);
+        if (IsSelectionRole(node.info.role)) PutString(body, kSelection);
+        if (IsTextRole(node.info.role) && node.input) {
+            PutString(body, kText);
+            if (node.actions & AccessibilityActionSetValue) {
+                PutString(body, kEditableText);
+            }
+        }
+    }
+    ArrayEnd(body, lengthAt, contentsAt);
+}
+
+static void SetStateBit(uint32_t state[2], int bit) {
+    state[bit / 32] |= 1u << (bit % 32);
+}
+
+static void PutStates(DbusWriter* body, const LinuxAccessible& object) {
+    uint32_t state[2] = {};
+    SetStateBit(state, 25);
+    SetStateBit(state, 34);
+    if (object.root) {
+        SetStateBit(state, 8);
+    } else if (object.win && object.nodeIndex >= 0) {
+        const AccessibilityNode& node = object.win
+                                            ->accessibility[object.nodeIndex];
+        if (!node.info.disabled) {
+            SetStateBit(state, 8);
+            SetStateBit(state, 24);
+        }
+        if (node.actions & AccessibilityActionFocus) SetStateBit(state, 11);
+        if (node.focusId && node.focusId == object.win->focusId) {
+            SetStateBit(state, 12);
+        }
+        if (node.info.toggled != AccessibilityToggled::Unset) {
+            SetStateBit(state, 41);
+            if (node.info.toggled == AccessibilityToggled::True) {
+                SetStateBit(state, 4);
+            }
+        }
+        if (node.info.hasExpanded) {
+            SetStateBit(state, 9);
+            SetStateBit(state, node.info.expanded ? 10 : 5);
+        }
+        if (node.info.hasSelected) {
+            SetStateBit(state, 22);
+            if (node.info.selected) SetStateBit(state, 23);
+        }
+        if (node.input) {
+            SetStateBit(state, 38);
+            SetStateBit(state, InputIsMultiLine(node.input) ? 17 : 26);
+            if (InputIsEditable(node.input))
+                SetStateBit(state, 7);
+            else
+                SetStateBit(state, 43);
+        }
+        if (node.info.orientation == AccessibilityOrientation::Horizontal) {
+            SetStateBit(state, 14);
+        } else if (node.info
+                       .orientation == AccessibilityOrientation::Vertical) {
+            SetStateBit(state, 29);
+        }
+        if (node.info.role == AccessibilityRole::DefaultButton) {
+            SetStateBit(state, 39);
+        }
+    }
+    int lengthAt = 0;
+    int contentsAt = 0;
+    ArrayBegin(body, 4, &lengthAt, &contentsAt);
+    PutU32(body, state[0]);
+    PutU32(body, state[1]);
+    ArrayEnd(body, lengthAt, contentsAt);
+}
+
+static void PutEmptyStringDict(DbusWriter* body) {
+    int lengthAt = 0;
+    int contentsAt = 0;
+    ArrayBegin(body, 8, &lengthAt, &contentsAt);
+    ArrayEnd(body, lengthAt, contentsAt);
+}
+
+static void PutEmptyRelations(DbusWriter* body) {
+    int lengthAt = 0;
+    int contentsAt = 0;
+    ArrayBegin(body, 8, &lengthAt, &contentsAt);
+    ArrayEnd(body, lengthAt, contentsAt);
+}
+
+static void PutParent(DbusWriter* body, const LinuxAccessible& object) {
+    if (object.root) {
+        PutNullObjectRef(body);
+        return;
+    }
+    const AccessibilityNode& node = object.win->accessibility[object.nodeIndex];
+    if (node.parent < 0) {
+        PutObjectRef(body, Str(kRootPath));
+    } else {
+        PutObjectRef(body, gpui_accessibility_linux_PathFor(object.windowIndex,
+                                   object.win->accessibility[node.parent].id));
+    }
+}
+
+static int IndexInParent(const LinuxAccessible& object) {
+    if (object.root || !object.win || object.nodeIndex < 0) return -1;
+    int parent = object.win->accessibility[object.nodeIndex].parent;
+    int index = 0;
+    if (parent < 0) {
+        for (int wi = 0; gA11y.app && wi < gA11y.app->windows.len; wi++) {
+            Window* win = gA11y.app->windows[wi];
+            if (!win || !win->plat) continue;
+            for (int i = 0; i < win->accessibility.len; i++) {
+                if (win->accessibility[i].parent < 0) {
+                    if (win == object.win && i == object.nodeIndex)
+                        return index;
+                    index++;
+                }
+            }
+        }
+        return -1;
+    }
+    for (int i = 0; i < object.win->accessibility.len; i++) {
+        if (object.win->accessibility[i].parent == parent) {
+            if (i == object.nodeIndex) return index;
+            index++;
+        }
+    }
+    return -1;
+}
+
+static Str ObjectName(const LinuxAccessible& object) {
+    if (object.root) return Str("gpui application");
+    return object.win->accessibility[object.nodeIndex].info.label;
+}
+
+static int Utf8Characters(Str text);
+static int Utf8CharacterForByte(Str text, int byte);
+static int SelectedAt(const LinuxAccessible& object, int wanted);
+
+static bool PutPropertyVariant(DbusWriter* body, const LinuxAccessible& object,
+                               Str interfaceName, Str property) {
+    const AccessibilityNode* node = object.win && object.nodeIndex >= 0
+                                        ? &object.win
+                                               ->accessibility[object.nodeIndex]
+                                        : nullptr;
+    if (StrIs(interfaceName, kAccessible)) {
+        if (StrIs(property, "version")) {
+            PutVariantU32(body, 1);
+        } else if (StrIs(property, "Name")) {
+            PutVariantString(body, "s", ObjectName(object));
+        } else if (StrIs(property, "Description") ||
+                   StrIs(property, "HelpText")) {
+            PutVariantString(body, "s", node ? node->info.placeholder : Str{});
+        } else if (StrIs(property, "AccessibleId")) {
+            PutVariantString(body, "s", node ? node->info.authorId : Str{});
+        } else if (StrIs(property, "Locale")) {
+            const char* locale = setlocale(LC_MESSAGES, nullptr);
+            PutVariantString(body, "s", Str(locale ? locale : ""));
+        } else if (StrIs(property, "ChildCount")) {
+            PutVariantI32(body, ChildCount(object));
+        } else if (StrIs(property, "Parent")) {
+            PutSignature(body, "(so)");
+            PutParent(body, object);
+        } else {
+            return false;
+        }
+    } else if (StrIs(interfaceName, kApplication)) {
+        if (StrIs(property, "Id"))
+            PutVariantI32(body, gA11y.applicationId);
+        else if (StrIs(property, "ToolkitName"))
+            PutVariantString(body, "s", Str("gpui-cpp"));
+        else if (StrIs(property, "Version") ||
+                 StrIs(property, "ToolkitVersion"))
+            PutVariantString(body, "s", Str("1"));
+        else if (StrIs(property, "AtspiVersion"))
+            PutVariantString(body, "s", Str("2.1"));
+        else if (StrIs(property, "InterfaceVersion"))
+            PutVariantU32(body, 1);
+        else
+            return false;
+    } else if (StrIs(interfaceName, kComponent)) {
+        if (!StrIs(property, "version")) return false;
+        PutVariantU32(body, 1);
+    } else if (StrIs(interfaceName, kAction) && node) {
+        if (StrIs(property, "version"))
+            PutVariantU32(body, 1);
+        else if (StrIs(property, "NActions"))
+            PutVariantI32(body, ActionCount(*node));
+        else
+            return false;
+    } else if (StrIs(interfaceName, kValue) && node) {
+        if (StrIs(property, "version")) {
+            PutVariantU32(body, 1);
+            return true;
+        }
+        double value = node->info.hasNumericValue ? node->info.numericValue : 0;
+        if (StrIs(property, "MinimumValue"))
+            value = node->info.minNumericValue;
+        else if (StrIs(property, "MaximumValue"))
+            value = node->info.maxNumericValue;
+        else if (StrIs(property, "MinimumIncrement"))
+            value = node->info.numericValueStep;
+        else if (StrIs(property, "Text")) {
+            PutVariantString(body, "s", node->info.value);
+            return true;
+        } else if (!StrIs(property, "CurrentValue")) {
+            return false;
+        }
+        PutVariantDouble(body, value);
+    } else if (StrIs(interfaceName, kSelection) && node) {
+        if (StrIs(property, "version")) {
+            PutVariantU32(body, 1);
+        } else if (StrIs(property, "NSelectedChildren")) {
+            int n = 0;
+            while (SelectedAt(object, n) >= 0) n++;
+            PutVariantI32(body, n);
+        } else {
+            return false;
+        }
+    } else if (StrIs(interfaceName, kText) && node && node->input) {
+        Str text = node->info.role == AccessibilityRole::PasswordInput
+                       ? Str{}
+                       : InputValue(node->input);
+        if (StrIs(property, "version"))
+            PutVariantU32(body, 1);
+        else if (StrIs(property, "CharacterCount"))
+            PutVariantI32(body, Utf8Characters(text));
+        else if (StrIs(property, "CaretOffset"))
+            PutVariantI32(body,
+                          Utf8CharacterForByte(text, InputCursor(node->input)));
+        else
+            return false;
+    } else if (StrIs(interfaceName, kEditableText) && node && node->input) {
+        if (!StrIs(property, "version")) return false;
+        PutVariantU32(body, 1);
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static void ReplyProperty(const Incoming& in, const LinuxAccessible& object,
+                          Str interfaceName, Str property) {
+    DbusWriter body;
+    if (!PutPropertyVariant(&body, object, interfaceName, property)) {
+        VecReset(body.bytes);
+        SendError(in.serial, in.sender,
+                  "org.freedesktop.DBus.Error.InvalidArgs",
+                  "unknown AT-SPI property");
+        return;
+    }
+    SendReply(in.serial, in.sender, "v", &body);
+    VecReset(body.bytes);
+}
+
+static void PutPropertyEntry(DbusWriter* body, const LinuxAccessible& object,
+                             Str interfaceName, const char* property) {
+    PutAlign(body, 8);
+    PutString(body, property);
+    bool ok = PutPropertyVariant(body, object, interfaceName, Str(property));
+    (void)ok;
+}
+
+static bool PutAllProperties(DbusWriter* body, const LinuxAccessible& object,
+                             Str interfaceName) {
+    int lengthAt = 0;
+    int contentsAt = 0;
+    ArrayBegin(body, 8, &lengthAt, &contentsAt);
+#define GPUI_ATSPI_PROPERTY(name) \
+    PutPropertyEntry(body, object, interfaceName, name)
+    if (StrIs(interfaceName, kAccessible)) {
+        GPUI_ATSPI_PROPERTY("version");
+        GPUI_ATSPI_PROPERTY("Name");
+        GPUI_ATSPI_PROPERTY("Description");
+        GPUI_ATSPI_PROPERTY("Parent");
+        GPUI_ATSPI_PROPERTY("ChildCount");
+        GPUI_ATSPI_PROPERTY("Locale");
+        GPUI_ATSPI_PROPERTY("AccessibleId");
+        GPUI_ATSPI_PROPERTY("HelpText");
+    } else if (StrIs(interfaceName, kApplication) && object.root) {
+        GPUI_ATSPI_PROPERTY("ToolkitName");
+        GPUI_ATSPI_PROPERTY("Version");
+        GPUI_ATSPI_PROPERTY("ToolkitVersion");
+        GPUI_ATSPI_PROPERTY("AtspiVersion");
+        GPUI_ATSPI_PROPERTY("InterfaceVersion");
+        GPUI_ATSPI_PROPERTY("Id");
+    } else if (StrIs(interfaceName, kComponent) && object.nodeIndex >= 0) {
+        GPUI_ATSPI_PROPERTY("version");
+    } else if (StrIs(interfaceName, kAction) && object.nodeIndex >= 0 &&
+               ActionCount(object.win->accessibility[object.nodeIndex])) {
+        GPUI_ATSPI_PROPERTY("version");
+        GPUI_ATSPI_PROPERTY("NActions");
+    } else if (StrIs(interfaceName, kValue) && object.nodeIndex >= 0 &&
+               object.win->accessibility[object.nodeIndex]
+                   .info.hasNumericValue) {
+        GPUI_ATSPI_PROPERTY("version");
+        GPUI_ATSPI_PROPERTY("MinimumValue");
+        GPUI_ATSPI_PROPERTY("MaximumValue");
+        GPUI_ATSPI_PROPERTY("MinimumIncrement");
+        GPUI_ATSPI_PROPERTY("CurrentValue");
+        GPUI_ATSPI_PROPERTY("Text");
+    } else if (StrIs(interfaceName, kSelection) && object.nodeIndex >= 0 &&
+               IsSelectionRole(object.win->accessibility[object.nodeIndex]
+                                   .info.role)) {
+        GPUI_ATSPI_PROPERTY("version");
+        GPUI_ATSPI_PROPERTY("NSelectedChildren");
+    } else if (StrIs(interfaceName, kText) && object.nodeIndex >= 0 &&
+               object.win->accessibility[object.nodeIndex].input) {
+        GPUI_ATSPI_PROPERTY("version");
+        GPUI_ATSPI_PROPERTY("CharacterCount");
+        GPUI_ATSPI_PROPERTY("CaretOffset");
+    } else if (StrIs(interfaceName, kEditableText) && object.nodeIndex >= 0 &&
+               object.win->accessibility[object.nodeIndex].input &&
+               (object.win->accessibility[object.nodeIndex].actions &
+                AccessibilityActionSetValue)) {
+        GPUI_ATSPI_PROPERTY("version");
+    } else {
+        VecReset(body->bytes);
+        return false;
+    }
+#undef GPUI_ATSPI_PROPERTY
+    ArrayEnd(body, lengthAt, contentsAt);
+    return true;
+}
+
+static bool HandleProperties(const Incoming& in,
+                             const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, "org.freedesktop.DBus.Properties")) {
+        return false;
+    }
+    int at = 0;
+    if (StrIs(in.member, "Get")) {
+        Str interfaceName = ReadString(in.body, in.bodyLen, &at);
+        Str property = ReadString(in.body, in.bodyLen, &at);
+        ReplyProperty(in, object, interfaceName, property);
+    } else if (StrIs(in.member, "Set")) {
+        Str interfaceName = ReadString(in.body, in.bodyLen, &at);
+        Str property = ReadString(in.body, in.bodyLen, &at);
+        Str valueSignature = ReadSignature(in.body, in.bodyLen, &at);
+        if (object.root && StrIs(interfaceName, kApplication) &&
+            StrIs(property, "Id") && StrIs(valueSignature, "i")) {
+            gA11y.applicationId = ReadI32(in.body, in.bodyLen, &at);
+            SendReply(in.serial, in.sender, "", nullptr);
+        } else {
+            SendError(in.serial, in.sender,
+                      "org.freedesktop.DBus.Error.PropertyReadOnly",
+                      "AT-SPI property is not writable");
+        }
+    } else if (StrIs(in.member, "GetAll")) {
+        Str interfaceName = ReadString(in.body, in.bodyLen, &at);
+        DbusWriter body;
+        if (PutAllProperties(&body, object, interfaceName)) {
+            SendReply(in.serial, in.sender, "a{sv}", &body);
+        } else {
+            SendError(in.serial, in.sender,
+                      "org.freedesktop.DBus.Error.InvalidArgs",
+                      "unknown AT-SPI property interface");
+        }
+        VecReset(body.bytes);
+    } else {
+        SendError(in.serial, in.sender,
+                  "org.freedesktop.DBus.Error.UnknownMethod",
+                  "unknown properties method");
+    }
+    return true;
+}
+
+static bool HandleAccessible(const Incoming& in,
+                             const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, kAccessible)) return false;
+    DbusWriter body;
+    const AccessibilityNode* node = object.win && object.nodeIndex >= 0
+                                        ? &object.win
+                                               ->accessibility[object.nodeIndex]
+                                        : nullptr;
+    const char* signature = "";
+    if (StrIs(in.member, "GetChildAtIndex")) {
+        int at = 0;
+        int wanted = (int)ReadU32(in.body, in.bodyLen, &at);
+        int wi = -1;
+        int ni = -1;
+        if (ChildAt(object, wanted, &wi, &ni)) {
+            PutObjectRef(
+                &body,
+                gpui_accessibility_linux_PathFor(wi, gA11y.app->windows[wi]->accessibility[ni].id));
+        } else {
+            PutNullObjectRef(&body);
+        }
+        signature = "(so)";
+    } else if (StrIs(in.member, "GetChildren")) {
+        int lengthAt = 0;
+        int contentsAt = 0;
+        ArrayBegin(&body, 8, &lengthAt, &contentsAt);
+        for (int i = 0; i < ChildCount(object); i++) {
+            int wi = -1;
+            int ni = -1;
+            if (ChildAt(object, i, &wi, &ni)) {
+                PutObjectRef(
+                    &body,
+                    gpui_accessibility_linux_PathFor(wi, gA11y.app->windows[wi]->accessibility[ni].id));
+            }
+        }
+        ArrayEnd(&body, lengthAt, contentsAt);
+        signature = "a(so)";
+    } else if (StrIs(in.member, "GetIndexInParent")) {
+        PutI32(&body, IndexInParent(object));
+        signature = "i";
+    } else if (StrIs(in.member, "GetRole")) {
+        PutU32(&body, object.root ? 75 : AtspiRole(node->info.role));
+        signature = "u";
+    } else if (StrIs(in.member, "GetRoleName") ||
+               StrIs(in.member, "GetLocalizedRoleName")) {
+        PutString(&body,
+                  AtspiRoleName(object.root ? 75 : AtspiRole(node->info.role)));
+        signature = "s";
+    } else if (StrIs(in.member, "GetState")) {
+        PutStates(&body, object);
+        signature = "au";
+    } else if (StrIs(in.member, "GetInterfaces")) {
+        PutInterfaces(&body, object);
+        signature = "as";
+    } else if (StrIs(in.member, "GetAttributes")) {
+        PutEmptyStringDict(&body);
+        signature = "a{ss}";
+    } else if (StrIs(in.member, "GetAttributesAsArray")) {
+        int lengthAt = 0;
+        int contentsAt = 0;
+        ArrayBegin(&body, 4, &lengthAt, &contentsAt);
+        ArrayEnd(&body, lengthAt, contentsAt);
+        signature = "as";
+    } else if (StrIs(in.member, "GetRelationSet")) {
+        PutEmptyRelations(&body);
+        signature = "a(ua(so))";
+    } else {
+        VecReset(body.bytes);
+        return false;
+    }
+    SendReply(in.serial, in.sender, signature, &body);
+    VecReset(body.bytes);
+    return true;
+}
+
+static bool HandleApplication(const Incoming& in,
+                              const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, kApplication) || !object.root) return false;
+    DbusWriter body;
+    if (StrIs(in.member, "GetLocale")) {
+        int at = 0;
+        (void)ReadU32(in.body, in.bodyLen, &at);
+        const char* locale = setlocale(LC_MESSAGES, nullptr);
+        PutString(&body, locale ? locale : "");
+        SendReply(in.serial, in.sender, "s", &body);
+    } else if (StrIs(in.member, "GetApplicationBusAddress")) {
+        PutString(&body, gA11y.busAddress);
+        SendReply(in.serial, in.sender, "s", &body);
+    } else {
+        VecReset(body.bytes);
+        return false;
+    }
+    VecReset(body.bytes);
+    return true;
+}
+
+static bool NodeIsInSubtree(const Window* win, int index, int root) {
+    if (root < 0) return true;
+    for (int at = index; at >= 0 && at < win->accessibility.len;
+         at = win->accessibility[at].parent) {
+        if (at == root) return true;
+    }
+    return false;
+}
+
+static int NodeAtPoint(Window* win, int root, int x, int y) {
+    int found = -1;
+    for (int i = 0; win && i < win->accessibility.len; i++) {
+        const Bounds& b = win->accessibility[i].bounds;
+        if (NodeIsInSubtree(win, i, root) && x >= b.x && x <= b.Right() &&
+            y >= b.y && y <= b.Bottom()) {
+            found = i;
+        }
+    }
+    return found;
+}
+
+static Point ComponentCoordOrigin(const LinuxAccessible& object,
+                                  uint32_t coordType) {
+    Point origin = {};
+    if (!object.win) return origin;
+    if (coordType == 0) {
+        return AccessibilityLinuxWindowOrigin(object.win);
+    }
+    if (coordType == 2 && object.nodeIndex >= 0) {
+        int parent = object.win->accessibility[object.nodeIndex].parent;
+        if (parent >= 0 && parent < object.win->accessibility.len) {
+            origin.x = object.win->accessibility[parent].bounds.x;
+            origin.y = object.win->accessibility[parent].bounds.y;
+        }
+    }
+    return origin;
+}
+
+static Bounds ComponentBounds(const LinuxAccessible& object,
+                              uint32_t coordType) {
+    Bounds bounds = {};
+    if (!object.win || object.nodeIndex < 0) return bounds;
+    bounds = object.win->accessibility[object.nodeIndex].bounds;
+    Point origin = ComponentCoordOrigin(object, coordType);
+    if (coordType == 2) {
+        bounds.x -= origin.x;
+        bounds.y -= origin.y;
+    } else {
+        bounds.x += origin.x;
+        bounds.y += origin.y;
+    }
+    return bounds;
+}
+
+static Point ComponentPointInWindow(const LinuxAccessible& object, int x, int y,
+                                    uint32_t coordType) {
+    Point point = {(float)x, (float)y};
+    Point origin = ComponentCoordOrigin(object, coordType);
+    if (coordType == 2) {
+        point.x += origin.x;
+        point.y += origin.y;
+    } else {
+        point.x -= origin.x;
+        point.y -= origin.y;
+    }
+    return point;
+}
+
+static bool HandleComponent(const Incoming& in, const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, kComponent)) return false;
+    DbusWriter body;
+    int at = 0;
+    const char* signature = "";
+    if (StrIs(in.member, "Contains")) {
+        int x = ReadI32(in.body, in.bodyLen, &at);
+        int y = ReadI32(in.body, in.bodyLen, &at);
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Bounds bounds = ComponentBounds(object, coordType);
+        PutBool(&body, x >= bounds.x && x <= bounds.Right() && y >= bounds.y &&
+                           y <= bounds.Bottom());
+        signature = "b";
+    } else if (StrIs(in.member, "GetAccessibleAtPoint")) {
+        int x = ReadI32(in.body, in.bodyLen, &at);
+        int y = ReadI32(in.body, in.bodyLen, &at);
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Point point = ComponentPointInWindow(object, x, y, coordType);
+        int found = NodeAtPoint(object.win, object.nodeIndex, (int)point.x,
+                                (int)point.y);
+        if (found >= 0) {
+            PutObjectRef(&body, gpui_accessibility_linux_PathFor(object.windowIndex,
+                                        object.win->accessibility[found].id));
+        } else {
+            PutNullObjectRef(&body);
+        }
+        signature = "(so)";
+    } else if (StrIs(in.member, "GetExtents")) {
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Bounds bounds = ComponentBounds(object, coordType);
+        PutAlign(&body, 8);
+        PutI32(&body, (int)bounds.x);
+        PutI32(&body, (int)bounds.y);
+        PutI32(&body, (int)bounds.w);
+        PutI32(&body, (int)bounds.h);
+        signature = "(iiii)";
+    } else if (StrIs(in.member, "GetPosition")) {
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Bounds bounds = ComponentBounds(object, coordType);
+        PutAlign(&body, 8);
+        PutI32(&body, (int)bounds.x);
+        PutI32(&body, (int)bounds.y);
+        signature = "(ii)";
+    } else if (StrIs(in.member, "GetSize")) {
+        Bounds bounds = ComponentBounds(object, 1);
+        PutAlign(&body, 8);
+        PutI32(&body, (int)bounds.w);
+        PutI32(&body, (int)bounds.h);
+        signature = "(ii)";
+    } else if (StrIs(in.member, "GetLayer")) {
+        PutU32(&body, 2);
+        signature = "u";
+    } else if (StrIs(in.member, "GetMDIZOrder")) {
+        PutI16(&body, 0);
+        signature = "n";
+    } else if (StrIs(in.member, "GetAlpha")) {
+        PutDouble(&body, 1);
+        signature = "d";
+    } else if (StrIs(in.member, "GrabFocus")) {
+        bool focused =
+            !object.root && object.win &&
+            WindowAccessibilityPerform(
+                object.win, object.win->accessibility[object.nodeIndex].id,
+                AccessibilityAction::Focus);
+        PutBool(&body, focused);
+        signature = "b";
+    } else {
+        VecReset(body.bytes);
+        return false;
+    }
+    SendReply(in.serial, in.sender, signature, &body);
+    VecReset(body.bytes);
+    return true;
+}
+
+static bool HandleAction(const Incoming& in, const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, kAction) || !object.win ||
+        object.nodeIndex < 0) {
+        return false;
+    }
+    const AccessibilityNode& node = object.win->accessibility[object.nodeIndex];
+    DbusWriter body;
+    const char* signature = "";
+    int at = 0;
+    int index = in.bodyLen ? (int)ReadU32(in.body, in.bodyLen, &at) : 0;
+    if (StrIs(in.member, "GetNActions")) {
+        PutI32(&body, ActionCount(node));
+        signature = "i";
+    } else if (StrIs(in.member, "GetActions")) {
+        int lengthAt = 0;
+        int contentsAt = 0;
+        ArrayBegin(&body, 8, &lengthAt, &contentsAt);
+        int count = ActionCount(node);
+        for (int i = 0; i < count; i++) {
+            const char* name = "";
+            ActionAt(node, i, &name);
+            PutAlign(&body, 8);
+            PutString(&body, name);
+            PutString(&body, "");
+            PutString(&body, "");
+        }
+        ArrayEnd(&body, lengthAt, contentsAt);
+        signature = "a(sss)";
+    } else if (StrIs(in.member, "GetName") ||
+               StrIs(in.member, "GetLocalizedName")) {
+        const char* name = "";
+        ActionAt(node, index, &name);
+        PutString(&body, name);
+        signature = "s";
+    } else if (StrIs(in.member, "GetDescription") ||
+               StrIs(in.member, "GetKeyBinding")) {
+        PutString(&body, "");
+        signature = "s";
+    } else if (StrIs(in.member, "DoAction")) {
+        const char* name = "";
+        AccessibilityAction action = ActionAt(node, index, &name);
+        PutBool(&body, *name && WindowAccessibilityPerform(object.win, node.id,
+                                                           action));
+        signature = "b";
+    } else {
+        VecReset(body.bytes);
+        return false;
+    }
+    SendReply(in.serial, in.sender, signature, &body);
+    VecReset(body.bytes);
+    return true;
+}
+
+static bool HandleValue(const Incoming& in, const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, kValue) || !object.win ||
+        object.nodeIndex < 0) {
+        return false;
+    }
+    const AccessibilityNode& node = object.win->accessibility[object.nodeIndex];
+    DbusWriter body;
+    const char* signature = "";
+    if (StrIs(in.member, "SetCurrentValue")) {
+        int at = 0;
+        double value = ReadDouble(in.body, in.bodyLen, &at);
+        PutBool(&body, WindowAccessibilitySetNumericValue(object.win, node.id,
+                                                          (float)value));
+        signature = "b";
+    } else if (StrIs(in.member, "GetCurrentValue")) {
+        PutDouble(&body, node.info.numericValue);
+        signature = "d";
+    } else if (StrIs(in.member, "GetMinimumValue")) {
+        PutDouble(&body, node.info.minNumericValue);
+        signature = "d";
+    } else if (StrIs(in.member, "GetMaximumValue")) {
+        PutDouble(&body, node.info.maxNumericValue);
+        signature = "d";
+    } else if (StrIs(in.member, "GetMinimumIncrement")) {
+        PutDouble(&body, node.info.numericValueStep);
+        signature = "d";
+    } else if (StrIs(in.member, "GetText")) {
+        PutString(&body, node.info.value);
+        signature = "s";
+    } else {
+        return false;
+    }
+    SendReply(in.serial, in.sender, signature, &body);
+    VecReset(body.bytes);
+    return true;
+}
+
+static int Utf8Characters(Str text) {
+    int n = 0;
+    for (int i = 0; i < text.len; i++) {
+        if (((uint8_t)text.s[i] & 0xc0) != 0x80) n++;
+    }
+    return n;
+}
+
+static int Utf8ByteForCharacter(Str text, int character) {
+    character = std::max(0, character);
+    int n = 0;
+    for (int i = 0; i < text.len; i++) {
+        if (((uint8_t)text.s[i] & 0xc0) != 0x80) {
+            if (n++ == character) return i;
+        }
+    }
+    return text.len;
+}
+
+static int Utf8CharacterForByte(Str text, int byte) {
+    byte = std::max(0, std::min(byte, text.len));
+    int n = 0;
+    for (int i = 0; i < byte; i++) {
+        if (((uint8_t)text.s[i] & 0xc0) != 0x80) n++;
+    }
+    return n;
+}
+
+static uint32_t Utf8CodepointForCharacter(Str text, int character) {
+    int at = Utf8ByteForCharacter(text, character);
+    if (at < 0 || at >= text.len) return 0;
+    const uint8_t* s = (const uint8_t*)text.s + at;
+    int left = text.len - at;
+    if (s[0] < 0x80) return s[0];
+    if ((s[0] & 0xe0) == 0xc0 && left >= 2)
+        return ((uint32_t)(s[0] & 0x1f) << 6) | (s[1] & 0x3f);
+    if ((s[0] & 0xf0) == 0xe0 && left >= 3)
+        return ((uint32_t)(s[0] & 0x0f) << 12) |
+               ((uint32_t)(s[1] & 0x3f) << 6) | (s[2] & 0x3f);
+    if ((s[0] & 0xf8) == 0xf0 && left >= 4)
+        return ((uint32_t)(s[0] & 7) << 18) | ((uint32_t)(s[1] & 0x3f) << 12) |
+               ((uint32_t)(s[2] & 0x3f) << 6) | (s[3] & 0x3f);
+    return 0xfffd;
+}
+
+static bool TextSpace(uint32_t cp) {
+    return cp <= 0x20 || cp == 0x85 || cp == 0xa0 || cp == 0x2028 ||
+           cp == 0x2029;
+}
+
+static bool SentenceEnd(uint32_t cp) {
+    return cp == '.' || cp == '!' || cp == '?' || cp == '\n' || cp == 0x2028 ||
+           cp == 0x2029;
+}
+
+static void TextGranularRange(Str text, int offset, uint32_t granularity,
+                              int* lo, int* hi) {
+    int count = Utf8Characters(text);
+    if (count <= 0) {
+        *lo = 0;
+        *hi = 0;
+        return;
+    }
+    int probe = std::max(0, std::min(offset, count - 1));
+    if (granularity == 0) {
+        *lo = probe;
+        *hi = probe + 1;
+        return;
+    }
+    if (granularity == 1) {
+        while (probe > 0 && TextSpace(Utf8CodepointForCharacter(text, probe))) {
+            probe--;
+        }
+        *lo = probe;
+        while (*lo > 0 &&
+               !TextSpace(Utf8CodepointForCharacter(text, *lo - 1))) {
+            (*lo)--;
+        }
+        *hi = probe;
+        while (*hi < count &&
+               !TextSpace(Utf8CodepointForCharacter(text, *hi))) {
+            (*hi)++;
+        }
+        while (*hi < count && TextSpace(Utf8CodepointForCharacter(text, *hi))) {
+            (*hi)++;
+        }
+        return;
+    }
+    if (granularity == 3) {
+        *lo = probe;
+        while (*lo > 0 && Utf8CodepointForCharacter(text, *lo - 1) != '\n') {
+            (*lo)--;
+        }
+        *hi = probe;
+        while (*hi < count && Utf8CodepointForCharacter(text, *hi) != '\n') {
+            (*hi)++;
+        }
+        if (*hi < count) (*hi)++;
+        return;
+    }
+    if (granularity == 4) {
+        *lo = probe;
+        while (*lo > 1) {
+            if (Utf8CodepointForCharacter(text, *lo - 1) == '\n' &&
+                Utf8CodepointForCharacter(text, *lo - 2) == '\n') {
+                break;
+            }
+            (*lo)--;
+        }
+        *hi = probe;
+        while (*hi + 1 < count) {
+            if (Utf8CodepointForCharacter(text, *hi) == '\n' &&
+                Utf8CodepointForCharacter(text, *hi + 1) == '\n') {
+                *hi += 2;
+                break;
+            }
+            (*hi)++;
+        }
+        if (*hi + 1 >= count) *hi = count;
+        return;
+    }
+    *lo = probe;
+    while (*lo > 0 && !SentenceEnd(Utf8CodepointForCharacter(text, *lo - 1))) {
+        (*lo)--;
+    }
+    while (*lo < count && TextSpace(Utf8CodepointForCharacter(text, *lo))) {
+        (*lo)++;
+    }
+    *hi = probe;
+    while (*hi < count && !SentenceEnd(Utf8CodepointForCharacter(text, *hi))) {
+        (*hi)++;
+    }
+    if (*hi < count) (*hi)++;
+    while (*hi < count && TextSpace(Utf8CodepointForCharacter(text, *hi))) {
+        (*hi)++;
+    }
+}
+
+static Selection TextSelection(Str text, int lo, int hi) {
+    Selection result = {};
+    result.start = Utf8ByteForCharacter(text, lo);
+    result.end = Utf8ByteForCharacter(text, hi);
+    return result;
+}
+
+static Str TextSlice(Str text, int lo, int hi) {
+    lo = std::max(0, std::min(lo, text.len));
+    hi = std::max(lo, std::min(hi, text.len));
+    return text.s ? Str(text.s + lo, hi - lo) : Str{};
+}
+
+static bool HandleText(const Incoming& in, const LinuxAccessible& object) {
+    bool textInterface = StrIs(in.interfaceName, kText);
+    bool editableInterface = StrIs(in.interfaceName, kEditableText);
+    if ((!textInterface && !editableInterface) || !object.win ||
+        object.nodeIndex < 0) {
+        return false;
+    }
+    const AccessibilityNode& node = object.win->accessibility[object.nodeIndex];
+    if (!node.input) return false;
+    Str text = node.info.role == AccessibilityRole::PasswordInput
+                   ? Str{}
+                   : InputValue(node.input);
+    int at = 0;
+    DbusWriter body;
+    const char* signature = "";
+    if (textInterface && StrIs(in.member, "GetCharacterCount")) {
+        PutI32(&body, Utf8Characters(text));
+        signature = "i";
+    } else if (textInterface && StrIs(in.member, "GetText")) {
+        int lo = (int)ReadU32(in.body, in.bodyLen, &at);
+        int hi = (int)ReadU32(in.body, in.bodyLen, &at);
+        if (hi < 0) hi = Utf8Characters(text);
+        int byteLo = Utf8ByteForCharacter(text, lo);
+        int byteHi = Utf8ByteForCharacter(text, hi);
+        PutString(&body, TextSlice(text, byteLo, byteHi));
+        signature = "s";
+    } else if (textInterface && StrIs(in.member, "GetStringAtOffset")) {
+        int offset = ReadI32(in.body, in.bodyLen, &at);
+        uint32_t granularity = ReadU32(in.body, in.bodyLen, &at);
+        int lo = 0;
+        int hi = 0;
+        TextGranularRange(text, offset, granularity, &lo, &hi);
+        int byteLo = Utf8ByteForCharacter(text, lo);
+        int byteHi = Utf8ByteForCharacter(text, hi);
+        PutString(&body, TextSlice(text, byteLo, byteHi));
+        PutI32(&body, lo);
+        PutI32(&body, hi);
+        signature = "sii";
+    } else if (textInterface && StrIs(in.member, "GetCharacterAtOffset")) {
+        int offset = ReadI32(in.body, in.bodyLen, &at);
+        PutI32(&body, (int32_t)Utf8CodepointForCharacter(text, offset));
+        signature = "i";
+    } else if (textInterface && StrIs(in.member, "GetNSelections")) {
+        PutI32(&body, node.input->selectedRange.start != node.input
+                                                             ->selectedRange.end
+                          ? 1
+                          : 0);
+        signature = "i";
+    } else if (textInterface && StrIs(in.member, "GetSelection")) {
+        int selection = ReadI32(in.body, in.bodyLen, &at);
+        PutAlign(&body, 8);
+        int lo = Utf8CharacterForByte(text, node.input->selectedRange.start);
+        int hi = Utf8CharacterForByte(text, node.input->selectedRange.end);
+        bool exists = selection == 0 && lo != hi;
+        PutI32(&body, exists ? std::min(lo, hi) : -1);
+        PutI32(&body, exists ? std::max(lo, hi) : -1);
+        signature = "(ii)";
+    } else if (textInterface && (StrIs(in.member, "SetSelection") ||
+                                 StrIs(in.member, "AddSelection"))) {
+        if (StrIs(in.member, "SetSelection")) {
+            (void)ReadU32(in.body, in.bodyLen, &at);
+        }
+        int lo = (int)ReadU32(in.body, in.bodyLen, &at);
+        int hi = (int)ReadU32(in.body, in.bodyLen, &at);
+        InputSetSelectedRange(node.input, object.win->app, object.win,
+                              Utf8ByteForCharacter(text, lo),
+                              Utf8ByteForCharacter(text, hi));
+        AppInvalidate(object.win);
+        PutBool(&body, true);
+        signature = "b";
+    } else if (textInterface && StrIs(in.member, "RemoveSelection")) {
+        InputUnselect(node.input, object.win->app, object.win);
+        AppInvalidate(object.win);
+        PutBool(&body, true);
+        signature = "b";
+    } else if (textInterface && StrIs(in.member, "GetCaretOffset")) {
+        PutI32(&body, Utf8CharacterForByte(text, InputCursor(node.input)));
+        signature = "i";
+    } else if (textInterface && StrIs(in.member, "GetOffsetAtPoint")) {
+        int x = ReadI32(in.body, in.bodyLen, &at);
+        int y = ReadI32(in.body, in.bodyLen, &at);
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Point point = ComponentPointInWindow(object, x, y, coordType);
+        int offset = InputIndexForPosition(node.input, &object.win->paint,
+                                           point.x, point.y);
+        PutI32(&body, Utf8CharacterForByte(text, offset));
+        signature = "i";
+    } else if (textInterface && StrIs(in.member, "GetCharacterExtents")) {
+        (void)ReadI32(in.body, in.bodyLen, &at);
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Bounds bounds = ComponentBounds(object, coordType);
+        PutAlign(&body, 8);
+        PutI32(&body, (int)bounds.x);
+        PutI32(&body, (int)bounds.y);
+        PutI32(&body, (int)bounds.w);
+        PutI32(&body, (int)bounds.h);
+        signature = "(iiii)";
+    } else if (textInterface && StrIs(in.member, "GetRangeExtents")) {
+        (void)ReadI32(in.body, in.bodyLen, &at);
+        (void)ReadI32(in.body, in.bodyLen, &at);
+        uint32_t coordType = ReadU32(in.body, in.bodyLen, &at);
+        Bounds bounds = ComponentBounds(object, coordType);
+        PutAlign(&body, 8);
+        PutI32(&body, (int)bounds.x);
+        PutI32(&body, (int)bounds.y);
+        PutI32(&body, (int)bounds.w);
+        PutI32(&body, (int)bounds.h);
+        signature = "(iiii)";
+    } else if (textInterface && (StrIs(in.member, "GetDefaultAttributes") ||
+                                 StrIs(in.member, "GetDefaultAttributeSet"))) {
+        PutEmptyStringDict(&body);
+        signature = "a{ss}";
+    } else if (textInterface && StrIs(in.member, "GetAttributeValue")) {
+        (void)ReadI32(in.body, in.bodyLen, &at);
+        (void)ReadString(in.body, in.bodyLen, &at);
+        PutString(&body, "");
+        signature = "s";
+    } else if (textInterface && (StrIs(in.member, "GetAttributes") ||
+                                 StrIs(in.member, "GetAttributeRun"))) {
+        (void)ReadI32(in.body, in.bodyLen, &at);
+        if (StrIs(in.member, "GetAttributeRun"))
+            (void)ReadU32(in.body, in.bodyLen, &at);
+        PutEmptyStringDict(&body);
+        PutI32(&body, 0);
+        PutI32(&body, Utf8Characters(text));
+        signature = "a{ss}ii";
+    } else if (textInterface && StrIs(in.member, "SetCaretOffset")) {
+        int offset = (int)ReadU32(in.body, in.bodyLen, &at);
+        InputMoveTo(node.input, object.win->app, object.win,
+                    Utf8ByteForCharacter(text, offset));
+        AppInvalidate(object.win);
+        PutBool(&body, true);
+        signature = "b";
+    } else if (editableInterface && StrIs(in.member, "SetTextContents")) {
+        Str value = ReadString(in.body, in.bodyLen, &at);
+        bool changed = WindowAccessibilityPerform(
+            object.win, node.id, AccessibilityAction::SetValue, value);
+        PutBool(&body, changed);
+        signature = "b";
+    } else if (editableInterface && StrIs(in.member, "InsertText")) {
+        int position = ReadI32(in.body, in.bodyLen, &at);
+        Str value = ReadString(in.body, in.bodyLen, &at);
+        int length = ReadI32(in.body, in.bodyLen, &at);
+        int available = value.len;
+        value.len = std::max(0, std::min(value.len, length));
+        while (value.len > 0 && value.len < available &&
+               ((uint8_t)value.s[value.len] & 0xc0) == 0x80) {
+            value.len--;
+        }
+        Selection range = TextSelection(text, position, position);
+        bool changed = InputReplaceTextInRange(node.input, object.win->app,
+                                               object.win, &range, value);
+        PutBool(&body, changed);
+        signature = "b";
+    } else if (editableInterface &&
+               (StrIs(in.member, "DeleteText") || StrIs(in.member, "CutText") ||
+                StrIs(in.member, "CopyText"))) {
+        int lo = ReadI32(in.body, in.bodyLen, &at);
+        int hi = ReadI32(in.body, in.bodyLen, &at);
+        Selection range = TextSelection(text, lo, hi);
+        int byteLo = std::min(range.start, range.end);
+        int byteHi = std::max(range.start, range.end);
+        bool copy = StrIs(in.member, "CopyText") || StrIs(in.member, "CutText");
+        if (copy) ClipboardSetText(object.win, TextSlice(text, byteLo, byteHi));
+        if (StrIs(in.member, "CopyText")) {
+            signature = "";
+        } else {
+            bool changed = InputReplaceTextInRange(node.input, object.win->app,
+                                                   object.win, &range, Str{});
+            PutBool(&body, changed);
+            signature = "b";
+        }
+    } else if (editableInterface && StrIs(in.member, "PasteText")) {
+        int position = ReadI32(in.body, in.bodyLen, &at);
+        Selection range = TextSelection(text, position, position);
+        Str value = ClipboardGetText(GetTempArena(), object.win);
+        bool changed = InputReplaceTextInRange(node.input, object.win->app,
+                                               object.win, &range, value);
+        PutBool(&body, changed);
+        signature = "b";
+    } else {
+        VecReset(body.bytes);
+        return false;
+    }
+    SendReply(in.serial, in.sender, signature, &body);
+    VecReset(body.bytes);
+    return true;
+}
+
+static bool SelectionDescendant(const Window* win, int index, int ancestor) {
+    int at = win->accessibility[index].parent;
+    while (at >= 0 && at < win->accessibility.len) {
+        if (at == ancestor) return true;
+        if (IsSelectionRole(win->accessibility[at].info.role)) return false;
+        at = win->accessibility[at].parent;
+    }
+    return false;
+}
+
+static int SelectedAt(const LinuxAccessible& object, int wanted) {
+    for (int i = 0; object.win && i < object.win->accessibility.len; i++) {
+        const AccessibilityNode& node = object.win->accessibility[i];
+        if (node.info.hasSelected && node.info.selected &&
+            SelectionDescendant(object.win, i, object.nodeIndex) &&
+            wanted-- == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool HandleSelection(const Incoming& in, const LinuxAccessible& object) {
+    if (!StrIs(in.interfaceName, kSelection) || !object.win ||
+        object.nodeIndex < 0) {
+        return false;
+    }
+    DbusWriter body;
+    const char* signature = "";
+    int at = 0;
+    if (StrIs(in.member, "GetNSelectedChildren")) {
+        int n = 0;
+        while (SelectedAt(object, n) >= 0) n++;
+        PutI32(&body, n);
+        signature = "i";
+    } else if (StrIs(in.member, "GetSelectedChild")) {
+        int selected =
+            SelectedAt(object, (int)ReadU32(in.body, in.bodyLen, &at));
+        if (selected >= 0) {
+            PutObjectRef(&body,
+                         gpui_accessibility_linux_PathFor(object.windowIndex,
+                                 object.win->accessibility[selected].id));
+        } else {
+            PutNullObjectRef(&body);
+        }
+        signature = "(so)";
+    } else if (StrIs(in.member, "SelectChild")) {
+        int wi = -1;
+        int ni = -1;
+        int child = (int)ReadU32(in.body, in.bodyLen, &at);
+        bool ok = ChildAt(object, child, &wi, &ni) && wi == object.windowIndex;
+        if (ok) {
+            ok = WindowAccessibilityPerform(object.win,
+                                            object.win->accessibility[ni].id,
+                                            AccessibilityAction::Default);
+        }
+        PutBool(&body, ok);
+        signature = "b";
+    } else if (StrIs(in.member, "IsChildSelected")) {
+        int wi = -1;
+        int ni = -1;
+        int child = (int)ReadU32(in.body, in.bodyLen, &at);
+        bool selected = ChildAt(object, child, &wi, &ni) &&
+                        object.win->accessibility[ni].info.hasSelected &&
+                        object.win->accessibility[ni].info.selected;
+        PutBool(&body, selected);
+        signature = "b";
+    } else if (StrIs(in.member, "SelectAll") ||
+               StrIs(in.member, "ClearSelection") ||
+               StrIs(in.member, "DeselectChild") ||
+               StrIs(in.member, "DeselectSelectedChild")) {
+        PutBool(&body, false);
+        signature = "b";
+    } else {
+        return false;
+    }
+    SendReply(in.serial, in.sender, signature, &body);
+    VecReset(body.bytes);
+    return true;
+}
+
+static void SendEmbed() {
+    if (!gA11y.busName.s || gA11y.embedSerial) return;
+    DbusWriter body;
+    PutObjectRef(&body, Str(kRootPath));
+    gA11y.embedSerial =
+        SendCall("org.a11y.atspi.Registry", "/org/a11y/atspi/registry",
+                 "org.a11y.atspi.Socket", "Embed", "(so)", &body);
+    VecReset(body.bytes);
+}
+
+static void HandleReply(const Incoming& in) {
+    if (in.replySerial == gA11y.helloSerial && !gA11y.busName.s) {
+        int at = 0;
+        Str name = ReadString(in.body, in.bodyLen, &at);
+        if (name.s) {
+            gA11y.busName = StrDup(name);
+            SendEmbed();
+        }
+    } else if (in.replySerial == gA11y.embedSerial) {
+        gA11y.ready = true;
+    }
+}
+
+static void HandleMethod(const Incoming& in) {
+    LinuxAccessible object = AccessibleForPath(in.path);
+    if (!object.root && (!object.win || object.nodeIndex < 0)) {
+        SendError(in.serial, in.sender,
+                  "org.freedesktop.DBus.Error.UnknownObject",
+                  "accessible object is no longer available");
+        return;
+    }
+    if (HandleProperties(in, object) || HandleAccessible(in, object) ||
+        HandleApplication(in, object) || HandleComponent(in, object) ||
+        HandleAction(in, object) || HandleValue(in, object) ||
+        HandleText(in, object) || HandleSelection(in, object)) {
+        return;
+    }
+    if (StrIs(in.interfaceName, "org.freedesktop.DBus.Introspectable") &&
+        StrIs(in.member, "Introspect")) {
+        static const char xml[] =
+            "<node><interface name='org.freedesktop.DBus.Properties'/>"
+            "<interface name='org.a11y.atspi.Accessible'/>"
+            "<interface name='org.a11y.atspi.Application'/>"
+            "<interface name='org.a11y.atspi.Component'/>"
+            "<interface name='org.a11y.atspi.Action'/>"
+            "<interface name='org.a11y.atspi.Value'/>"
+            "<interface name='org.a11y.atspi.Selection'/>"
+            "<interface name='org.a11y.atspi.Text'/>"
+            "<interface name='org.a11y.atspi.EditableText'/></node>";
+        DbusWriter body;
+        PutString(&body, xml);
+        SendReply(in.serial, in.sender, "s", &body);
+        VecReset(body.bytes);
+        return;
+    }
+    SendError(in.serial, in.sender, "org.freedesktop.DBus.Error.UnknownMethod",
+              "unsupported AT-SPI method");
+}
+
+static void ProcessMessages() {
+    for (;;) {
+        Incoming in;
+        int messageLen = 0;
+        if (!ParseIncoming(gA11y.rx.els, gA11y.rx.len, &in, &messageLen)) {
+            break;
+        }
+        if (in.type == 1)
+            HandleMethod(in);
+        else if (in.type == 2)
+            HandleReply(in);
+        memmove(gA11y.rx.els, gA11y.rx.els + messageLen,
+                (size_t)(gA11y.rx.len - messageLen));
+        gA11y.rx.len -= messageLen;
+    }
+}
+
+void AccessibilityLinuxInit(App* app, Str busAddress) {
+    if (gA11y.fd >= 0 || !app || !busAddress.s || busAddress.len <= 0) {
+        return;
+    }
+    sockaddr_un address = {};
+    socklen_t addressLen = 0;
+    if (!ParseUnixAddress(busAddress, &address, &addressLen)) {
+        return;
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0 || connect(fd, (sockaddr*)&address, addressLen) != 0) {
+        if (fd >= 0) close(fd);
+        return;
+    }
+    gA11y.fd = fd;
+    gA11y.app = app;
+    gA11y.busAddress = StrDup(busAddress);
+    if (!Authenticate()) {
+        AccessibilityLinuxShutdown();
+        return;
+    }
+    gA11y
+        .helloSerial = SendCall("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                "org.freedesktop.DBus", "Hello", "", nullptr);
+}
+
+void AccessibilityLinuxShutdown() {
+    if (gA11y.fd >= 0) close(gA11y.fd);
+    gA11y.fd = -1;
+    gA11y.app = nullptr;
+    gA11y.serial = 1;
+    gA11y.helloSerial = 0;
+    gA11y.embedSerial = 0;
+    gA11y.applicationId = 0;
+    gA11y.ready = false;
+    StrFree(gA11y.busName);
+    gA11y.busName = {};
+    StrFree(gA11y.busAddress);
+    gA11y.busAddress = {};
+    VecReset(gA11y.rx);
+}
+
+int AccessibilityLinuxFd() {
+    return gA11y.fd;
+}
+
+void AccessibilityLinuxPump() {
+    if (gA11y.fd < 0) return;
+    uint8_t block[8192];
+    for (;;) {
+        ssize_t n = recv(gA11y.fd, block, sizeof(block), MSG_DONTWAIT);
+        if (n > 0) {
+            memcpy(VecAppendBlanks(gA11y.rx, (int)n), block, (size_t)n);
+            continue;
+        }
+        if (n == 0 ||
+            (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+            AccessibilityLinuxShutdown();
+        }
+        break;
+    }
+    ProcessMessages();
+}
+
+static void SendEvent(Window* win, uint32_t nodeId, const char* member,
+                      const char* detail, int detail1) {
+    if (!gA11y.ready || !win || !gA11y.app) return;
+    int wi = -1;
+    for (int i = 0; i < gA11y.app->windows.len; i++) {
+        if (gA11y.app->windows[i] == win) {
+            wi = i;
+            break;
+        }
+    }
+    if (wi < 0) return;
+    Str path = nodeId ? (Str)gpui_accessibility_linux_PathFor(wi, nodeId) : Str(kRootPath);
+    DbusWriter fields;
+    DbusWriter body;
+    PutHeaderString(&fields, 1, "o", path);
+    PutHeaderString(&fields, 2, "s", Str("org.a11y.atspi.Event.Object"));
+    PutHeaderString(&fields, 3, "s", Str(member));
+    PutHeaderString(&fields, 8, "g", Str("siiva{sv}"));
+    PutString(&body, detail);
+    PutI32(&body, detail1);
+    PutI32(&body, 0);
+    PutVariantString(&body, "s", Str{});
+    PutEmptyStringDict(&body);
+    SendMessage(4, 0, &fields, &body);
+    VecReset(fields.bytes);
+    VecReset(body.bytes);
+}
+
+void AccessibilityLinuxTreeChanged(Window* win) {
+    SendEvent(win, 0, "ChildrenChanged", "invalidate", 0);
+}
+
+void AccessibilityLinuxFocusChanged(Window* win, int focusId) {
+    if (!win || !focusId) return;
+    for (int i = 0; i < win->accessibility.len; i++) {
+        if (win->accessibility[i].focusId == focusId) {
+            SendEvent(win, win->accessibility[i].id, "StateChanged", "focused",
+                      1);
+            break;
+        }
+    }
+}
+
+}
+
+#endif
+
 #if GPUI_OS_WINDOWS
 #line 1 "src/gpui/accessibility_win.cpp"
 
 namespace gpui {
 
 struct WinAccessibilityNode;
+struct WinTextRange;
 
 static BSTR AccessibilityBstr(Str value) {
     if (!value.s || value.len <= 0) {
@@ -147335,6 +150031,18 @@ static bool AccessibilitySelectionItemRole(AccessibilityRole role) {
            role == AccessibilityRole::Tab;
 }
 
+static bool AccessibilitySelectionContainerRole(AccessibilityRole role) {
+    return role == AccessibilityRole::ListBox ||
+           role == AccessibilityRole::RadioGroup ||
+           role == AccessibilityRole::TabList ||
+           role == AccessibilityRole::Tree;
+}
+
+static bool AccessibilityTextPattern(const AccessibilityNode& node) {
+    return AccessibilityTextRole(node.info.role) && node.input &&
+           node.info.role != AccessibilityRole::PasswordInput;
+}
+
 static bool AccessibilityInvokePattern(const AccessibilityNode& node) {
     if (!(node.actions & AccessibilityActionDefault)) {
         return false;
@@ -147410,7 +150118,9 @@ struct WinAccessibilityNode : IRawElementProviderSimple,
                               IValueProvider,
                               IRangeValueProvider,
                               IExpandCollapseProvider,
+                              ISelectionProvider,
                               ISelectionItemProvider,
+                              ITextProvider,
                               IGridProvider,
                               IGridItemProvider,
                               ITableProvider,
@@ -147467,12 +150177,24 @@ struct WinAccessibilityNode : IRawElementProviderSimple,
     HRESULT STDMETHODCALLTYPE Collapse() override;
     HRESULT STDMETHODCALLTYPE
     get_ExpandCollapseState(ExpandCollapseState* out) override;
+    HRESULT STDMETHODCALLTYPE GetSelection(SAFEARRAY** out) override;
+    HRESULT STDMETHODCALLTYPE get_CanSelectMultiple(BOOL* out) override;
+    HRESULT STDMETHODCALLTYPE get_IsSelectionRequired(BOOL* out) override;
     HRESULT STDMETHODCALLTYPE Select() override;
     HRESULT STDMETHODCALLTYPE AddToSelection() override;
     HRESULT STDMETHODCALLTYPE RemoveFromSelection() override;
     HRESULT STDMETHODCALLTYPE get_IsSelected(BOOL* out) override;
     HRESULT STDMETHODCALLTYPE
     get_SelectionContainer(IRawElementProviderSimple** out) override;
+    HRESULT STDMETHODCALLTYPE GetVisibleRanges(SAFEARRAY** out) override;
+    HRESULT STDMETHODCALLTYPE RangeFromChild(IRawElementProviderSimple* child,
+                                             ITextRangeProvider** out) override;
+    HRESULT STDMETHODCALLTYPE RangeFromPoint(UiaPoint point,
+                                             ITextRangeProvider** out) override;
+    HRESULT STDMETHODCALLTYPE
+    get_DocumentRange(ITextRangeProvider** out) override;
+    HRESULT STDMETHODCALLTYPE
+    get_SupportedTextSelection(SupportedTextSelection* out) override;
     HRESULT STDMETHODCALLTYPE GetItem(int row, int column,
                                       IRawElementProviderSimple** out) override;
     HRESULT STDMETHODCALLTYPE get_RowCount(int* out) override;
@@ -147489,6 +150211,67 @@ struct WinAccessibilityNode : IRawElementProviderSimple,
     get_RowOrColumnMajor(RowOrColumnMajor* out) override;
     HRESULT STDMETHODCALLTYPE GetRowHeaderItems(SAFEARRAY** out) override;
     HRESULT STDMETHODCALLTYPE GetColumnHeaderItems(SAFEARRAY** out) override;
+};
+
+struct WinTextRange : ITextRangeProvider {
+    LONG refs = 1;
+    WinAccessibility* root = nullptr;
+    uint32_t id = 0;
+    int start = 0;
+    int end = 0;
+
+    WinTextRange(WinAccessibility* owner, uint32_t nodeId, int lo, int hi)
+        : root(owner), id(nodeId), start(lo), end(hi) {
+        root->AddRef();
+    }
+    ~WinTextRange() { root->Release(); }
+
+    const AccessibilityNode* Node() const { return root->Node(id); }
+    Str Text() const {
+        const AccessibilityNode* node = Node();
+        return node && node->input ? InputValue(node->input) : Str{};
+    }
+    int Length() const { return RopeOffsetToOffsetUtf16(Text(), Text().len); }
+    void Clamp() {
+        int n = Length();
+        start = std::max(0, std::min(start, n));
+        end = std::max(start, std::min(end, n));
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override;
+    ULONG STDMETHODCALLTYPE AddRef() override;
+    ULONG STDMETHODCALLTYPE Release() override;
+    HRESULT STDMETHODCALLTYPE Clone(ITextRangeProvider** out) override;
+    HRESULT STDMETHODCALLTYPE Compare(ITextRangeProvider* range,
+                                      BOOL* out) override;
+    HRESULT STDMETHODCALLTYPE CompareEndpoints(
+        TextPatternRangeEndpoint endpoint, ITextRangeProvider* target,
+        TextPatternRangeEndpoint targetEndpoint, int* out) override;
+    HRESULT STDMETHODCALLTYPE ExpandToEnclosingUnit(TextUnit unit) override;
+    HRESULT STDMETHODCALLTYPE FindAttribute(TEXTATTRIBUTEID attribute,
+                                            VARIANT value, BOOL backward,
+                                            ITextRangeProvider** out) override;
+    HRESULT STDMETHODCALLTYPE FindText(BSTR text, BOOL backward,
+                                       BOOL ignoreCase,
+                                       ITextRangeProvider** out) override;
+    HRESULT STDMETHODCALLTYPE GetAttributeValue(TEXTATTRIBUTEID attribute,
+                                                VARIANT* out) override;
+    HRESULT STDMETHODCALLTYPE GetBoundingRectangles(SAFEARRAY** out) override;
+    HRESULT STDMETHODCALLTYPE
+    GetEnclosingElement(IRawElementProviderSimple** out) override;
+    HRESULT STDMETHODCALLTYPE GetText(int maxLength, BSTR* out) override;
+    HRESULT STDMETHODCALLTYPE Move(TextUnit unit, int count, int* out) override;
+    HRESULT STDMETHODCALLTYPE
+    MoveEndpointByUnit(TextPatternRangeEndpoint endpoint, TextUnit unit,
+                       int count, int* out) override;
+    HRESULT STDMETHODCALLTYPE MoveEndpointByRange(
+        TextPatternRangeEndpoint endpoint, ITextRangeProvider* target,
+        TextPatternRangeEndpoint targetEndpoint) override;
+    HRESULT STDMETHODCALLTYPE Select() override;
+    HRESULT STDMETHODCALLTYPE AddToSelection() override;
+    HRESULT STDMETHODCALLTYPE RemoveFromSelection() override;
+    HRESULT STDMETHODCALLTYPE ScrollIntoView(BOOL alignToTop) override;
+    HRESULT STDMETHODCALLTYPE GetChildren(SAFEARRAY** out) override;
 };
 
 IRawElementProviderFragment* WinAccessibility::NewNode(int index) {
@@ -147613,6 +150396,31 @@ static HRESULT AccessibilityEmptyProviderArray(SAFEARRAY** out) {
     }
     *out = SafeArrayCreateVector(VT_UNKNOWN, 0, 0);
     return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT AccessibilityRangeArray(WinTextRange* range, SAFEARRAY** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = SafeArrayCreateVector(VT_UNKNOWN, 0, range ? 1 : 0);
+    if (!*out) {
+        if (range) {
+            range->Release();
+        }
+        return E_OUTOFMEMORY;
+    }
+    if (range) {
+        LONG at = 0;
+        IUnknown* value = static_cast<ITextRangeProvider*>(range);
+        HRESULT hr = SafeArrayPutElement(*out, &at, value);
+        range->Release();
+        if (FAILED(hr)) {
+            SafeArrayDestroy(*out);
+            *out = nullptr;
+            return hr;
+        }
+    }
+    return S_OK;
 }
 
 HRESULT WinAccessibility::QueryInterface(REFIID iid, void** out) {
@@ -147847,8 +150655,12 @@ HRESULT WinAccessibilityNode::QueryInterface(REFIID iid, void** out) {
         *out = static_cast<IRangeValueProvider*>(this);
     } else if (iid == __uuidof(IExpandCollapseProvider)) {
         *out = static_cast<IExpandCollapseProvider*>(this);
+    } else if (iid == __uuidof(ISelectionProvider)) {
+        *out = static_cast<ISelectionProvider*>(this);
     } else if (iid == __uuidof(ISelectionItemProvider)) {
         *out = static_cast<ISelectionItemProvider*>(this);
+    } else if (iid == __uuidof(ITextProvider)) {
+        *out = static_cast<ITextProvider*>(this);
     } else if (iid == __uuidof(IGridProvider)) {
         *out = static_cast<IGridProvider*>(this);
     } else if (iid == __uuidof(IGridItemProvider)) {
@@ -147913,9 +150725,16 @@ HRESULT WinAccessibilityNode::GetPatternProvider(PATTERNID pattern,
     if (pattern == UIA_ExpandCollapsePatternId && node->info.hasExpanded) {
         return QueryInterface(__uuidof(IExpandCollapseProvider), (void**)out);
     }
+    if (pattern == UIA_SelectionPatternId &&
+        AccessibilitySelectionContainerRole(node->info.role)) {
+        return QueryInterface(__uuidof(ISelectionProvider), (void**)out);
+    }
     if (pattern == UIA_SelectionItemPatternId && node->info.hasSelected &&
         AccessibilitySelectionItemRole(node->info.role)) {
         return QueryInterface(__uuidof(ISelectionItemProvider), (void**)out);
+    }
+    if (pattern == UIA_TextPatternId && AccessibilityTextPattern(*node)) {
+        return QueryInterface(__uuidof(ITextProvider), (void**)out);
     }
     if (pattern == UIA_GridPatternId &&
         node->info.role == AccessibilityRole::Table && node->info.hasRowCount &&
@@ -148364,6 +151183,115 @@ HRESULT WinAccessibilityNode::get_ExpandCollapseState(
     return S_OK;
 }
 
+static bool AccessibilityDescendsFrom(const Window* win, int index,
+                                      int ancestor) {
+    if (!win || index < 0 || ancestor < 0) {
+        return false;
+    }
+    int at = win->accessibility[index].parent;
+    while (at >= 0 && at < win->accessibility.len) {
+        if (at == ancestor) {
+            return true;
+        }
+        if (AccessibilitySelectionContainerRole(win->accessibility[at]
+                                                    .info.role)) {
+            return false;
+        }
+        at = win->accessibility[at].parent;
+    }
+    return false;
+}
+
+HRESULT WinAccessibilityNode::GetSelection(SAFEARRAY** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    const AccessibilityNode* node = Node();
+    if (!node) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    if (AccessibilityTextPattern(*node)) {
+        Str text = InputValue(node->input);
+        Selection selection = node->input->selectedRange;
+        int lo = RopeOffsetToOffsetUtf16(text, selection.start);
+        int hi = RopeOffsetToOffsetUtf16(text, selection.end);
+        return AccessibilityRangeArray(
+            new WinTextRange(root, id, std::min(lo, hi), std::max(lo, hi)),
+            out);
+    }
+    if (!AccessibilitySelectionContainerRole(node->info.role)) {
+        return UIA_E_INVALIDOPERATION;
+    }
+    int ancestor = root->NodeIndex(id);
+    int count = 0;
+    for (int i = 0; i < root->win->accessibility.len; i++) {
+        const AccessibilityNode& candidate = root->win->accessibility[i];
+        if (candidate.info.hasSelected && candidate.info.selected &&
+            AccessibilityDescendsFrom(root->win, i, ancestor)) {
+            count++;
+        }
+    }
+    *out = SafeArrayCreateVector(VT_UNKNOWN, 0, count);
+    if (!*out) {
+        return E_OUTOFMEMORY;
+    }
+    LONG at = 0;
+    for (int i = 0; i < root->win->accessibility.len; i++) {
+        const AccessibilityNode& candidate = root->win->accessibility[i];
+        if (!candidate.info.hasSelected || !candidate.info.selected ||
+            !AccessibilityDescendsFrom(root->win, i, ancestor)) {
+            continue;
+        }
+        IRawElementProviderSimple* provider = nullptr;
+        HRESULT hr = AccessibilitySimpleAt(root, i, &provider);
+        if (FAILED(hr) || !provider ||
+            FAILED(SafeArrayPutElement(*out, &at, provider))) {
+            if (provider) {
+                provider->Release();
+            }
+            SafeArrayDestroy(*out);
+            *out = nullptr;
+            return FAILED(hr) ? hr : E_OUTOFMEMORY;
+        }
+        provider->Release();
+        at++;
+    }
+    return S_OK;
+}
+
+HRESULT WinAccessibilityNode::get_CanSelectMultiple(BOOL* out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    const AccessibilityNode* node = Node();
+    if (!node) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    if (!AccessibilitySelectionContainerRole(node->info.role)) {
+        return UIA_E_INVALIDOPERATION;
+    }
+
+    *out = FALSE;
+    return S_OK;
+}
+
+HRESULT WinAccessibilityNode::get_IsSelectionRequired(BOOL* out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    const AccessibilityNode* node = Node();
+    if (!node) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    if (!AccessibilitySelectionContainerRole(node->info.role)) {
+        return UIA_E_INVALIDOPERATION;
+    }
+
+    *out = FALSE;
+    return S_OK;
+}
+
 HRESULT WinAccessibilityNode::Select() {
     const AccessibilityNode* node = Node();
     if (!node) {
@@ -148414,6 +151342,10 @@ HRESULT WinAccessibilityNode::get_SelectionContainer(
         return UIA_E_ELEMENTNOTAVAILABLE;
     }
     int parent = root->win->accessibility[index].parent;
+    while (parent >= 0 && !AccessibilitySelectionContainerRole(
+                              root->win->accessibility[parent].info.role)) {
+        parent = root->win->accessibility[parent].parent;
+    }
     if (parent < 0) {
         return root
             ->QueryInterface(__uuidof(IRawElementProviderSimple), (void**)out);
@@ -148426,6 +151358,79 @@ HRESULT WinAccessibilityNode::get_SelectionContainer(
                                           (void**)out);
     fragment->Release();
     return hr;
+}
+
+HRESULT WinAccessibilityNode::GetVisibleRanges(SAFEARRAY** out) {
+    const AccessibilityNode* node = Node();
+    if (!node || !AccessibilityTextPattern(*node)) {
+        return node ? UIA_E_INVALIDOPERATION : UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    int n = RopeOffsetToOffsetUtf16(InputValue(node->input),
+                                    InputValue(node->input).len);
+    return AccessibilityRangeArray(new WinTextRange(root, id, 0, n), out);
+}
+
+HRESULT WinAccessibilityNode::RangeFromChild(IRawElementProviderSimple* child,
+                                             ITextRangeProvider** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    const AccessibilityNode* node = Node();
+    if (!node || !AccessibilityTextPattern(*node)) {
+        return node ? UIA_E_INVALIDOPERATION : UIA_E_ELEMENTNOTAVAILABLE;
+    }
+
+    (void)child;
+    return E_INVALIDARG;
+}
+
+HRESULT WinAccessibilityNode::RangeFromPoint(UiaPoint point,
+                                             ITextRangeProvider** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    const AccessibilityNode* node = Node();
+    if (!node || !AccessibilityTextPattern(*node)) {
+        return node ? UIA_E_INVALIDOPERATION : UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Str text = InputValue(node->input);
+    POINT client = {(LONG)point.x, (LONG)point.y};
+    ScreenToClient(root->hwnd, &client);
+    int offset = InputIndexForPosition(node->input, &root->win->paint,
+                                       (float)client.x, (float)client.y);
+    int offsetUtf16 = RopeOffsetToOffsetUtf16(text, offset);
+    *out = new WinTextRange(root, id, offsetUtf16, offsetUtf16);
+    return S_OK;
+}
+
+HRESULT WinAccessibilityNode::get_DocumentRange(ITextRangeProvider** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    const AccessibilityNode* node = Node();
+    if (!node || !AccessibilityTextPattern(*node)) {
+        return node ? UIA_E_INVALIDOPERATION : UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Str text = InputValue(node->input);
+    *out =
+        new WinTextRange(root, id, 0, RopeOffsetToOffsetUtf16(text, text.len));
+    return S_OK;
+}
+
+HRESULT WinAccessibilityNode::get_SupportedTextSelection(
+    SupportedTextSelection* out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    const AccessibilityNode* node = Node();
+    if (!node || !AccessibilityTextPattern(*node)) {
+        return node ? UIA_E_INVALIDOPERATION : UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    *out = SupportedTextSelection_Single;
+    return S_OK;
 }
 
 HRESULT WinAccessibilityNode::GetItem(int row, int column,
@@ -148617,6 +151622,387 @@ HRESULT WinAccessibilityNode::GetColumnHeaderItems(SAFEARRAY** out) {
         root, table, AccessibilityRole::ColumnHeader, column, out);
 }
 
+HRESULT WinTextRange::QueryInterface(REFIID iid, void** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    if (iid == __uuidof(IUnknown) || iid == __uuidof(ITextRangeProvider)) {
+        *out = static_cast<ITextRangeProvider*>(this);
+    }
+    if (!*out) {
+        return E_NOINTERFACE;
+    }
+    AddRef();
+    return S_OK;
+}
+
+ULONG WinTextRange::AddRef() {
+    return (ULONG)InterlockedIncrement(&refs);
+}
+
+ULONG WinTextRange::Release() {
+    ULONG left = (ULONG)InterlockedDecrement(&refs);
+    if (!left) {
+        delete this;
+    }
+    return left;
+}
+
+HRESULT WinTextRange::Clone(ITextRangeProvider** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    if (!Node()) {
+        *out = nullptr;
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    *out = new WinTextRange(root, id, start, end);
+    return S_OK;
+}
+
+HRESULT WinTextRange::Compare(ITextRangeProvider* range, BOOL* out) {
+    if (!range || !out) {
+        return E_INVALIDARG;
+    }
+    WinTextRange* other = static_cast<WinTextRange*>(range);
+    Clamp();
+    other->Clamp();
+    *out = other->root == root && other->id == id && other->start == start &&
+                   other->end == end
+               ? TRUE
+               : FALSE;
+    return S_OK;
+}
+
+HRESULT WinTextRange::CompareEndpoints(TextPatternRangeEndpoint endpoint,
+                                       ITextRangeProvider* target,
+                                       TextPatternRangeEndpoint targetEndpoint,
+                                       int* out) {
+    if (!target || !out) {
+        return E_INVALIDARG;
+    }
+    WinTextRange* other = static_cast<WinTextRange*>(target);
+    if (other->root != root || other->id != id) {
+        return E_INVALIDARG;
+    }
+    Clamp();
+    other->Clamp();
+    int a = endpoint == TextPatternRangeEndpoint_Start ? start : end;
+    int b = targetEndpoint == TextPatternRangeEndpoint_Start ? other->start
+                                                             : other->end;
+    *out = a - b;
+    return S_OK;
+}
+
+static bool AccessibilityWideSpace(wchar_t ch) {
+    return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+}
+
+static void AccessibilityUnitBounds(BSTR text, int length, int at,
+                                    TextUnit unit, int* lo, int* hi) {
+    at = std::max(0, std::min(at, length));
+    *lo = at;
+    *hi = at;
+    if (unit == TextUnit_Character) {
+        *hi = std::min(length, at + 1);
+    } else if (unit == TextUnit_Word) {
+        while (*lo > 0 && !AccessibilityWideSpace(text[*lo - 1])) {
+            (*lo)--;
+        }
+        while (*hi < length && !AccessibilityWideSpace(text[*hi])) {
+            (*hi)++;
+        }
+    } else if (unit == TextUnit_Line) {
+        while (*lo > 0 && text[*lo - 1] != L'\n') {
+            (*lo)--;
+        }
+        while (*hi < length && text[*hi] != L'\n') {
+            (*hi)++;
+        }
+        if (*hi < length) {
+            (*hi)++;
+        }
+    } else {
+        *lo = 0;
+        *hi = length;
+    }
+}
+
+HRESULT WinTextRange::ExpandToEnclosingUnit(TextUnit unit) {
+    const AccessibilityNode* node = Node();
+    if (!node || !AccessibilityTextPattern(*node)) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    BSTR text = AccessibilityBstr(Text());
+    if (!text) {
+        return E_OUTOFMEMORY;
+    }
+    AccessibilityUnitBounds(text, (int)SysStringLen(text), start, unit, &start,
+                            &end);
+    SysFreeString(text);
+    return S_OK;
+}
+
+HRESULT WinTextRange::FindAttribute(TEXTATTRIBUTEID attribute, VARIANT value,
+                                    BOOL backward, ITextRangeProvider** out) {
+    (void)attribute;
+    (void)value;
+    (void)backward;
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    return Node() ? S_OK : UIA_E_ELEMENTNOTAVAILABLE;
+}
+
+HRESULT WinTextRange::FindText(BSTR needle, BOOL backward, BOOL ignoreCase,
+                               ITextRangeProvider** out) {
+    if (!needle || !out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    if (!Node()) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    BSTR doc = AccessibilityBstr(Text());
+    if (!doc) {
+        return E_OUTOFMEMORY;
+    }
+    int needleLen = (int)SysStringLen(needle);
+    int found = -1;
+    int first = backward ? end - needleLen : start;
+    int last = backward ? start : end - needleLen;
+    int step = backward ? -1 : 1;
+    for (int at = first; needleLen >= 0 && (backward ? at >= last : at <= last);
+         at += step) {
+        bool same = ignoreCase
+                        ? CompareStringOrdinal(doc + at, needleLen, needle,
+                                               needleLen, TRUE) == CSTR_EQUAL
+                        : memcmp(doc + at, needle,
+                                 (size_t)needleLen * sizeof(wchar_t)) == 0;
+        if (same) {
+            found = at;
+            break;
+        }
+    }
+    SysFreeString(doc);
+    if (found >= 0) {
+        *out = new WinTextRange(root, id, found, found + needleLen);
+    }
+    return S_OK;
+}
+
+HRESULT WinTextRange::GetAttributeValue(TEXTATTRIBUTEID attribute,
+                                        VARIANT* out) {
+    (void)attribute;
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    VariantInit(out);
+    if (!Node()) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    out->vt = VT_UNKNOWN;
+    return UiaGetReservedNotSupportedValue(&out->punkVal);
+}
+
+HRESULT WinTextRange::GetBoundingRectangles(SAFEARRAY** out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    const AccessibilityNode* node = Node();
+    if (!node || !root->hwnd) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    *out = SafeArrayCreateVector(VT_R8, 0, start == end ? 0 : 4);
+    if (!*out) {
+        return E_OUTOFMEMORY;
+    }
+    if (start != end) {
+        POINT origin = {};
+        ClientToScreen(root->hwnd, &origin);
+        double values[4] = {(double)origin.x + node->bounds.x,
+                            (double)origin.y + node->bounds.y, node->bounds.w,
+                            node->bounds.h};
+        for (LONG i = 0; i < 4; i++) {
+            HRESULT hr = SafeArrayPutElement(*out, &i, &values[i]);
+            if (FAILED(hr)) {
+                SafeArrayDestroy(*out);
+                *out = nullptr;
+                return hr;
+            }
+        }
+    }
+    return S_OK;
+}
+
+HRESULT WinTextRange::GetEnclosingElement(IRawElementProviderSimple** out) {
+    return AccessibilitySimpleAt(root, root->NodeIndex(id), out);
+}
+
+HRESULT WinTextRange::GetText(int maxLength, BSTR* out) {
+    if (!out || maxLength < -1) {
+        return E_INVALIDARG;
+    }
+    *out = nullptr;
+    if (!Node()) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    BSTR doc = AccessibilityBstr(Text());
+    if (!doc) {
+        return E_OUTOFMEMORY;
+    }
+    int n = end - start;
+    if (maxLength >= 0) {
+        n = std::min(n, maxLength);
+    }
+    *out = SysAllocStringLen(doc + start, (UINT)n);
+    SysFreeString(doc);
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+HRESULT WinTextRange::Move(TextUnit unit, int count, int* out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    Clamp();
+    int before = start;
+    int moved = 0;
+    HRESULT hr =
+        MoveEndpointByUnit(TextPatternRangeEndpoint_Start, unit, count, &moved);
+    if (FAILED(hr)) {
+        return hr;
+    }
+    int width = end - before;
+    end = std::min(Length(), start + std::max(0, width));
+    *out = moved;
+    return S_OK;
+}
+
+HRESULT WinTextRange::MoveEndpointByUnit(TextPatternRangeEndpoint endpoint,
+                                         TextUnit unit, int count, int* out) {
+    if (!out) {
+        return E_INVALIDARG;
+    }
+    if (!Node()) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    int* value = endpoint == TextPatternRangeEndpoint_Start ? &start : &end;
+    int old = *value;
+    int length = Length();
+    if (unit == TextUnit_Character) {
+        *value = std::max(0, std::min(length, *value + count));
+        *out = *value - old;
+    } else {
+        BSTR text = AccessibilityBstr(Text());
+        if (!text) {
+            return E_OUTOFMEMORY;
+        }
+        int direction = count < 0 ? -1 : 1;
+        int wanted = count < 0 ? -count : count;
+        int moved = 0;
+        while (moved < wanted) {
+            int lo = 0;
+            int hi = 0;
+            int probe = direction < 0 ? std::max(0, *value - 1) : *value;
+            AccessibilityUnitBounds(text, length, probe, unit, &lo, &hi);
+            int next = direction < 0 ? lo : hi;
+            if (next == *value) {
+                break;
+            }
+            *value = next;
+            moved++;
+        }
+        SysFreeString(text);
+        *out = direction * moved;
+    }
+    if (start > end) {
+        if (endpoint == TextPatternRangeEndpoint_Start) {
+            end = start;
+        } else {
+            start = end;
+        }
+    }
+    return S_OK;
+}
+
+HRESULT WinTextRange::MoveEndpointByRange(
+    TextPatternRangeEndpoint endpoint, ITextRangeProvider* target,
+    TextPatternRangeEndpoint targetEndpoint) {
+    if (!target) {
+        return E_INVALIDARG;
+    }
+    WinTextRange* other = static_cast<WinTextRange*>(target);
+    if (other->root != root || other->id != id) {
+        return E_INVALIDARG;
+    }
+    other->Clamp();
+    int value = targetEndpoint == TextPatternRangeEndpoint_Start ? other->start
+                                                                 : other->end;
+    if (endpoint == TextPatternRangeEndpoint_Start) {
+        start = value;
+        if (start > end) {
+            end = start;
+        }
+    } else {
+        end = value;
+        if (end < start) {
+            start = end;
+        }
+    }
+    return S_OK;
+}
+
+HRESULT WinTextRange::Select() {
+    const AccessibilityNode* node = Node();
+    if (!node || !node->input || !root->win || !root->win->app) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    Str text = InputValue(node->input);
+    int lo = RopeOffsetUtf16ToOffset(text, start);
+    int hi = RopeOffsetUtf16ToOffset(text, end);
+    InputSetSelectedRange(node->input, root->win->app, root->win, lo, hi);
+    AppInvalidate(root->win);
+    return S_OK;
+}
+
+HRESULT WinTextRange::AddToSelection() {
+    return UIA_E_INVALIDOPERATION;
+}
+
+HRESULT WinTextRange::RemoveFromSelection() {
+    return UIA_E_INVALIDOPERATION;
+}
+
+HRESULT WinTextRange::ScrollIntoView(BOOL alignToTop) {
+    (void)alignToTop;
+    const AccessibilityNode* node = Node();
+    if (!node || !node->input) {
+        return UIA_E_ELEMENTNOTAVAILABLE;
+    }
+    Clamp();
+    InputScrollToOffset(node->input,
+                        RopeOffsetUtf16ToOffset(InputValue(node->input), start),
+                        InputMoveDir::None);
+    if (root->win) {
+        AppInvalidate(root->win);
+    }
+    return S_OK;
+}
+
+HRESULT WinTextRange::GetChildren(SAFEARRAY** out) {
+    return AccessibilityEmptyProviderArray(out);
+}
+
 WinAccessibility* AccessibilityWinNew(Window* win, void* hwnd) {
     if (!win || !hwnd) {
         return nullptr;
@@ -148721,9 +152107,12 @@ bool AccessibilityWinSmokeTest(Window* win, uint32_t nodeId) {
         {UIA_RangeValuePatternId, expected->slider && expected->info
                                                           .hasNumericValue},
         {UIA_ExpandCollapsePatternId, expected->info.hasExpanded},
+        {UIA_SelectionPatternId,
+         AccessibilitySelectionContainerRole(expected->info.role)},
         {UIA_SelectionItemPatternId,
          expected->info.hasSelected &&
              AccessibilitySelectionItemRole(expected->info.role)},
+        {UIA_TextPatternId, AccessibilityTextPattern(*expected)},
         {UIA_GridPatternId, expected->info.role == AccessibilityRole::Table &&
                                 expected->info.hasRowCount &&
                                 expected->info.hasColumnCount},
@@ -148748,6 +152137,39 @@ bool AccessibilityWinSmokeTest(Window* win, uint32_t nodeId) {
         ok = ok && got == pattern.wanted;
         if (provider) {
             provider->Release();
+        }
+    }
+    if (ok && AccessibilityTextPattern(*expected)) {
+        ITextProvider* text = nullptr;
+        ITextRangeProvider* document = nullptr;
+        BSTR value = nullptr;
+        ok = SUCCEEDED(simple->QueryInterface(__uuidof(ITextProvider),
+                                              (void**)&text)) &&
+             text && SUCCEEDED(text->get_DocumentRange(&document)) &&
+             document && SUCCEEDED(document->GetText(-1, &value)) && value;
+        BSTR wanted = AccessibilityBstr(InputValue(expected->input));
+        ok = ok && wanted && value && wcscmp(wanted, value) == 0;
+        SysFreeString(wanted);
+        SysFreeString(value);
+        if (document) {
+            document->Release();
+        }
+        if (text) {
+            text->Release();
+        }
+    }
+    if (ok && AccessibilitySelectionContainerRole(expected->info.role)) {
+        ISelectionProvider* selection = nullptr;
+        SAFEARRAY* selected = nullptr;
+        ok = SUCCEEDED(simple->QueryInterface(__uuidof(ISelectionProvider),
+                                              (void**)&selection)) &&
+             selection && SUCCEEDED(selection->GetSelection(&selected)) &&
+             selected && SafeArrayGetDim(selected) == 1;
+        if (selected) {
+            SafeArrayDestroy(selected);
+        }
+        if (selection) {
+            selection->Release();
         }
     }
     if (ok && expected->info.role == AccessibilityRole::Table) {
@@ -151930,6 +155352,7 @@ static WinPaintOptions gWinPaintOptions = {
 #endif
     WinPaintMsaa::X4,
     WinSceneMode::Skip,
+    0,
 };
 
 const WinPaintOptions& WinPaintOptionsGet() {
@@ -151979,22 +155402,36 @@ bool WinPaintOptionsTakeArg(Str arg) {
     }
 
     const Str scene = StrL("__scene=");
-    if (!base::StrStartsWith(arg, scene)) {
-        return false;
+    if (base::StrStartsWith(arg, scene)) {
+        Str value(arg.s + scene.len, arg.len - scene.len);
+        if (base::StrEqI(value, "off")) {
+            gWinPaintOptions.scene = WinSceneMode::Off;
+        } else if (base::StrEqI(value, "replay")) {
+            gWinPaintOptions.scene = WinSceneMode::Replay;
+        } else if (base::StrEqI(value, "cache")) {
+            gWinPaintOptions.scene = WinSceneMode::Cache;
+        } else if (base::StrEqI(value, "skip")) {
+            gWinPaintOptions.scene = WinSceneMode::Skip;
+        } else if (base::StrEqI(value, "damage")) {
+            gWinPaintOptions.scene = WinSceneMode::Damage;
+        }
+        return true;
     }
-    Str value(arg.s + scene.len, arg.len - scene.len);
-    if (base::StrEqI(value, "off")) {
-        gWinPaintOptions.scene = WinSceneMode::Off;
-    } else if (base::StrEqI(value, "replay")) {
-        gWinPaintOptions.scene = WinSceneMode::Replay;
-    } else if (base::StrEqI(value, "cache")) {
-        gWinPaintOptions.scene = WinSceneMode::Cache;
-    } else if (base::StrEqI(value, "skip")) {
-        gWinPaintOptions.scene = WinSceneMode::Skip;
-    } else if (base::StrEqI(value, "damage")) {
-        gWinPaintOptions.scene = WinSceneMode::Damage;
+
+    const Str reset = StrL("__gpu_reset_every=");
+    if (base::StrStartsWith(arg, reset)) {
+        Str value(arg.s + reset.len, arg.len - reset.len);
+        bool valid = value.len > 0;
+        for (int i = 0; i < value.len; i++) {
+            valid = valid && value.s[i] >= '0' && value.s[i] <= '9';
+        }
+        int n = valid ? StrToIntUnchecked(value) : -1;
+        if (n >= 0 && n <= 1000000) {
+            gWinPaintOptions.gpuResetEvery = n;
+        }
+        return true;
     }
-    return true;
+    return false;
 }
 
 static inline D2D1_COLOR_F ToD2D(Rgba c) {
@@ -152467,6 +155904,16 @@ void* PaintSharedDxgiFactory(PaintApp* pa) {
         return nullptr;
     }
     return pa->dxgiFactory;
+}
+
+void PaintSharedD3dDeviceReset(PaintApp* pa) {
+    if (!pa) {
+        return;
+    }
+    gpui_paint_win_Rel(&pa->d2dDevice);
+    gpui_paint_win_Rel(&pa->dxgiFactory);
+    gpui_paint_win_Rel(&pa->dxgi);
+    gpui_paint_win_Rel(&pa->d3d);
 }
 
 void* PaintSharedDwrite(PaintApp* pa) {
@@ -153156,10 +156603,35 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
         hr = conv->GetSize(&w, &h);
     }
     if (SUCCEEDED(hr) && w > 0 && h > 0) {
+        IWICBitmapSource* source = conv;
+        IWICBitmapScaler* scaler = nullptr;
+
+        const UINT kMaxDim = 1920;
+        if (w > kMaxDim || h > kMaxDim) {
+            UINT targetW = w;
+            UINT targetH = h;
+            if (w >= h) {
+                targetW = kMaxDim;
+                targetH = (UINT)((uint64_t)h * kMaxDim / w);
+                if (targetH == 0) targetH = 1;
+            } else {
+                targetH = kMaxDim;
+                targetW = (UINT)((uint64_t)w * kMaxDim / h);
+                if (targetW == 0) targetW = 1;
+            }
+            if (SUCCEEDED(wic->CreateBitmapScaler(&scaler))) {
+                if (SUCCEEDED(scaler->Initialize(conv, targetW, targetH,
+                                                 WICBitmapInterpolationModeFant))) {
+                    source = scaler;
+                    w = targetW;
+                    h = targetH;
+                }
+            }
+        }
         UINT stride = w * 4;
         UINT size = stride * h;
         auto* px = (uint8_t*)Alloc(nullptr, (int)size);
-        if (px && SUCCEEDED(conv->CopyPixels(nullptr, stride, size, px))) {
+        if (px && SUCCEEDED(source->CopyPixels(nullptr, stride, size, px))) {
             img = new Image();
             img->generation = PaintResourceGenerationNew();
             img->w = (int)w;
@@ -153168,6 +156640,7 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
         } else {
             Free(nullptr, px);
         }
+        gpui_paint_win_Rel(&scaler);
     }
     gpui_paint_win_Rel(&conv);
     gpui_paint_win_Rel(&frame);
@@ -153222,8 +156695,8 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
         gpuw::ImageDraw(ctx, img, b, radius);
         return;
     }
-    if (!ctx || !ctx->rt || !ctx->rt->rt || !img || !img->bgra || b.w <= 0 ||
-        b.h <= 0) {
+    if (!ctx || !ctx->rt || !ctx->rt->rt || !img || (!img->bmp && !img->bgra) ||
+        b.w <= 0 || b.h <= 0) {
         return;
     }
     ID2D1RenderTarget* rt = ctx->rt->rt;
@@ -153231,6 +156704,9 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
         gpui_paint_win_Rel(&img->bmp);
     }
     if (!img->bmp) {
+        if (!img->bgra) {
+            return;
+        }
         D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(
             DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
         D2D1_SIZE_U size = D2D1::SizeU((UINT32)img->w, (UINT32)img->h);
@@ -153240,6 +156716,8 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
             return;
         }
         img->bmpRt = rt;
+        Free(nullptr, img->bgra);
+        img->bgra = nullptr;
     }
     D2D1_RECT_F dst = D2D1::RectF(b.x, b.y, b.x + b.w, b.y + b.h);
     float op = ctx->opacity < 0 ? 0.f : ctx->opacity;
@@ -153547,107 +157025,132 @@ namespace gpui {
 namespace gpuw {
 
 extern const char kShaderVSQuad95[] = R"GPUI95(
-.Ea8f_/IxQo|.D79qZ{?;cKNw#   Cc( uU    )!  uU" +K !  &6  ]=0 +K"NkAt0! j*    M!  @   Kk!   f&2v:K&&``
-.C   ]+c9TH    #   `   M-  +K$   8       ``'   %   !!  b"    8       `   j*    f"
-.                        U5    $   Ee~lI3Z 0bh2}LuDDvoZO%  A!  +K7   @             ^   (   00%   8
-.       ""  +KA       b"  j*    ##      Ss5v5v!   uu5vT5    ]-  j*    "       U5"       4v5v@!  ``5v5
-.v/   XXo<>dfxOTJn@@C]$MK:<voZ 26v! " 0                             q%  GGiy5$wgoZa/        ,   $   (
-.(!     6v5v5v?   pp5v5v#   88,b2\HRhODvB^|O. KR<O. n[L/3GT SGU $$E%6v                            eE8
-.   LIli(m&fr\hOA@PD5LX5lo00h2u_C:<voZ:0  U5&       B2  U5&   $   Z2  U5&   (   n2  U5&   ,   #3  U5&
-.   0   /3  U5&   4   4   ` ``    # i)                    .n+ 6v]Wf9SE\Iq~x*xPM#<8 TH& <"z+ZRFH(WZrEJ
-.A^Sq59wJ9, |S+QkX  +K    @   eE        ,   @       6vA!  e%        !   "   @   E%( 6v'>ad,B)WS(g8d 0
-.d*@OFd)^aN22\ |;["h!:`c&}  uU    (   iI      6v    8       ``#   z*            &   @   00""  f"  0
-.       +K!   (   00, +KG!          ``    (   **  U5c   $       @@    &   %%  U50   "       ((    !
-.   \   b"! @@        !!  z:    /   kK  U5        P   00  6v10  kK  z:        P   00    *$  u5  00
-.        8   I)  +K'   *R5`RrT^Zfto2EuUo%a68I/}>vU4_nd;]=$'@79A@   H " m5  z:c VvL U5k+rK      !   ;;
-.  ( I)$     00    # A!^5`     00    P U5##n*E%    $   `(  EcD!!     $   $d  CKa5@ (   qQ! fv&6@ (
-.   qQ! fv26@ 0   qQ! fv26@ 8   qQ! fv26@ @   qQ! fv26@ H   qQ! fva5@ P   qQ! fv&6@ P   qQ! fv26@ X
-.   uU! KK!   T$  |xwv      $ "                 +Kuv  ww, 0     $$;K      $ " @   00            Kk! B
-.") @     #C  !     H b"      % d$b `     z:A!"     ( ( b"  U5  z:4$E%    +KA 0     A!`     jJ  Kk/
-.         h!@@(w%$r2|d, )%A!@   uUb"$ !   0 0     6v&u@     Cc  gwP 0     $$/K      znb"`   ``A!( "
-.   d$  z*# $ "   fFZ5      f C!        6v, 88Q!I%    +K" 0 (   ` `     +K" "     m.# f&Xv`     &f  -
-.Ka   @   b"b"      % $     vx# f&R ` @   00w 8v    0 (     =%  tt        U5& 00*"b"`   ``_#( "   ` @
-.     55  Kk'         C @ (       kKa5@ (   3SK !     z"b",L  U5    :"+Kzxwv+K!   _gF%    +K- M-@0r*E
-.%    H%@ 0   TT" G7%$& \@71j*T%$ "   a!n*E%  6v6v  A!  >~tx      Q#``c!+(eEcS9 2*I%$$  +Kl*@ (   A!A
-.!  *   xli"    Kk4 n.J@!!d$fS7v26@ @   M-` ,K    ( ( +K  6v&u@     TT" G7%$& \@71j*T%$ %   a!n*E%  6
-.v6v  $$  >~tx      Q#``c!+(eEcS9 2*E%A!  +Kl*@ (   A!A!  (   xli"        E%$"`     00@ -Ka   0   006
-.!8v    4$6vGcA!7v!   z"b"    ``_#(     W7+KU5    :"+KEcD!,K#   !Qm*E%    ? E%5} 6jV$   ,   8       6
-.v!   2   @   00    !                                   !!                b"
+.Ea8f{K?|Jb[:{q)0/^{X}I#t(   uUG +K"   D$  6v' 6vD!  ,<  3S2 +K"NkAEa! j*    M!  @   Kk!   f&2v:K&&``
+.U   ]+c9TH    #   `   M-  +K$   8       ``'   %   !!  b"    8       `   j*    f"
+.                        U5    $   Ee~lI3Z 0bh2}LuDDvoZO%  $$  +K7   !!            ^   (   &f)   8
+.       ""  +KU       b"  j*    d$      Ss5v5v!   uu5vT5    D4  j*    "       +K#       4v5v@!  ``5v5
+.v/   88/   (   A!      6v_       uu5vT5    2v5va"    I!  A!  b"        y%      Ss5v5v!   uu5vT5    9
+.9  PP    !       #C$       4v5v@!  ``5v5v/   U53   4   `         X       uu5vT5    2v5va"  +K8>?Z4HY
+.I\)= GAy>Fn%!'oG=# 8 @ b"                            =]! uU);l+X5uX7Me^oLOZm@00li\a 8.K7"00+K  (
+.                             \"  q)9d(8MVU^K:n@*W.K"ie'l)  ((j*6v                            +KL!  9
+.ELD~yxOrH^.~;holb1KU;OzZ3tL5$wgoZ.<        ,   $   r2#       5v5v_   Kk5v5v'   PP"N/B[.<)= OFd)= `.Y
+.~Dv7"00+K  (                             \"  !i$i+-2KmW2EBvl[I$2KCiA@QEUIgT, J?NY  +K5       |\  +K5
+.   (   M]  +K5   0   u]  +K5   8   >^  +K5   @   V^  +K5   H   H   A!+K!   & _?                    z
+.:J   &9NS'k9s71eK77w-u5)gGSp0a\!Qn9x*,I4)#g5=932bbbU088ageTi!  `   +K    X       00  6v        A!" 6
+.v(       b"  E%  6v    ]5  3Syg1Zv,e^}k3N>v'>k..E*W>S}b\RO+yY`r%<MF97  z:    $   t4      +K    8
+.       ``#   z*            &   @   00""  f"  0       +K!   (   00, +KG!          ``    (   **  U5c
+.   $       @@    &   %%  U50   "       ((    !   \   b"! @@        !!  z:    /   kK  U5        P   0
+.0  6v10  kK  z:        P   00    *$  u5  00        8   I)  +K'   *R5`RrT^Zfto2EuUo%a68I/}>vU4_nd;]=$
+.'@79A@   H " m5  z:c VvL U5k+rK      !   ;;  ( I)$     00    # A!^5`     00    P U5##n*E%    $   `(
+.  EcD!!     $   $d  CKa5@ (   qQ! fv&6@ (   qQ! fv26@ 0   qQ! fv26@ 8   qQ! fv26@ @   qQ! fv26@ H
+.   qQ! fva5@ P   qQ! fv&6@ P   qQ! fv26@ X   uU! KK!   T$  |xwv      $ "                 +Kuv  ww, 0
+.     $$;K      $ " @   00            Kk! B") @     #C  !     H b"      % d$b `     z:A!"     ( ( b"
+.  U5  z:4$E%    +KA 0     A!`     jJ  Kk/         h!@@(w%$r2|d, )%A!@   uUb"$ !   0 0     6v&u@
+.     Cc  gwP 0     $$/K      znb"`   ``A!( "   d$  z*# $ "   fFZ5      f C!        6v, 88Q!I%    +K"
+. 0 (   ` `     +K" "     m.# f&Xv`     &f  -Ka   @   b"b"      % $     vx# f&R ` @   00w 8v    0 (
+.     =%  tt        U5& 00*"b"`   ``_#( "   ` @     55  Kk'         C @ (       kKa5@ (   3SK !     z
+."b",L  U5    :"+Kzxwv+K!   _gF%    +K- M-@0r*E%    H%@ 0   TT" G7%$& \@71j*T%$ "   a!n*E%  6v6v  A!
+.  >~tx      Q#``c!+(eEcS9 2*I%$$  +Kl*@ (   A!A!  *   xli"    Kk4 n.J@!!d$fS7v26@ @   M-` ,K    ( (
+. +K  6v&u@     TT" G7%$& \@71j*T%$ %   a!n*E%  6v6v  $$  >~tx      Q#``c!+(eEcS9 2*E%A!  +Kl*@ (   A
+.!A!  (   xli"        E%$"`     00@ -Ka   0   006!8v    4$6vGcA!7v!   z"b"    ``_#(     W7+KU5    :"+
+.KEcD!,K#   !Qm*E%    ? E%5} 6jV$   ,   8       6v!   2   @   00    !
+.                                   !!                b"
 .                                                                                  )GPUI95";
-extern const int kShaderVSQuadSize = 2248;
-uint8_t kShaderVSQuadBytes[2248] = {};
+extern const int kShaderVSQuadSize = 2536;
+uint8_t kShaderVSQuadBytes[2536] = {};
 
 extern const char kShaderPSQuad95[] = R"GPUI95(
-.Ea8fuE4Z#>[9i+9Sx~W=\{()&   XX7 U5!   2"  M-"   f   t,  eE6 +K"NkAHD            8   pp    C#5v\5##+K
-.%   %|^|&%  @@    (   a!  88  6v!       TT  @@                      (   A!  +KH   (   C#  +K    4v5v
-.a"  U5    T   [;! +K    4   b"  Kk5v5v7   A!  U5#   `Dj@9Lc`%L+cQ[Y `RQ]%U9$(XcO9psF@1l)#;6RG%ESHbTP
-.?V4O.BIw:nqDI9a>&m<|0O,APP-Y63\+  M-    "   J*      U5    ,       Kk!   M%          6v!   (   $$& 6v
-.@   "       00    !   ""# #C(           $$  +K    (l! Q1$ +K        $$  ``    (l! E%" +K        ""
-.  +K    $F  b"! @@        !!  z:    WH  Ww  U5        P   00  6v%$  u5  M-        8   ((  6v%$  M%
-.  ""      6v!   X   44\ +K'>!$r]pW`/RE/!IYe=,IkQ"N00A-Z4L#wg!:`cw.  j*    0   j*            P
-.       +K'   *R5`/'=j=dJ"'oBXL<r.q+  M-  00C   `6U5\\  8 @@0     ;[P @ eE0 $   9Yk!  3(E%6vD!`   z:C
-..  <x``aAVvU5    ,$,KyxWvU5    ,$,KDcc 7v    ,$,KDcc ,K!   8(8vDca ! !   ,$,KDcc ,K"   8(8vDc` 7v!
-.   ,$,KyxWv+K!   ,$,KDcc ,K#   P(6vDcD!!     D$6vb"  j*& I)*"b"    ``%)0 8   /OVvU5!   &"+K{x7v
-.      znc"C#  ``>*0 8   HH  cK$ 0     <<6v      4 A!    ``# d$2 `     &f  "     p E%    6v' I)h b"
-.    U5' (     C#U5      - P@C#U5        Kk&&U5      UKA!A!  E%E%    ppW$  UP  "     p E%      $ I)I!
-.b"    U5! (     @ @ z:    ? P@h(U5      e @@Ra  eEd<5 2*E%A!  +K{*@ P   >~tx+K      h"    6v# d$T"`
-. 0   003!8v    Euq*j*    = KkK++K      " "     uU# $ !   2"b")f  "     T$6vEcD!!     [cF%A!  +K/ b"t
-. +K+K  ww8 0     $$+K      $ "         6v        pp  Gw( 0     <<6v      T A!    pp! #": `     3S! B
-."1 @     .n` ,K    S#G%A!  ``, r2r"E%    +K& 0     f&;K6v      U5NL7v      znc",L  U5    CKG%""! U5
-.      +K{x7v      h<b"    ``x$(     Q1  q5" ( "   S3+K      t A!    00# d$2 ` 0   z:  8v    ( (
-.     6v& M-0(b"    ``x$(     ` @                   ``# r2U%E%    +K@'0     ddKv      W!U5ML6v      t
-. A!        B"A @     XX  !     H b"`       E%B `     &f  -Ka       z:! "       $ |x6v      T A!&6
-.        ! !     _   Gw( 0     Q16v      jvA!A!    b"b"1 @     #C  a`@       A!A!    tt    x66v
-.      T A!&6        J `     }]! ##1 @ (   M-  !     )!b"    U5% (     22  i5< (     8xa5U5    -!U5-,
-.6vU5    J"c"A!  U5" A!` +KcA6v+K    8 b"    U5U5  (   ""            **  x*" $ "   D$j*j*    * ` @
-.   Ss6v!!- @ 0   &f  ww8 0 (   Y9mvU5    ( $     Kk_]sb[b$W2!    ' eEH(j*00    qKA!@   @@y $ "   R"
-.  L%" 7v    z"b"""  ``( ( &   99  i50 ( $   S3+K+K      +Ke"7v+K    J"b"A!  j*U5    ``de  Gw( 0 (
-.   <<6v+K    )!b"A!  U5p*z:U%E%b"  +K. 0 h"  A!  U5# ( $   @ @     55R j*L++K+K    J"b"A!  U5# ( $
-.   h(]5+K      ! L++K+K    )!b",L  +K    $ $     ^"  E%B ` @   &f  -Ka   @   z:! " !   \$6vqM  ,K
-.    p E%b"  +K* 0 (   Q16v+K    :"+KoM# !     #+H%b"  +K- M-Q!E%A!  +Kx*@ 0   88  0 ( r2Q!E%b"  +K"
-. 0     ` ` +K    ^ !af&+K+K    v"+K^y! KkIYJ r"E%A!  +K{*@ P   ]==%,K      Q%    +K- M-#3j*      dA`
-. @   ;[! a!) @ (   .n` 7v    h +K+K  Gw$ 0     f&+K      " " ""      b"9 @ 0   >~Vv@@0   <   ddkv``!
-.       NL7v+K    _gH%((  +KN-@ Q%  I)  +K' eE++U5U5    fZb"A!  ``( ( $   %%  x*! $ "   k+U5U5    M!A
-.!`   U5# d$2 ` @   z:  " !   ( ( 2r!c"2DvKk&&U5U5    t A!`   uU  $ "       XP' 8v!   !Qq*(("   !   !
-.Qq*00    R j*Rq+K+K    8 b"A!  ``l$( &   W7IK+K    >"+KGc# ,K    P E%    +K3&0 (   DDhv+K    :"+KoM#
-. !     <dF%A!  +K- M-r"E%A!  U5+K    +K8Y  Vv* E%i!6vKk  Gw$ 0     Q16vU5    H b"`   uU# I)h b"`   j
-.*U5      f&+K      : !af&+KU5    B"+KFcB!!     8 b"    ``T"(     22  i5z*0     f&+K      =!U5wW/'?}2
-.   g!  A!        %   K#  f&  U5!   4   b"                          (                     z:  6v!   (
+.Ea8fIYe2]Y}oL3GEk")"/,Z<$   &fA U5!   2"  ((# 6vb    ,  Y90 U5!7u0^\  b"    V   0   HH    ww5vm*Q!qQ
+.* 6v"N^|&%  @@    (   a!  88  6v!       ?_  @@                      (   A!  +KP   (   C#  +K    4v5v
+.a"  U5    T   1Q! +K    4   b"  Kk5v5v7   A!  U5#   h(                        +K    (   TT;.pD1!+//G
+.&zq$L\!]To.Br2ki=bdbI3U5# 6v!   **  ``            ``#       0       U5?       &v5vi*    4v5v@!    c
+.   0   b"        \"      tt5v5v    &v5vi*    E+  j*    "   $   00"       5v5v_   Kk5v5v'   z:)   (
+.   0   A!  6vF       &v5vi*    4v5v@!  6vq   h   A!  j*    N&      Ss5v5v!   uu5vT5    ,<  uU    "
+.       .n#       4v5v@!  ``5v5v/   XXo<>dfxOTJn@@C]$MK:<voZ 26v! " 0                             >*
+.  nn''K(GGB.-*-P*hS]P nbs]Vf3"wg  & ( A!                            NN  XX_<*qZ2f2]fX/rF5!GOREwV# 6v
+.! " (                             p,  nn(b2\sc?.tEFA]SAd:"q)9d(8_X!QvULCTQ%j'kc7L%AWr =|%<#weyF0DRm$
+.HV4]P/QDVQ;8L@X|a`G=+T-Y63\+  M-    "   J*      U5    ,       Kk!   M%          6v!   (   $$& 6v@
+.   "       00    !   ""# #C(           $$  +K    (l! Q1$ +K        $$  ``    (l! E%" +K        ""  +
+.K    $F  b"! @@        !!  z:    WH  Ww  U5        P   00  6v%$  u5  M-        8   ((  6v%$  M%  ""
+.      6v!   X   44\ +K'>!$r]pW`/RE/!IYe=,IkQ"N00A-Z4L#wg!:`c 7  U5    0   r2            P       +K'
+.   d$  A!        &   @   pp    /\8~j@&4i~DvoZgy_+"6O   4   o?  XXA ;KL U5k+rK      #   //  & (("
+.     G'# " XxU5    MY* @@"!` Kk@ 0   <<X#6v#+00H(n*E%    '6@@Aa;KU5    ,$,KDcc 7v    ,$,KDcc ,K!   8
+.(8vDca ! !   ,$,KDcc ,K"   8(8vDc` 7v!   ,$,KyxWv+K!   ,$,KDcc ,K#   P(6vDcD!!     8$+KDcD!,K    h(
+.  )(  U5, r24$E%    +K+2@ P   >~VvU5!   &"+K{x7v      znc"C#  ``>*0 8   HH  cK$ 0     <<6v      4 A!
+.    ``# d$2 `     &f  "     p E%    6v' I)h b"    U5' (     C#U5      - P@C#U5        Kk&&U5      UK
+.A!A!  E%E%    ppW$  UP  "     p E%      $ I)I!b"    U5! (     @ @ z:    ? P@h(U5      e @@Ra  eEd<5
+. 2*E%A!  +K{*@ P   >~tx+K      h"    6v# d$T"` 0   003!8v    Euq*j*    = KkK++K      " "     uU# $ !
+.   2"b")f  "     T$6vEcD!!     [cF%A!  +K- M-D4r*E%    P5` 0   pp! Vv* E%b"  rM! !     8 b"    U5U5
+.          j*        44  q5$ (     ..+K      T A!    pp! #": `     3S! B"1 @     .n` ,K    S#G%A!  ``
+., r2r"E%    +K& 0     f&;K6v      U5NL7v      znc",L  U5    CKG%""! U5      +K{x7v      h<b"    ``x$
+.(     Q1  q5" ( "   S3+K      t A!    00# d$2 ` 0   z:  8v    ( (     6v& M-0(b"    ``x$(     ` @
+.                   ``# r2U%E%    +K@'0     ddKv      W!U5ML6v      t A!        B"A @     XX  !     H
+. b"`       E%B `     &f  -Ka       z:! "       $ |x6v      T A!&6        ! !     _   Gw( 0     Q16v
+.      jvA!A!    b"b"1 @     #C  a`@       A!A!    tt    x66v      T A!&6        J `     }]! ##1 @
+.     M-  !     )!b"    U5% (     22  i5> ( "   W7IK+K    h +K+K  wwP 0     $$+K      $ "           !
+.   8   pp  Gw@ 0     'G6v      t A!    pp! #"Z `     uU! C#9 @ 0   3S,!,K    0 ( ~>N2-35^^1.
+.         . KkAa+K+K    CKG%A!  +Kc"0 (   **  cK@ 0     ddKv+K    7?F%b"  ``2 M-z*j*      = @
+.         cK@ 0     'G6v      " "     34# d$2 ` @   &f  " !   p E%b"  +Ka5uUe%j*j*    Z ` #+        %
+. @ 0   A!A!    tt*"+Kf"7v      5!A!    uU  $ "   D$n*U5    6v6vu5U5      Z ` #+      6v6v    6v?   k
+.K@ 0     'G6v@@0       Q16v+K    >"+KqM  !     i!b"    U5# ( $   S3+K      -!U5ml7vU5    [cH%b"  +K$
+. b"A!+K{x6v      4 A!    E%E%  "   Z"WwYX  !     v"+K^y! KkIYJ Y)j*j*    qKA!""  @@95( "     &6
+.      0 U576+K      4(A!`   j*j*    uU/   \"  JJ        z*' $ "   {;Z500(       W7-K+K    *"6vnl6v+K
+.    QYz*    6v    P8E%b"  +K0'0     j*  {K0 0     /OZv+K    ( $ Q1fSDkk-| ThoL#(    6vKk66+K      t
+. A!    E%E%    A!f$  f"7v      t A!    uUU50     `   j*# f&b `     z:j*(     @   z:! "     ( (     A
+.%' I)l$b"""  ``W#(     W7-K+K    *"  ol6v+K    P8E%b"  +Kg*@     b"A!    Uu  ``?   A%    < ``ml6v+K
+.    P8E%$$  +KR!0 (       "6. ( &   W7-K@@0   (   A!`     jJ  Kk/   `"    X KkFF+K``    P8E%b"  +KR!
+.0 ,   aA  $L< 0 0   $$Ww      !   k+^5U5    h<M%    j*    %!``nl6vU5!   T<{*    +K    !Qn*j*    !Kf"
+.    E%    9 PP33U5+K    8,b"b"  ``h ( $   W7-KU5!   *"+KGc! 7v    P8E%$$  +KR!0 0   /O:v+K    B"+KFc
+.! 7v    P8E%b"  +KR5@ 0   &f  Gw0 0     <<6v+K    )!b"A!  +K& I)j"b"    U5% (     C#U5U5    Z ``Xw+K
+.      " "     uU" $     2"b")f! "     d$6vFcB!!     P8E%b"  +K=,@ 0   hh  'wu5@     XX  !     :"+Kd"
+.wvU5    i!b"    ``& f&F"B!@   @@D $ "   J*  l*! ` @ Kk&&U5      * `     b"b"6v!       NL7v      a5c"
+.,L  ``!   _gH%I)      U54$E%b"  +K+2@ P   >~Vv@@0   <   **  cK$ 0 (   /O6v+K    7?F%    ``# r2U%E%
+.    +K@'0     ddKv      )!``ML6v      t A!    E%E%6v)kS[j$0 x*$ $     a!j*j*    J `         Ww\ 0 (
+.   /Orv@@0   (   /Orv``    *"+KGc# 7v    T<F%    +KZ)@ 0   >~rv+K    >"+KGc# ,K    P E%    +KZ)@ 0
+.   >~rv+K    t +Khh  'w( 0     ` `     jJJ U5..  ( ' I)2*E%    +KX#0     OoUvU5    5!+Ke"7vU5    $ $
+.     U5' (     D$E%{U# $ !   I)  x*L%$     Tt\5      ,&` 0   ;[! a!lK`     &f! "     T$6vEcD!,K    !
+.Qm*      ? E%5} 6jV$   U   P       ``"   Z"  C#  uU    ,   A!                          $
+.                     M-  +K!   (
 .                                                                         )GPUI95";
-extern const int kShaderPSQuadSize = 3028;
-uint8_t kShaderPSQuadBytes[3028] = {};
+extern const int kShaderPSQuadSize = 4328;
+uint8_t kShaderPSQuadBytes[4328] = {};
 
 extern const char kShaderVSTri95[] = R"GPUI95(
-.Ea8f#3Ewyz&{%~YK#JoAib]h!   n." z:    T   }]    /   9#  Pp  PP=;@ON&  @   U5&   !   **    SK5vF%D 9y
-.  j*[V:bR"  00    $   p   ,,  +K!       ~>                          $   `   KkLDk|4OsFKk"   !   J*
-.  +K            00#       @   A!    .       &v5vi*    4v5v@!  6v@   0   b"        1!      tt5v5v
-.    &v5vi*    lBq\\j1pSF5!GOREwV7$YYJ?- !!A!j*                            ;[& 6v064OBv]Wf9SE\Iq~x*xP
-.M#<8 TH& <"z+ZRFH(WZrEJA^Sq59wJ9, J?!D*XzlU1  00    (   M-            8       ``""  g#            #
-.   0   HH9!6vO           ``    (   **>   d:,9^<GU]!>fFSJ,% cN"2LX_8s"HXr)GN0   (   b"  +K&       0
-.   ((        \   .n            !!  E%  6v'   :*            ,   A!  Kk!   V"  @       6v!   8   $$8 `
-.`.Z6x$j#gzRh2W 8r{W_8,KA7!)AgJWI!'odPVL<W  6vW5  r   q1$ RP% b"LFf"    E%  6vO 00H(n*    6vO 00hH]5j
-.*     "``llWv+K    @$  mlwv      "   "B  a5)+0 $   $d  CK26@ 0   qQ! fva5@ 8   uU! KK    T$  |xwv
-.      $ "                 +KEF  b"9 @     >~Vv      M!f"          9 PP##r*      % @     A!A!    6v"
-. "     m.# f&Xv`     &f  -Ka       b"b"      % $     Ac& f&)%B!@   @@)%$ !   ))  t*T%$ "   k+d5U5
-.    -!U5bAvv``    z"c"    ``' A!=7 +E;"   "   $       Kk    &           6v
+.Ea8fCSyEPsc6SEvQy20tOd!64     6 +K"   D$  @@*   $"  VF  PP3 6v"NkAS/! E%    R   (   pp    C#4v\5##mM
+.1   %|^|&%  @@    (   a!  88  6v!       ~>                          $   `   KkLDk|4OsFKk"   #   J*
+.  +K!           ;[%       @   A!    8       &v5vi*    4v5v@!  6vT   0   b"        ""      tt5v5v
+.    &v5vi*    z(  j*    "       ?_!       5v5v_   Kk5v5v'   +K'   (   0       +K^       uu5vT5    2v
+.5va"    G!  Q!  b"        9%      Ss5v5v!   uu5vT5    77  uU    "       6v!       5v5v_   Kk5v5v'
+.   GgG./BCLOTJn@@C]$MK:<voZ 26v! " 0                             s'  GGiy5$c3<R1P&8%Di>8 GAy>Fn)!{C
+.  # $ `                             B2  GgJYTH=)NTInk'd)= GAy>Fn  ``  ! $
+.                             3%  n^\[$/RF8d"?LSLB(1V "8&1bf/.mA#CSi%mP2i2YfXwzX?K.N%<#weyF0DRm$HV4]P
+./QDVQ;8L@X|a`G=+T-Y63E$  ""  6v    p           +K!       $$& U56           @@    "   ;{' pp%
+.           ((  6v    (l! U5`Cb8-9kQ3 ,I)gJWU5`+fzPrq-B o1!,l%! 6v    0   #C        !   P       +K'
+.   i)            ,   `   Kk!   V"          6v!   0   44  6v>   $       @@    &   !!& 00^Y%6"EQCM9OT;
+. ,I)gJWU5`+fzPrq-B i3<Wb@n-  U5k*  I   x(" Dc" A!63C!    b"  +KO 00H(n*    6vO 00hH]5j*     "``llWv+
+.K    @$  mlwv      "   "B  a5)+0 $   $d  CK26@ 0   qQ! fva5@ 8   uU! KK    T$  |xwv      $ "
+.                 +KEF  b"9 @     >~Vv      M!f"          9 PP##r*      % @     A!A!    6v" "     m.#
+. f&Xv`     &f  -Ka       b"b"      % $     Ac& f&)%B!@   @@)%$ !   ))  t*T%$ "   k+d5U5    -!U5bAvv`
+.`    z"c"    ``' A!=7 +E;"   "   $       Kk    &           6v
 .                                                      A!
 .                                                                                 )GPUI95";
-extern const int kShaderVSTriSize = 1112;
-uint8_t kShaderVSTriBytes[1112] = {};
+extern const int kShaderVSTriSize = 1408;
+uint8_t kShaderVSTriBytes[1408] = {};
 
 extern const char kShaderPSTri95[] = R"GPUI95(
-.Ea8fhX~QqQR,hLB[q9>`7*C-9   uU8 6v"   D$  +K"   k   n.  Kk) 6v"NkAt0                pp    C#5v\5##Kk
+.Ea8fRB~7,bB9AFpm.7`Ou.Hm4   @@: 6v"   D$  +K"   k   o/  ``* 6v"NkAt0                pp    C#5v\5##Kk
 .!   %|^|&%  @@    (   a!  88  6v!       y92)=jhm`BY3&V6.o*)A7}s*I6I~.BIw:nqDI9a>&m<|0O,APP-Y63V%  b"
 .  6v    )!      b"  +K!       44    =           @@    "   ;{' uU'           ((  6v    (l! .n! +K
-.        $$  ``    L@  Y9(o&;CTs($gkm1KU4_nd;uUo%a68I/}>v*5{nB:L   0   U5    0           ``        **
-.  ``.ZU7E0.UDODvoZgy_+"6$   4   r"  Gg0 3K#+00hH]5j*    <x``llWv+K    ,$,KDc` ,K!   P(6vDcD!!     D$
-.6v`   j*& I)*"b"    ``M%( &   W7;K+K    &"+K{x7v      znc"A!  ``f&( &   44  q5" (     ..+K      4 A!
-.    ``# d$2 `     &f  "     p E%    6v' I)h b"    U5' (     C#U5      - P@C#U5      X KkFFKK      "v
-.c"`   ``.&( "   22  i5z*0     'GVvU5    Z"+KY9?.D<U!  Q!  b"        0   ""        #   0
-.                                                     j*
+.        $$  ``    L@  Y9(o&;CTs($gkm1KU4_nd;uUo%a68I/}>v*5{nB:d   @   U5    <           ``        **
+.    '   "       00    !   R"  3SygoXn,S\XfA@nYI6o%;0!   %   l   q1$ l*h"""_MA!@   j*h"""_MA!`   j*h"
+.""]KA!!!  z:& ""jx`     M-# !!EL` 0   U5# vv    ,$6vFc  !     z"c"""  ``M%( $   P0  q58 (     wWIK+K
+.    CKG%$$  6v' I)h b"    U5% (     C#U5      \ Kk&&U5      : `     z:  "     %%6v;8  !     J"b"
+.    U5! (     D$E%{U  $     I)  x*L%$     Ttd5j*    8,c"`   ``& f&f"B!    uUe"$ !   ))  t*T%$ !   Tt
+.d5j*    =!U5wW/'?}2   4   @       6v"   8       ``    $
+.                                                     E%
 .                                                                                  )GPUI95";
-extern const int kShaderPSTriSize = 788;
-uint8_t kShaderPSTriBytes[788] = {};
+extern const int kShaderPSTriSize = 844;
+uint8_t kShaderPSTriBytes[844] = {};
 
 }
 }
@@ -153810,6 +157313,8 @@ struct GlyphKey {
     uint32_t glyph = 0;
 
     uint32_t size4 = 0;
+
+    uint32_t phase3 = 0;
 };
 
 struct GlyphEntry {
@@ -153835,6 +157340,7 @@ static uint32_t GlyphHash(const GlyphKey& k) {
     uint64_t h = (uint64_t)(uintptr_t)k.face * 0x9e3779b97f4a7c15ull;
     h ^= (uint64_t)k.glyph * 0xc2b2ae3d27d4eb4full;
     h ^= (uint64_t)k.size4 * 0x165667b19e3779f9ull;
+    h ^= (uint64_t)k.phase3 * 0x85ebca77c2b2ae63ull;
     h ^= h >> 29;
     return (uint32_t)(h & (kGlyphSlots - 1));
 }
@@ -153866,6 +157372,7 @@ struct GpuTarget {
     int pxW = 0;
     int pxH = 0;
     int samples = 1;
+    uint64_t generation = 0;
 };
 
 struct Gpu {
@@ -153873,6 +157380,10 @@ struct Gpu {
     ID3D11DeviceContext* ctx = nullptr;
     IDXGIFactory2* factory = nullptr;
     IDWriteFactory* dwrite = nullptr;
+    float textGamma[4] = {};
+    float textContrast = 0.f;
+    float clearTypeLevel = 1.f;
+    bool textBgr = false;
 
     ID3D11VertexShader* vsQuad = nullptr;
     ID3D11PixelShader* psQuad = nullptr;
@@ -153905,6 +157416,41 @@ struct Gpu {
 };
 
 static Gpu gGpu;
+
+static void InitTextParams(Gpu* g) {
+    static const float ratios[13][4] = {
+        {0.0000f / 4.f, 0.0000f / 4.f, 0.0000f / 4.f, 0.0000f / 4.f},
+        {0.0166f / 4.f, -0.0807f / 4.f, 0.2227f / 4.f, -0.0751f / 4.f},
+        {0.0350f / 4.f, -0.1760f / 4.f, 0.4325f / 4.f, -0.1370f / 4.f},
+        {0.0543f / 4.f, -0.2821f / 4.f, 0.6302f / 4.f, -0.1876f / 4.f},
+        {0.0739f / 4.f, -0.3963f / 4.f, 0.8167f / 4.f, -0.2287f / 4.f},
+        {0.0933f / 4.f, -0.5161f / 4.f, 0.9926f / 4.f, -0.2616f / 4.f},
+        {0.1121f / 4.f, -0.6395f / 4.f, 1.1588f / 4.f, -0.2877f / 4.f},
+        {0.1300f / 4.f, -0.7649f / 4.f, 1.3159f / 4.f, -0.3080f / 4.f},
+        {0.1469f / 4.f, -0.8911f / 4.f, 1.4644f / 4.f, -0.3234f / 4.f},
+        {0.1627f / 4.f, -1.0170f / 4.f, 1.6051f / 4.f, -0.3347f / 4.f},
+        {0.1773f / 4.f, -1.1420f / 4.f, 1.7385f / 4.f, -0.3426f / 4.f},
+        {0.1908f / 4.f, -1.2652f / 4.f, 1.8650f / 4.f, -0.3476f / 4.f},
+        {0.2031f / 4.f, -1.3864f / 4.f, 1.9851f / 4.f, -0.3501f / 4.f},
+    };
+    IDWriteRenderingParams* p = nullptr;
+    float gamma = 1.f;
+    if (g->dwrite && SUCCEEDED(g->dwrite->CreateRenderingParams(&p)) && p) {
+        gamma = p->GetGamma();
+        g->textContrast = p->GetEnhancedContrast();
+        g->clearTypeLevel = p->GetClearTypeLevel();
+        g->textBgr = p->GetPixelGeometry() == DWRITE_PIXEL_GEOMETRY_BGR;
+        p->Release();
+    }
+    int ix = (int)floorf(gamma * 10.f + 0.5f) - 10;
+    ix = std::max(0, std::min(ix, 12));
+    const float norm13 = (65536.f / (255.f * 255.f)) * 4.f;
+    const float norm24 = (256.f / 255.f) * 4.f;
+    g->textGamma[0] = norm13 * ratios[ix][0];
+    g->textGamma[1] = norm24 * ratios[ix][1];
+    g->textGamma[2] = norm13 * ratios[ix][2];
+    g->textGamma[3] = norm24 * ratios[ix][3];
+}
 
 constexpr int kD12FrameCount = 3;
 constexpr int kD12ImageSlots = 128;
@@ -153974,9 +157520,12 @@ struct D12Target {
     int pxW = 0;
     int pxH = 0;
     int samples = 1;
+    uint64_t generation = 0;
 };
 
 static D12Gpu gD12;
+static uint64_t gDeviceGeneration = 1;
+static int gPresentedFrames = 0;
 
 struct Batch {
     Vec<Inst> insts;
@@ -153995,6 +157544,8 @@ struct Batch {
 
 static Batch gB;
 static FrameStats gLastStats;
+
+static void RecoverDevice(PaintCtx* ctx, bool removed);
 
 const FrameStats& LastFrameStats() {
     return gLastStats;
@@ -154077,10 +157628,10 @@ static D3D12_BLEND_DESC D12Blend() {
     memset(&b, 0, sizeof(b));
     b.RenderTarget[0].BlendEnable = TRUE;
     b.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
-    b.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    b.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC1_COLOR;
     b.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
     b.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-    b.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    b.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC1_ALPHA;
     b.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
     b.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     return b;
@@ -154174,6 +157725,7 @@ static bool D12MakePipelines(int samples) {
     }
 
     d.PS = {};
+    d.BlendState.RenderTarget[0].BlendEnable = FALSE;
     d.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
     D3D12_DEPTH_STENCIL_DESC stencil = D12DepthOff();
     stencil.StencilEnable = TRUE;
@@ -154288,7 +157840,7 @@ static bool D12EnsureGpu(PaintApp* pa) {
     D3D12_ROOT_PARAMETER rp[4] = {};
     rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rp[0].Constants.ShaderRegister = 0;
-    rp[0].Constants.Num32BitValues = 4;
+    rp[0].Constants.Num32BitValues = 12;
     rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     rp[1].Descriptor.ShaderRegister = 0;
@@ -154338,7 +157890,7 @@ static bool D12EnsureGpu(PaintApp* pa) {
     }
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC atlas =
-        D12Texture(kAtlasDim, kAtlasDim, DXGI_FORMAT_R8_UNORM, 1,
+        D12Texture(kAtlasDim, kAtlasDim, DXGI_FORMAT_R8G8B8A8_UNORM, 1,
                    D3D12_RESOURCE_FLAG_NONE);
     if (FAILED(g->dev->CreateCommittedResource(
             &heap, D3D12_HEAP_FLAG_NONE, &atlas, D3D12_RESOURCE_STATE_COPY_DEST,
@@ -154347,7 +157899,7 @@ static bool D12EnsureGpu(PaintApp* pa) {
     }
     D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
     sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sv.Format = DXGI_FORMAT_R8_UNORM;
+    sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sv.Texture2D.MipLevels = 1;
     g->dev->CreateShaderResourceView(g->atlas, &sv, D12SrvCpu(0));
@@ -154361,6 +157913,7 @@ static bool D12EnsureGpu(PaintApp* pa) {
     }
     g->dwrite = (IDWriteFactory*)PaintSharedDwrite(pa);
     gGpu.dwrite = g->dwrite;
+    InitTextParams(&gGpu);
     g->ready = true;
     return true;
 }
@@ -154376,7 +157929,7 @@ static bool MakeAtlas(Gpu* g) {
     td.Height = kAtlasDim;
     td.MipLevels = 1;
     td.ArraySize = 1;
-    td.Format = DXGI_FORMAT_R8_UNORM;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -154468,6 +158021,7 @@ static bool EnsureGpu(PaintApp* pa) {
     if (!g->dev || !g->factory || !g->dwrite) {
         return false;
     }
+    InitTextParams(g);
     g->dev->GetImmediateContext(&g->ctx);
     if (!g->ctx) {
         return false;
@@ -154502,7 +158056,7 @@ static bool EnsureGpu(PaintApp* pa) {
     }
 
     D3D11_BUFFER_DESC cbd = {};
-    cbd.ByteWidth = 16;
+    cbd.ByteWidth = 48;
     cbd.Usage = D3D11_USAGE_DYNAMIC;
     cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -154514,10 +158068,10 @@ static bool EnsureGpu(PaintApp* pa) {
     memset(&bd, 0, sizeof(bd));
     bd.RenderTarget[0].BlendEnable = TRUE;
     bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC1_COLOR;
     bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
     bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-    bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC1_ALPHA;
     bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     if (FAILED(g->dev->CreateBlendState(&bd, &g->blend))) {
@@ -154610,7 +158164,8 @@ static bool EnsureTriBuf(Gpu* g, int n) {
 }
 
 static void D12Wait(UINT64 value) {
-    if (!value || gD12.fence->GetCompletedValue() >= value) {
+    if (!value || !gD12.fence || !gD12.fenceEvent ||
+        gD12.fence->GetCompletedValue() >= value) {
         return;
     }
     if (SUCCEEDED(gD12.fence->SetEventOnCompletion(value, gD12.fenceEvent))) {
@@ -154647,11 +158202,13 @@ static bool D12MakeFrames(D12Target* t) {
     return true;
 }
 
-static void D12FreeSurfaces(D12Target* t) {
+static void D12FreeSurfaces(D12Target* t, bool wait = true) {
     if (!t) {
         return;
     }
-    D12WaitTarget(t);
+    if (wait) {
+        D12WaitTarget(t);
+    }
     for (int i = 0; i < kD12FrameCount; i++) {
         gpui_paintgpu_win_Rel(&t->back[i]);
     }
@@ -154663,11 +158220,11 @@ static void D12FreeSurfaces(D12Target* t) {
     gpui_paintgpu_win_Rel(&t->dsvHeap);
 }
 
-static void D12FreeTarget(D12Target* t) {
+static void D12FreeTarget(D12Target* t, bool wait = true) {
     if (!t) {
         return;
     }
-    D12FreeSurfaces(t);
+    D12FreeSurfaces(t, wait);
     for (int i = 0; i < kD12FrameCount; i++) {
         if (t->frames[i].upload && t->frames[i].mapped) {
             t->frames[i].upload->Unmap(0, nullptr);
@@ -154842,8 +158399,21 @@ static bool D12BeginCommands(D12Target* t) {
     ID3D12DescriptorHeap* heaps[] = {gD12.srvHeap};
     gD12.list->SetDescriptorHeaps(1, heaps);
     gD12.list->SetGraphicsRootSignature(gD12.root);
-    float viewport[4] = {(float)t->pxW, (float)t->pxH, 0, 0};
-    gD12.list->SetGraphicsRoot32BitConstants(0, 4, viewport, 0);
+    float constants[12] = {
+        (float)t->pxW,
+        (float)t->pxH,
+        0,
+        0,
+        gGpu.textGamma[0],
+        gGpu.textGamma[1],
+        gGpu.textGamma[2],
+        gGpu.textGamma[3],
+        gGpu.textContrast,
+        gGpu.clearTypeLevel,
+        0,
+        0,
+    };
+    gD12.list->SetGraphicsRoot32BitConstants(0, 12, constants, 0);
     gD12.list->SetGraphicsRootDescriptorTable(2, D12SrvGpu(0));
     gD12.list->SetGraphicsRootDescriptorTable(3, D12SrvGpu(0));
     D3D12_VIEWPORT vp = {};
@@ -155063,7 +158633,20 @@ static GpuTarget* T11(PaintCtx* ctx) {
 static void SetViewportCb(Gpu* g, float w, float h) {
     D3D11_MAPPED_SUBRESOURCE m = {};
     if (SUCCEEDED(g->ctx->Map(g->cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
-        float v[4] = {w, h, 0, 0};
+        float v[12] = {
+            w,
+            h,
+            0,
+            0,
+            g->textGamma[0],
+            g->textGamma[1],
+            g->textGamma[2],
+            g->textGamma[3],
+            g->textContrast,
+            g->clearTypeLevel,
+            0,
+            0,
+        };
         memcpy(m.pData, v, sizeof(v));
         g->ctx->Unmap(g->cb, 0);
     }
@@ -155219,7 +158802,7 @@ static void FreeSurfaces(GpuTarget* t) {
 void PaintTargetFree(PaintCtx* ctx) {
     if (PaintD3d12On()) {
         D12Target* t = ctx ? (D12Target*)ctx->rt : nullptr;
-        D12FreeTarget(t);
+        D12FreeTarget(t, !t || t->generation == gDeviceGeneration);
         if (ctx) {
             ctx->rt = nullptr;
         }
@@ -155353,6 +158936,12 @@ static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
         return false;
     }
     D12Target* t = (D12Target*)ctx->rt;
+    if (t && t->generation != gDeviceGeneration) {
+        scene::Reset(ctx);
+        D12FreeTarget(t, false);
+        ctx->rt = nullptr;
+        t = nullptr;
+    }
     if (t && (t->hwnd != hwnd || t->offscreen)) {
         D12FreeTarget(t);
         ctx->rt = nullptr;
@@ -155364,6 +158953,7 @@ static bool D12PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
         t->pxW = pxW;
         t->pxH = pxH;
         t->samples = PaintGpuSamples();
+        t->generation = gDeviceGeneration;
         DXGI_SWAP_CHAIN_DESC1 desc = {};
         desc.Width = (UINT)pxW;
         desc.Height = (UINT)pxH;
@@ -155440,9 +159030,14 @@ static bool D12PaintTargetEnd(PaintCtx* ctx) {
     }
     HRESULT hr = t->swap->Present(0, 0);
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
-        D12FreeTarget(t);
-        ctx->rt = nullptr;
+        RecoverDevice(ctx, true);
         return false;
+    }
+    if (SUCCEEDED(hr)) {
+        int every = WinPaintOptionsGet().gpuResetEvery;
+        if (every > 0 && ++gPresentedFrames >= every) {
+            RecoverDevice(ctx, false);
+        }
     }
     return SUCCEEDED(hr);
 }
@@ -155459,6 +159054,7 @@ static bool D12PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
     t->offscreen = true;
     t->pxW = pxW;
     t->pxH = pxH;
+    t->generation = gDeviceGeneration;
     if (!D12MakeFrames(t) || !D12MakeOffscreenSurfaces(t)) {
         D12FreeTarget(t);
         return false;
@@ -155527,6 +159123,11 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
     }
     Gpu* g = &gGpu;
     GpuTarget* t = T11(ctx);
+    if (t && t->generation != gDeviceGeneration) {
+        scene::Reset(ctx);
+        gpuw::PaintTargetFree(ctx);
+        t = nullptr;
+    }
     if (t && (t->hwnd != hwnd || t->offscreen)) {
         gpuw::PaintTargetFree(ctx);
         t = nullptr;
@@ -155537,6 +159138,7 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
         t->pxW = pxW;
         t->pxH = pxH;
         t->samples = PaintGpuSamples();
+        t->generation = gDeviceGeneration;
 
         DXGI_SWAP_CHAIN_DESC1 desc = {};
         desc.Width = (UINT)pxW;
@@ -155601,10 +159203,14 @@ bool PaintTargetEnd(PaintCtx* ctx) {
 
     HRESULT hr = t->swap->Present(0, 0);
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
-        gpuw::PaintTargetFree(ctx);
+        RecoverDevice(ctx, true);
         return false;
     }
-    return true;
+    int every = WinPaintOptionsGet().gpuResetEvery;
+    if (every > 0 && ++gPresentedFrames >= every) {
+        RecoverDevice(ctx, false);
+    }
+    return SUCCEEDED(hr);
 }
 
 bool PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
@@ -155622,6 +159228,7 @@ bool PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
     t->pxH = pxH;
 
     t->samples = 1;
+    t->generation = gDeviceGeneration;
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = (UINT)pxW;
     td.Height = (UINT)pxH;
@@ -156124,6 +159731,114 @@ struct ImageSlot {
 static ImageSlot gImages[kImageSlots];
 static int gImageNext = 0;
 
+static void FreeD3d11Gpu(bool removed) {
+    Gpu* g = &gGpu;
+    if (g->ctx && !removed) {
+        g->ctx->ClearState();
+        g->ctx->Flush();
+    }
+    for (int i = 0; i < kImageSlots; i++) {
+        gpui_paintgpu_win_Rel(&gImages[i].srv);
+        gImages[i].img = nullptr;
+    }
+    gImageNext = 0;
+    gpui_paintgpu_win_Rel(&g->white);
+    gpui_paintgpu_win_Rel(&g->atlas.srv);
+    gpui_paintgpu_win_Rel(&g->atlas.tex);
+    gpui_paintgpu_win_Rel(&g->dsCover);
+    gpui_paintgpu_win_Rel(&g->dsNonZero);
+    gpui_paintgpu_win_Rel(&g->dsEvenOdd);
+    gpui_paintgpu_win_Rel(&g->dsOff);
+    gpui_paintgpu_win_Rel(&g->samp);
+    gpui_paintgpu_win_Rel(&g->rasterMsaa);
+    gpui_paintgpu_win_Rel(&g->raster);
+    gpui_paintgpu_win_Rel(&g->blend);
+    gpui_paintgpu_win_Rel(&g->triBuf);
+    gpui_paintgpu_win_Rel(&g->instSrv);
+    gpui_paintgpu_win_Rel(&g->instBuf);
+    gpui_paintgpu_win_Rel(&g->cb);
+    gpui_paintgpu_win_Rel(&g->triLayout);
+    gpui_paintgpu_win_Rel(&g->psTri);
+    gpui_paintgpu_win_Rel(&g->vsTri);
+    gpui_paintgpu_win_Rel(&g->psQuad);
+    gpui_paintgpu_win_Rel(&g->vsQuad);
+    gpui_paintgpu_win_Rel(&g->ctx);
+    memset(g, 0, sizeof(*g));
+    g->clearTypeLevel = 1.f;
+}
+
+static void FreeD3d12Gpu(bool removed) {
+    D12Gpu* g = &gD12;
+    if (!removed && g->queue && g->fence) {
+        UINT64 value = g->nextFence++;
+        if (SUCCEEDED(g->queue->Signal(g->fence, value))) {
+            D12Wait(value);
+        }
+    }
+    for (int i = 0; i < g->imageCount; i++) {
+        gpui_paintgpu_win_Rel(&g->images[i].tex);
+    }
+    for (int i = 0; i < 4; i++) {
+        gpui_paintgpu_win_Rel(&g->pipes[i].nonZero);
+        gpui_paintgpu_win_Rel(&g->pipes[i].evenOdd);
+        gpui_paintgpu_win_Rel(&g->pipes[i].tri);
+        gpui_paintgpu_win_Rel(&g->pipes[i].cover);
+        gpui_paintgpu_win_Rel(&g->pipes[i].quad);
+    }
+    gpui_paintgpu_win_Rel(&g->atlas);
+    gpui_paintgpu_win_Rel(&g->fence);
+    if (g->fenceEvent) {
+        CloseHandle(g->fenceEvent);
+    }
+    gpui_paintgpu_win_Rel(&g->srvHeap);
+    gpui_paintgpu_win_Rel(&g->root);
+    gpui_paintgpu_win_Rel(&g->list);
+    gpui_paintgpu_win_Rel(&g->queue);
+    gpui_paintgpu_win_Rel(&g->factory);
+    gpui_paintgpu_win_Rel(&g->dev);
+    memset(g, 0, sizeof(*g));
+    g->nextFence = 1;
+
+    memset(&gGpu, 0, sizeof(gGpu));
+    gGpu.clearTypeLevel = 1.f;
+}
+
+static void RecoverDevice(PaintCtx* ctx, bool removed) {
+    if (ctx) {
+        scene::Reset(ctx);
+    }
+    if (PaintD3d12On()) {
+        D12Target* t = ctx ? (D12Target*)ctx->rt : nullptr;
+        D12FreeTarget(t, !removed);
+        if (ctx) {
+            ctx->rt = nullptr;
+        }
+        FreeD3d12Gpu(removed);
+    } else {
+        if (ctx) {
+            gpuw::PaintTargetFree(ctx);
+        }
+        FreeD3d11Gpu(removed);
+        PaintSharedD3dDeviceReset(ctx ? ctx->pa : nullptr);
+    }
+    gB.target = nullptr;
+    gB.image = nullptr;
+    gB.image12 = -1;
+    gB.insts.len = 0;
+    gB.tris.len = 0;
+    gPresentedFrames = 0;
+    gDeviceGeneration++;
+    if (gDeviceGeneration == 0) {
+        gDeviceGeneration++;
+    }
+    Str backend = PaintD3d12On() ? StrL("d3d12") : StrL("d3d11");
+    Str reason = removed ? StrL("DXGI") : StrL("injected");
+    logf("paint/%s: %s device recovery", backend, reason);
+    if (ctx && ctx->window) {
+        AppInvalidate(ctx->window);
+    }
+}
+
 static int D12ImageDescriptor(const Image* img) {
     for (int i = 0; i < gD12.imageCount; i++) {
         if (gD12.images[i].img == img) {
@@ -156260,7 +159975,7 @@ static GlyphEntry* AtlasFind(const GlyphKey& k) {
             return e;
         }
         if (e->key.face == k.face && e->key.glyph == k.glyph &&
-            e->key.size4 == k.size4) {
+            e->key.size4 == k.size4 && e->key.phase3 == k.phase3) {
             return e;
         }
     }
@@ -156268,7 +159983,7 @@ static GlyphEntry* AtlasFind(const GlyphKey& k) {
 }
 
 static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
-                           GlyphEntry* e) {
+                           const GlyphKey& key, GlyphEntry* e) {
     Gpu* g = &gGpu;
     float advance = 0;
     DWRITE_GLYPH_OFFSET offset = {};
@@ -156283,7 +159998,7 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
     IDWriteGlyphRunAnalysis* an = nullptr;
     HRESULT hr = g->dwrite->CreateGlyphRunAnalysis(
         &run, 1.f, nullptr, DWRITE_RENDERING_MODE_NATURAL,
-        DWRITE_MEASURING_MODE_NATURAL, 0.f, 0.f, &an);
+        DWRITE_MEASURING_MODE_NATURAL, (float)key.phase3 / 3.f, 0.f, &an);
     if (FAILED(hr) || !an) {
         return false;
     }
@@ -156295,13 +160010,14 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
         an->Release();
 
         e->used = true;
+        e->key = key;
         e->w = 0;
         e->h = 0;
         return SUCCEEDED(hr);
     }
 
     static Vec<uint8_t> rgb;
-    static Vec<uint8_t> gray;
+    static Vec<uint8_t> rgba;
     rgb.len = 0;
     if (!VecAppendBlanks(rgb, w * h * 3)) {
         an->Release();
@@ -156313,13 +160029,21 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
     if (FAILED(hr)) {
         return false;
     }
-    gray.len = 0;
-    if (!VecAppendBlanks(gray, w * h)) {
+    rgba.len = 0;
+    if (!VecAppendBlanks(rgba, w * h * 4)) {
         return false;
     }
     for (int i = 0; i < w * h; i++) {
-        int s = (int)rgb[i * 3] + rgb[i * 3 + 1] + rgb[i * 3 + 2];
-        gray[i] = (uint8_t)((s + 1) / 3);
+        uint8_t r8 = rgb[i * 3];
+        uint8_t g8 = rgb[i * 3 + 1];
+        uint8_t b8 = rgb[i * 3 + 2];
+        if (g->textBgr) {
+            std::swap(r8, b8);
+        }
+        rgba[i * 4] = r8;
+        rgba[i * 4 + 1] = g8;
+        rgba[i * 4 + 2] = b8;
+        rgba[i * 4 + 3] = std::max(r8, std::max(g8, b8));
     }
 
     Atlas* a = &g->atlas;
@@ -156334,15 +160058,15 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
         a->penX = 0;
         a->penY = 0;
         a->rowH = 0;
-        e = AtlasFind({face, glyph, (uint32_t)lroundf(em * 4.f)});
+        e = AtlasFind(key);
         if (!e) {
             return false;
         }
     }
     if (PaintD3d12On()) {
         if (!D12UploadTexture(gD12.atlas, &gD12.atlasState,
-                              DXGI_FORMAT_R8_UNORM, a->penX, a->penY, w, h, 1,
-                              gray.els, w)) {
+                              DXGI_FORMAT_R8G8B8A8_UNORM, a->penX, a->penY, w,
+                              h, 4, rgba.els, w * 4)) {
             return false;
         }
     } else {
@@ -156352,13 +160076,11 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
         box.right = (UINT)(a->penX + w);
         box.bottom = (UINT)(a->penY + h);
         box.back = 1;
-        g->ctx->UpdateSubresource(a->tex, 0, &box, gray.els, (UINT)w, 0);
+        g->ctx->UpdateSubresource(a->tex, 0, &box, rgba.els, (UINT)(w * 4), 0);
     }
 
     e->used = true;
-    e->key.face = face;
-    e->key.glyph = glyph;
-    e->key.size4 = (uint32_t)lroundf(em * 4.f);
+    e->key = key;
     e->x = a->penX;
     e->y = a->penY;
     e->w = w;
@@ -156375,19 +160097,26 @@ static bool AtlasRasterize(IDWriteFontFace* face, float em, uint16_t glyph,
 
 static void DrawGlyph(IDWriteFontFace* face, float em, uint16_t glyph, float x,
                       float y, Rgba c) {
-    GlyphKey k = {face, glyph, (uint32_t)lroundf(em * 4.f)};
+    float x3 = floorf(x * 3.f + 0.5f) / 3.f;
+    float pixelX = floorf(x3);
+    uint32_t phase3 = (uint32_t)lroundf((x3 - pixelX) * 3.f);
+    if (phase3 == 3) {
+        phase3 = 0;
+        pixelX += 1.f;
+    }
+    GlyphKey k = {face, glyph, (uint32_t)lroundf(em * 4.f), phase3};
     GlyphEntry* e = AtlasFind(k);
     if (!e) {
         return;
     }
-    if (!e->used && !AtlasRasterize(face, em, glyph, e)) {
+    if (!e->used && !AtlasRasterize(face, em, glyph, k, e)) {
         return;
     }
     if (e->w <= 0 || e->h <= 0) {
         return;
     }
 
-    float gx = floorf(x + 0.5f) + (float)e->bearingX;
+    float gx = pixelX + (float)e->bearingX;
     float gy = floorf(y + 0.5f) + (float)e->bearingY;
 
     Inst i = {};
@@ -156822,35 +160551,146 @@ static int KeyFor(KeySym ks) {
             return KeyControl;
         case XK_Alt_L:
         case XK_Alt_R:
-            return KeyMenu;
+            return KeyAlt;
         case XK_Escape:
             return KeyEscape;
         case XK_space:
             return KeySpace;
         case XK_Prior:
+        case XK_KP_Prior:
             return KeyPageUp;
         case XK_Next:
+        case XK_KP_Next:
             return KeyPageDown;
         case XK_End:
+        case XK_KP_End:
             return KeyEnd;
         case XK_Home:
+        case XK_KP_Home:
             return KeyHome;
         case XK_Left:
+        case XK_KP_Left:
             return KeyLeft;
         case XK_Up:
+        case XK_KP_Up:
             return KeyUp;
         case XK_Right:
+        case XK_KP_Right:
             return KeyRight;
         case XK_Down:
+        case XK_KP_Down:
             return KeyDown;
+        case XK_Insert:
+        case XK_KP_Insert:
+            return KeyInsert;
         case XK_Delete:
+        case XK_KP_Delete:
             return KeyDelete;
+        case XK_Menu:
+            return KeyApps;
+        case XF86XK_Back:
+            return KeyBrowserBack;
+        case XF86XK_Forward:
+            return KeyBrowserForward;
+        case XF86XK_Cut:
+            return KeyCut;
+        case XF86XK_Copy:
+            return KeyCopy;
+        case XF86XK_Paste:
+            return KeyPaste;
+        case XF86XK_New:
+            return KeyNew;
+        case XF86XK_Open:
+            return KeyOpen;
+        case XF86XK_Save:
+            return KeySave;
+        case XK_minus:
+        case XK_underscore:
+            return KeyMinus;
+        case XK_equal:
+        case XK_plus:
+            return KeyEqual;
         case XK_bracketleft:
+        case XK_braceleft:
             return KeyLeftBracket;
         case XK_bracketright:
+        case XK_braceright:
             return KeyRightBracket;
+        case XK_backslash:
+        case XK_bar:
+            return KeyBackslash;
+        case XK_semicolon:
+        case XK_colon:
+            return KeySemicolon;
+        case XK_apostrophe:
+        case XK_quotedbl:
+            return KeyQuote;
+        case XK_comma:
+        case XK_less:
+            return KeyComma;
+        case XK_period:
+        case XK_greater:
+            return KeyPeriod;
+        case XK_slash:
+        case XK_question:
+            return KeySlash;
+        case XK_grave:
+        case XK_asciitilde:
+            return KeyBacktick;
+        case XK_exclam:
+            return '1';
+        case XK_at:
+            return '2';
+        case XK_numbersign:
+            return '3';
+        case XK_dollar:
+            return '4';
+        case XK_percent:
+            return '5';
+        case XK_asciicircum:
+            return '6';
+        case XK_ampersand:
+            return '7';
+        case XK_asterisk:
+            return '8';
+        case XK_parenleft:
+            return '9';
+        case XK_parenright:
+            return '0';
+        case XK_KP_Add:
+            return KeyKpAdd;
+        case XK_KP_Subtract:
+            return KeyKpSubtract;
+        case XK_KP_Multiply:
+            return KeyKpMultiply;
+        case XK_KP_Divide:
+            return KeyKpDivide;
+        case XK_KP_Decimal:
+            return KeyKpDecimal;
+        case XK_KP_Separator:
+            return KeyKpSeparator;
+        case XK_KP_Equal:
+            return KeyKpEqual;
+        case XK_KP_Begin:
+            return KeyKpBegin;
+        case XK_KP_Space:
+            return KeySpace;
+        case XK_KP_Tab:
+            return KeyTab;
         default:
             break;
+    }
+    if (ks >= XK_F1 && ks <= XK_F24) {
+        return KeyF1 + (int)(ks - XK_F1);
+    }
+    if (ks >= XK_F25 && ks <= XK_F35) {
+        return KeyF25 + (int)(ks - XK_F25);
+    }
+    if (ks >= XK_KP_F1 && ks <= XK_KP_F4) {
+        return KeyF1 + (int)(ks - XK_KP_F1);
+    }
+    if (ks >= XK_KP_0 && ks <= XK_KP_9) {
+        return '0' + (int)(ks - XK_KP_0);
     }
 
     if (ks >= XK_a && ks <= XK_z) {
@@ -157262,12 +161102,27 @@ void PlatInstallAccessibilityHitTest(Window* win) {
 }
 
 void PlatAccessibilityTreeChanged(Window* win) {
-    (void)win;
+    AccessibilityLinuxTreeChanged(win);
 }
 
 void PlatAccessibilityFocusChanged(Window* win, int focusId) {
-    (void)win;
-    (void)focusId;
+    AccessibilityLinuxFocusChanged(win, focusId);
+}
+
+Point AccessibilityLinuxWindowOrigin(Window* win) {
+    Point result = {};
+    if (!gDpy || !win || !win->plat) {
+        return result;
+    }
+    XWindow child = 0;
+    int x = 0;
+    int y = 0;
+    if (XTranslateCoordinates(gDpy, win->plat->xwin, gRoot, 0, 0, &x, &y,
+                              &child)) {
+        result.x = (float)x;
+        result.y = (float)y;
+    }
+    return result;
 }
 
 bool PlatHasMenu() {
@@ -157875,7 +161730,6 @@ void PlatWake(App* app) {
 }
 
 bool PlatInit(App* app) {
-    (void)app;
     WakeInit();
     if (gDpy) {
         return true;
@@ -157908,11 +161762,32 @@ bool PlatInit(App* app) {
     aClipboard = XInternAtom(gDpy, "CLIPBOARD", False);
     aTargets = XInternAtom(gDpy, "TARGETS", False);
     aClipTarget = XInternAtom(gDpy, "GPUI_CLIPBOARD", False);
+    const char* accessibilityBus = getenv("AT_SPI_BUS_ADDRESS");
+    if (accessibilityBus && *accessibilityBus) {
+        AccessibilityLinuxInit(app, Str(accessibilityBus));
+    } else {
+
+        Atom property = XInternAtom(gDpy, "AT_SPI_BUS", True);
+        Atom type = None;
+        int format = 0;
+        unsigned long count = 0;
+        unsigned long after = 0;
+        unsigned char* value = nullptr;
+        if (property != None &&
+            XGetWindowProperty(gDpy, gRoot, property, 0, 4096, False,
+                               AnyPropertyType, &type, &format, &count, &after,
+                               &value) == Success &&
+            format == 8 && value && count) {
+            AccessibilityLinuxInit(app, Str((char*)value, (int)count));
+        }
+        if (value) XFree(value);
+    }
     return true;
 }
 
 void PlatShutdown(App* app) {
     (void)app;
+    AccessibilityLinuxShutdown();
     WakeShutdown();
     if (gClipboard.s) {
         StrFree(gClipboard);
@@ -158043,11 +161918,16 @@ int AppRun(App* app) {
         }
         if (!anyDirty && XPending(gDpy) == 0 && ExecQueued() == 0) {
             int timeoutMs = waitS <= 0 ? 0 : (int)(waitS * 1000.0);
-            struct pollfd pfd[2] = {{fd, POLLIN, 0}, {gWakeFd[0], POLLIN, 0}};
-            poll(pfd, gWakeFd[0] >= 0 ? 2 : 1, timeoutMs);
+            int accessibilityFd = AccessibilityLinuxFd();
+            struct pollfd pfd[3] = {{fd, POLLIN, 0},
+                                    {gWakeFd[0], POLLIN, 0},
+                                    {accessibilityFd, POLLIN, 0}};
+            int nfd = accessibilityFd >= 0 ? 3 : (gWakeFd[0] >= 0 ? 2 : 1);
+            poll(pfd, nfd, timeoutMs);
         }
 
         WakeConsume();
+        AccessibilityLinuxPump();
         ExecDrain();
 
         now = TimeNow();
@@ -158080,6 +161960,7 @@ int main(int argc, char** argv) {
 
 @class GpuiView;
 @class GpuiWindowDelegate;
+@class GpuiAccessibilityElement;
 
 namespace gpui {
 
@@ -158088,6 +161969,9 @@ struct PlatWindow {
     GpuiView* view = nil;
 
     GpuiWindowDelegate* delegate = nil;
+
+    NSMutableDictionary<NSNumber*, GpuiAccessibilityElement*>*
+        accessibilityElements = nil;
     bool dirty = true;
 
     double nextTick = 0;
@@ -158112,6 +161996,405 @@ bool WindowMacKeyDown(Window* win, NSEvent* event);
 void WindowMacKeyUp(Window* win, NSEvent* event);
 
 }
+
+@interface GpuiAccessibilityElement : NSAccessibilityElement {
+  @public
+    gpui::Window* gpuiWindow;
+    uint32_t gpuiNodeId;
+}
+@end
+
+static const gpui::AccessibilityNode* GpuiAccessibilityNode(
+    GpuiAccessibilityElement* element) {
+    return element && element->gpuiWindow
+               ? gpui::WindowAccessibilityNode(element->gpuiWindow,
+                                               element->gpuiNodeId)
+               : nullptr;
+}
+
+static NSString* GpuiAccessibilityString(gpui::Str value) {
+    if (!value.s || value.len <= 0) {
+        return @"";
+    }
+    return [[NSString alloc] initWithBytes:value.s
+                                    length:(NSUInteger)value.len
+                                  encoding:NSUTF8StringEncoding];
+}
+
+static NSString* GpuiAccessibilityRole(gpui::AccessibilityRole role) {
+    using gpui::AccessibilityRole;
+    switch (role) {
+        case AccessibilityRole::Alert:
+        case AccessibilityRole::Heading:
+        case AccessibilityRole::Label:
+        case AccessibilityRole::Paragraph:
+        case AccessibilityRole::TextRun:
+            return NSAccessibilityStaticTextRole;
+        case AccessibilityRole::Button:
+        case AccessibilityRole::DefaultButton:
+        case AccessibilityRole::DisclosureTriangle:
+            return NSAccessibilityButtonRole;
+        case AccessibilityRole::CheckBox:
+        case AccessibilityRole::Switch:
+            return NSAccessibilityCheckBoxRole;
+        case AccessibilityRole::RadioButton:
+            return NSAccessibilityRadioButtonRole;
+        case AccessibilityRole::TextInput:
+        case AccessibilityRole::SearchInput:
+        case AccessibilityRole::DateInput:
+        case AccessibilityRole::DateTimeInput:
+        case AccessibilityRole::WeekInput:
+        case AccessibilityRole::MonthInput:
+        case AccessibilityRole::TimeInput:
+        case AccessibilityRole::EmailInput:
+        case AccessibilityRole::NumberInput:
+        case AccessibilityRole::PhoneNumberInput:
+        case AccessibilityRole::UrlInput:
+            return NSAccessibilityTextFieldRole;
+        case AccessibilityRole::PasswordInput:
+            return NSAccessibilityTextFieldRole;
+        case AccessibilityRole::MultilineTextInput:
+            return NSAccessibilityTextAreaRole;
+        case AccessibilityRole::Link:
+            return NSAccessibilityLinkRole;
+        case AccessibilityRole::Image:
+        case AccessibilityRole::GraphicsObject:
+        case AccessibilityRole::GraphicsSymbol:
+            return NSAccessibilityImageRole;
+        case AccessibilityRole::Row:
+        case AccessibilityRole::LayoutTableRow:
+            return NSAccessibilityRowRole;
+        case AccessibilityRole::Cell:
+        case AccessibilityRole::GridCell:
+        case AccessibilityRole::LayoutTableCell:
+            return NSAccessibilityCellRole;
+        case AccessibilityRole::ColumnHeader:
+            return NSAccessibilityColumnRole;
+        case AccessibilityRole::Table:
+        case AccessibilityRole::Grid:
+        case AccessibilityRole::LayoutTable:
+        case AccessibilityRole::TreeGrid:
+            return NSAccessibilityTableRole;
+        case AccessibilityRole::List:
+        case AccessibilityRole::ListBox:
+        case AccessibilityRole::Tree:
+            return NSAccessibilityListRole;
+        case AccessibilityRole::ListItem:
+        case AccessibilityRole::ListBoxOption:
+        case AccessibilityRole::TreeItem:
+            return NSAccessibilityRowRole;
+        case AccessibilityRole::Menu:
+        case AccessibilityRole::MenuBar:
+        case AccessibilityRole::MenuListPopup:
+            return NSAccessibilityMenuRole;
+        case AccessibilityRole::MenuItem:
+        case AccessibilityRole::MenuItemCheckBox:
+        case AccessibilityRole::MenuItemRadio:
+        case AccessibilityRole::MenuListOption:
+            return NSAccessibilityMenuItemRole;
+        case AccessibilityRole::Slider:
+        case AccessibilityRole::ScrollBar:
+            return NSAccessibilitySliderRole;
+        case AccessibilityRole::ProgressIndicator:
+        case AccessibilityRole::Meter:
+            return NSAccessibilityProgressIndicatorRole;
+        case AccessibilityRole::Tab:
+            return NSAccessibilityRadioButtonRole;
+        case AccessibilityRole::TabList:
+            return NSAccessibilityTabGroupRole;
+        case AccessibilityRole::Toolbar:
+            return NSAccessibilityToolbarRole;
+        case AccessibilityRole::Window:
+            return NSAccessibilityWindowRole;
+        default:
+            return NSAccessibilityGroupRole;
+    }
+}
+
+static int GpuiAccessibilityNodeIndex(gpui::Window* win, uint32_t id) {
+    if (!win) {
+        return -1;
+    }
+    for (int i = 0; i < win->accessibility.len; i++) {
+        if (win->accessibility[i].id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static GpuiAccessibilityElement* GpuiAccessibilityElementFor(gpui::Window* win,
+                                                             uint32_t id) {
+    if (!win || !win->plat || !id) {
+        return nil;
+    }
+    if (!win->plat->accessibilityElements) {
+        win->plat->accessibilityElements = [[NSMutableDictionary alloc] init];
+    }
+    NSNumber* key = [NSNumber numberWithUnsignedInt:id];
+    GpuiAccessibilityElement* element =
+        [win->plat->accessibilityElements objectForKey:key];
+    if (!element) {
+        element = [[GpuiAccessibilityElement alloc] init];
+        element->gpuiWindow = win;
+        element->gpuiNodeId = id;
+        [win->plat->accessibilityElements setObject:element forKey:key];
+    }
+    return element;
+}
+
+static NSArray* GpuiAccessibilityChildren(gpui::Window* win, int parent) {
+    if (!win) {
+        return @[];
+    }
+    NSMutableArray* children = [[NSMutableArray alloc] init];
+    for (int i = 0; i < win->accessibility.len; i++) {
+        if (win->accessibility[i].parent == parent) {
+            GpuiAccessibilityElement* child =
+                GpuiAccessibilityElementFor(win, win->accessibility[i].id);
+            if (child) {
+                [children addObject:child];
+            }
+        }
+    }
+    return children;
+}
+
+@implementation GpuiAccessibilityElement
+
+- (BOOL)isAccessibilityElement {
+    return GpuiAccessibilityNode(self) != nullptr;
+}
+- (NSString*)accessibilityRole {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node ? GpuiAccessibilityRole(node->info.role)
+                : NSAccessibilityUnknownRole;
+}
+- (NSString*)accessibilityLabel {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node ? GpuiAccessibilityString(node->info.label) : @"";
+}
+- (NSString*)accessibilityIdentifier {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node ? GpuiAccessibilityString(node->info.authorId) : @"";
+}
+- (NSString*)accessibilityHelp {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node) {
+        return @"";
+    }
+    return GpuiAccessibilityString(node->info.placeholder);
+}
+- (id)accessibilityValue {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node) {
+        return nil;
+    }
+    if (node->info.hasNumericValue) {
+        return [NSNumber numberWithDouble:node->info.numericValue];
+    }
+    if (node->info.toggled != gpui::AccessibilityToggled::Unset) {
+        return [NSNumber
+            numberWithInt:node->info.toggled == gpui::AccessibilityToggled::True
+                              ? 1
+                          : node->info.toggled ==
+                                  gpui::AccessibilityToggled::Mixed
+                              ? 2
+                              : 0];
+    }
+    return GpuiAccessibilityString(node->info.value);
+}
+- (id)accessibilityMinValue {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && node->info.hasMinNumericValue
+               ? [NSNumber numberWithDouble:node->info.minNumericValue]
+               : nil;
+}
+- (id)accessibilityMaxValue {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && node->info.hasMaxNumericValue
+               ? [NSNumber numberWithDouble:node->info.maxNumericValue]
+               : nil;
+}
+- (BOOL)isAccessibilityEnabled {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && !node->info.disabled;
+}
+- (BOOL)isAccessibilityFocused {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && node->focusId && node->focusId == gpuiWindow->focusId;
+}
+- (void)setAccessibilityFocused:(BOOL)focused {
+    if (focused && gpuiWindow) {
+        gpui::WindowAccessibilityPerform(gpuiWindow, gpuiNodeId,
+                                         gpui::AccessibilityAction::Focus);
+    }
+}
+- (BOOL)isAccessibilitySelected {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && node->info.hasSelected && node->info.selected;
+}
+- (BOOL)isAccessibilityExpanded {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && node->info.hasExpanded && node->info.expanded;
+}
+- (NSAccessibilityOrientation)accessibilityOrientation {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    return node && node->info.orientation ==
+                       gpui::AccessibilityOrientation::Vertical
+               ? NSAccessibilityOrientationVertical
+               : NSAccessibilityOrientationHorizontal;
+}
+- (NSRect)accessibilityFrame {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node || !gpuiWindow->plat || !gpuiWindow->plat->view) {
+        return NSZeroRect;
+    }
+    const gpui::Bounds& b = node->bounds;
+    NSRect local = NSMakeRect(b.x, b.y, b.w, b.h);
+    NSView* view = (NSView*)gpuiWindow->plat->view;
+    NSRect inWindow = [view convertRect:local toView:nil];
+    return [[view window] convertRectToScreen:inWindow];
+}
+- (id)accessibilityParent {
+    int index = GpuiAccessibilityNodeIndex(gpuiWindow, gpuiNodeId);
+    if (index < 0) {
+        return nil;
+    }
+    int parent = gpuiWindow->accessibility[index].parent;
+    return parent >= 0 ? (id)GpuiAccessibilityElementFor(
+                             gpuiWindow, gpuiWindow->accessibility[parent].id)
+                       : (id)gpuiWindow->plat->view;
+}
+- (NSArray*)accessibilityChildren {
+    int index = GpuiAccessibilityNodeIndex(gpuiWindow, gpuiNodeId);
+    return GpuiAccessibilityChildren(gpuiWindow, index);
+}
+- (NSArray<NSString*>*)accessibilityActionNames {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node) {
+        return @[];
+    }
+    NSMutableArray<NSString*>* actions = [[NSMutableArray alloc] init];
+    if (node->actions & gpui::AccessibilityActionDefault) {
+        [actions addObject:NSAccessibilityPressAction];
+    }
+    if (node->actions & gpui::AccessibilityActionIncrement) {
+        [actions addObject:NSAccessibilityIncrementAction];
+    }
+    if (node->actions & gpui::AccessibilityActionDecrement) {
+        [actions addObject:NSAccessibilityDecrementAction];
+    }
+    return actions;
+}
+- (void)accessibilityPerformAction:(NSString*)action {
+    if ([action isEqualToString:NSAccessibilityPressAction]) {
+        gpui::WindowAccessibilityPerform(gpuiWindow, gpuiNodeId,
+                                         gpui::AccessibilityAction::Default);
+    } else if ([action isEqualToString:NSAccessibilityIncrementAction]) {
+        gpui::WindowAccessibilityPerform(gpuiWindow, gpuiNodeId,
+                                         gpui::AccessibilityAction::Increment);
+    } else if ([action isEqualToString:NSAccessibilityDecrementAction]) {
+        gpui::WindowAccessibilityPerform(gpuiWindow, gpuiNodeId,
+                                         gpui::AccessibilityAction::Decrement);
+    }
+}
+- (BOOL)accessibilityPerformPress {
+    return gpui::WindowAccessibilityPerform(gpuiWindow, gpuiNodeId,
+                                            gpui::AccessibilityAction::Default);
+}
+- (BOOL)accessibilityPerformIncrement {
+    return gpui::WindowAccessibilityPerform(
+        gpuiWindow, gpuiNodeId, gpui::AccessibilityAction::Increment);
+}
+- (BOOL)accessibilityPerformDecrement {
+    return gpui::WindowAccessibilityPerform(
+        gpuiWindow, gpuiNodeId, gpui::AccessibilityAction::Decrement);
+}
+- (void)setAccessibilityValue:(id)value {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node || !(node->actions & gpui::AccessibilityActionSetValue)) {
+        return;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        gpui::WindowAccessibilitySetNumericValue(gpuiWindow, gpuiNodeId,
+                                                 [value floatValue]);
+        return;
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        const char* utf8 = [(NSString*)value UTF8String];
+        gpui::WindowAccessibilityPerform(
+            gpuiWindow, gpuiNodeId, gpui::AccessibilityAction::SetValue,
+            utf8 ? gpui::Str(utf8, (int)strlen(utf8)) : gpui::Str{});
+    }
+}
+- (NSInteger)accessibilityNumberOfCharacters {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    gpui::Str text =
+        node && node->input ? gpui::InputValue(node->input) : gpui::Str{};
+    return gpui::RopeOffsetToOffsetUtf16(text, text.len);
+}
+- (NSRange)accessibilitySelectedTextRange {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node || !node->input) {
+        return NSMakeRange(NSNotFound, 0);
+    }
+    gpui::Str text = gpui::InputValue(node->input);
+    int lo =
+        gpui::RopeOffsetToOffsetUtf16(text, node->input->selectedRange.start);
+    int hi =
+        gpui::RopeOffsetToOffsetUtf16(text, node->input->selectedRange.end);
+    return NSMakeRange((NSUInteger)std::min(lo, hi),
+                       (NSUInteger)(std::max(lo, hi) - std::min(lo, hi)));
+}
+- (void)setAccessibilitySelectedTextRange:(NSRange)range {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node || !node->input || range.location == NSNotFound) {
+        return;
+    }
+    gpui::Str text = gpui::InputValue(node->input);
+    int lo = gpui::RopeOffsetUtf16ToOffset(text, (int)range.location);
+    int hi = gpui::RopeOffsetUtf16ToOffset(
+        text, (int)(range.location + range.length));
+    gpui::InputSetSelectedRange(node->input, gpuiWindow->app, gpuiWindow, lo,
+                                hi);
+    gpui::AppInvalidate(gpuiWindow);
+}
+- (NSRange)accessibilityVisibleCharacterRange {
+    NSInteger length = [self accessibilityNumberOfCharacters];
+    return NSMakeRange(0, (NSUInteger)length);
+}
+- (NSString*)accessibilityStringForRange:(NSRange)range {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node || !node->input || range.location == NSNotFound) {
+        return nil;
+    }
+    gpui::Str text = gpui::InputValue(node->input);
+    int lo = gpui::RopeOffsetUtf16ToOffset(text, (int)range.location);
+    int hi = gpui::RopeOffsetUtf16ToOffset(
+        text, (int)(range.location + range.length));
+    return GpuiAccessibilityString(gpui::Str(text.s + lo, hi - lo));
+}
+- (NSRange)accessibilityRangeForPosition:(NSPoint)point {
+    const gpui::AccessibilityNode* node = GpuiAccessibilityNode(self);
+    if (!node || !node->input || !gpuiWindow->plat || !gpuiWindow->plat->view) {
+        return NSMakeRange(NSNotFound, 0);
+    }
+    NSView* view = (NSView*)gpuiWindow->plat->view;
+    NSPoint inWindow = [[view window] convertPointFromScreen:point];
+    NSPoint local = [view convertPoint:inWindow fromView:nil];
+    int offset = gpui::InputIndexForPosition(node->input, &gpuiWindow->paint,
+                                             (float)local.x, (float)local.y);
+    gpui::Str text = gpui::InputValue(node->input);
+    return NSMakeRange((NSUInteger)gpui::RopeOffsetToOffsetUtf16(text, offset),
+                       0);
+}
+- (NSRect)accessibilityFrameForRange:(NSRange)range {
+    (void)range;
+    return [self accessibilityFrame];
+}
+
+@end
 
 namespace gpui {
 
@@ -158162,6 +162445,44 @@ static bool PressedButton(MouseButton* out) {
 @end
 
 @implementation GpuiView
+
+- (BOOL)isAccessibilityElement {
+    return NO;
+}
+- (NSArray*)accessibilityChildren {
+    return GpuiAccessibilityChildren(win, -1);
+}
+- (id)accessibilityHitTest:(NSPoint)point {
+    if (!win) {
+        return self;
+    }
+    NSPoint inWindow = [[self window] convertPointFromScreen:point];
+    NSPoint local = [self convertPoint:inWindow fromView:nil];
+    int found = -1;
+    for (int i = 0; i < win->accessibility.len; i++) {
+        const gpui::Bounds& b = win->accessibility[i].bounds;
+        if ((float)local.x >= b.x && (float)local.x <= b.Right() &&
+            (float)local.y >= b.y && (float)local.y <= b.Bottom()) {
+
+            found = i;
+        }
+    }
+    return found >= 0 ? (id)GpuiAccessibilityElementFor(
+                            win, win->accessibility[found].id)
+                      : (id)self;
+}
+- (id)accessibilityFocusedUIElement {
+    if (!win) {
+        return self;
+    }
+    for (int i = 0; i < win->accessibility.len; i++) {
+        const gpui::AccessibilityNode& node = win->accessibility[i];
+        if (node.focusId && node.focusId == win->focusId) {
+            return GpuiAccessibilityElementFor(win, node.id);
+        }
+    }
+    return self;
+}
 
 - (BOOL)isFlipped {
     return YES;
@@ -158510,7 +162831,9 @@ static bool PressedButton(MouseButton* out) {
 }
 
 - (BOOL)performKeyEquivalent:(NSEvent*)event {
-    (void)event;
+    if ([[NSApp mainMenu] performKeyEquivalent:event]) {
+        return YES;
+    }
     return NO;
 }
 
@@ -158526,7 +162849,21 @@ static bool PressedButton(MouseButton* out) {
 
 - (void)windowWillClose:(NSNotification*)note {
     (void)note;
+    __attribute__((objc_precise_lifetime)) GpuiWindowDelegate* keepAlive = self;
+    gpui::PlatWindow* plat = win ? win->plat : nullptr;
+    if (plat) {
+        for (GpuiAccessibilityElement* element in
+             [plat->accessibilityElements allValues]) {
+            element->gpuiWindow = nullptr;
+        }
+        plat->accessibilityElements = nil;
+        if (plat->view) {
+            plat->view->win = nullptr;
+        }
+    }
     gpui::WindowClosed(win);
+    delete plat;
+    (void)keepAlive;
 }
 
 - (void)windowDidBecomeKey:(NSNotification*)note {
@@ -158571,6 +162908,9 @@ static int KeyFor(unichar c) {
             return KeyPageUp;
         case NSPageDownFunctionKey:
             return KeyPageDown;
+
+        case NSHelpFunctionKey:
+            return KeyInsert;
         case NSDeleteFunctionKey:
             return KeyDelete;
         case 0x7f:
@@ -158586,11 +162926,66 @@ static int KeyFor(unichar c) {
         case ' ':
             return KeySpace;
         case '[':
+        case '{':
             return KeyLeftBracket;
         case ']':
+        case '}':
             return KeyRightBracket;
+        case '-':
+        case '_':
+            return KeyMinus;
+        case '=':
+        case '+':
+            return KeyEqual;
+        case '\\':
+        case '|':
+            return KeyBackslash;
+        case ';':
+        case ':':
+            return KeySemicolon;
+        case '\'':
+        case '"':
+            return KeyQuote;
+        case ',':
+        case '<':
+            return KeyComma;
+        case '.':
+        case '>':
+            return KeyPeriod;
+        case '/':
+        case '?':
+            return KeySlash;
+        case '`':
+        case '~':
+            return KeyBacktick;
+        case '!':
+            return '1';
+        case '@':
+            return '2';
+        case '#':
+            return '3';
+        case '$':
+            return '4';
+        case '%':
+            return '5';
+        case '^':
+            return '6';
+        case '&':
+            return '7';
+        case '*':
+            return '8';
+        case '(':
+            return '9';
+        case ')':
+            return '0';
         default:
             break;
+    }
+    if (c >= NSF1FunctionKey && c <= NSF24FunctionKey) {
+        return KeyF1 + (int)(c - NSF1FunctionKey);
+    }
+    if (c >= NSF25FunctionKey && c <= NSF35FunctionKey) {
+        return KeyF25 + (int)(c - NSF25FunctionKey);
     }
     if (c >= 'a' && c <= 'z') {
         return (int)(c - 'a') + 'A';
@@ -158615,10 +163010,13 @@ void WindowMacKeyUp(Window* win, NSEvent* event) {
     if (!key) {
         return;
     }
+    bool function =
+        (mods & NSEventModifierFlagFunction) != 0 &&
+        !(first >= NSUpArrowFunctionKey && first <= NSModeSwitchFunctionKey);
     WindowKeyUp(win, key, (mods & NSEventModifierFlagShift) != 0,
                 (mods & NSEventModifierFlagControl) != 0,
                 (mods & NSEventModifierFlagOption) != 0,
-                (mods & NSEventModifierFlagCommand) != 0);
+                (mods & NSEventModifierFlagCommand) != 0, function);
 }
 
 bool WindowMacKeyDown(Window* win, NSEvent* event) {
@@ -158634,9 +163032,12 @@ bool WindowMacKeyDown(Window* win, NSEvent* event) {
 
     NSString* bare = [event charactersIgnoringModifiers];
     unichar first = [bare length] > 0 ? [bare characterAtIndex:0] : 0;
+    bool function =
+        (mods & NSEventModifierFlagFunction) != 0 &&
+        !(first >= NSUpArrowFunctionKey && first <= NSModeSwitchFunctionKey);
     int key = KeyFor(first);
     if (key) {
-        WindowKeyDown(win, key, shift, ctrl, alt, platform);
+        WindowKeyDown(win, key, shift, ctrl, alt, platform, function);
     }
 
     if (key == KeyBack) {
@@ -158819,12 +163220,40 @@ void PlatInstallAccessibilityHitTest(Window* win) {
 }
 
 void PlatAccessibilityTreeChanged(Window* win) {
-    (void)win;
+    if (!win || !win->plat || !win->plat->view) {
+        return;
+    }
+    NSMutableArray<NSNumber*>* stale = [[NSMutableArray alloc] init];
+    for (NSNumber* key in win->plat->accessibilityElements) {
+        if (!WindowAccessibilityNode(win, [key unsignedIntValue])) {
+            GpuiAccessibilityElement* element =
+                [win->plat->accessibilityElements objectForKey:key];
+            element->gpuiWindow = nullptr;
+            [stale addObject:key];
+        }
+    }
+    [win->plat->accessibilityElements removeObjectsForKeys:stale];
+    NSAccessibilityPostNotification(win->plat->view,
+                                    NSAccessibilityLayoutChangedNotification);
 }
 
 void PlatAccessibilityFocusChanged(Window* win, int focusId) {
-    (void)win;
-    (void)focusId;
+    if (!win || !win->plat || !focusId) {
+        return;
+    }
+    for (int i = 0; i < win->accessibility.len; i++) {
+        const AccessibilityNode& node = win->accessibility[i];
+        if (node.focusId == focusId) {
+            GpuiAccessibilityElement* element =
+                GpuiAccessibilityElementFor(win, node.id);
+            if (element) {
+                NSAccessibilityPostNotification(
+                    element,
+                    NSAccessibilityFocusedUIElementChangedNotification);
+            }
+            return;
+        }
+    }
 }
 
 bool PlatHasMenu() {
@@ -158949,6 +163378,9 @@ static NSEventModifierFlags KeyEquivalentMask(const Modifiers& mods) {
     if (mods.platform) {
         mask |= NSEventModifierFlagCommand;
     }
+    if (mods.function) {
+        mask |= NSEventModifierFlagFunction;
+    }
     return mask;
 }
 
@@ -159027,7 +163459,62 @@ int PlatShowMenu(Window* win, const PlatMenuItem* items, int n, float x,
 
 namespace gpui {
 
+static App* gRunningApp = nullptr;
 static GpuiAppMenuTarget* gAppMenuTarget = nil;
+
+}
+
+@interface GpuiAppDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@implementation GpuiAppDelegate
+- (NSApplicationTerminateReply)applicationShouldTerminate:
+    (NSApplication*)sender {
+    (void)sender;
+    if (gpui::gRunningApp) {
+        gpui::AppQuitAll(gpui::gRunningApp);
+    }
+    return NSTerminateCancel;
+}
+@end
+
+static GpuiAppDelegate* gAppDelegate = nil;
+
+namespace gpui {
+
+static void InstallDefaultAppMenu() {
+    NSString* name = [[NSProcessInfo processInfo] processName];
+    NSMenu* bar = [[NSMenu alloc] init];
+    NSMenu* appMenu = [[NSMenu alloc] initWithTitle:name];
+    NSMenuItem* hide = [[NSMenuItem alloc]
+        initWithTitle:[@"Hide " stringByAppendingString:name]
+               action:@selector(hide:)
+        keyEquivalent:@"h"];
+    [appMenu addItem:hide];
+    NSMenuItem* hideOthers =
+        [[NSMenuItem alloc] initWithTitle:@"Hide Others"
+                                   action:@selector(hideOtherApplications:)
+                            keyEquivalent:@"h"];
+    [hideOthers setKeyEquivalentModifierMask:NSEventModifierFlagCommand |
+                                             NSEventModifierFlagOption];
+    [appMenu addItem:hideOthers];
+    NSMenuItem* showAll =
+        [[NSMenuItem alloc] initWithTitle:@"Show All"
+                                   action:@selector(unhideAllApplications:)
+                            keyEquivalent:@""];
+    [appMenu addItem:showAll];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem* quit = [[NSMenuItem alloc]
+        initWithTitle:[@"Quit " stringByAppendingString:name]
+               action:@selector(terminate:)
+        keyEquivalent:@"q"];
+    [appMenu addItem:quit];
+    NSMenuItem* appItem =
+        [[NSMenuItem alloc] initWithTitle:name action:nil keyEquivalent:@""];
+    [appItem setSubmenu:appMenu];
+    [bar addItem:appItem];
+    [NSApp setMainMenu:bar];
+}
 
 bool PlatHasAppMenu() {
     return true;
@@ -159036,6 +163523,7 @@ bool PlatHasAppMenu() {
 void PlatSetAppMenu(App* app, const PlatMenuItem* items, int n) {
     (void)app;
     if (!items || n <= 0) {
+        InstallDefaultAppMenu();
         return;
     }
     if (!gAppMenuTarget) {
@@ -159198,7 +163686,14 @@ bool PlatInit(App* app) {
         [NSApplication sharedApplication];
 
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+        if (!gAppDelegate) {
+            gAppDelegate = [[GpuiAppDelegate alloc] init];
+        }
+        [NSApp setDelegate:gAppDelegate];
         [NSApp finishLaunching];
+
+        InstallDefaultAppMenu();
         [NSApp activateIgnoringOtherApps:YES];
     }
     return true;
@@ -159276,6 +163771,7 @@ int AppRun(App* app) {
     if (!app) {
         return 1;
     }
+    gRunningApp = app;
     while (AppAnyWindowOpen(app)) {
         @autoreleasepool {
 
@@ -159346,6 +163842,7 @@ int AppRun(App* app) {
             }
         }
     }
+    gRunningApp = nullptr;
     return app->exitCode;
 }
 
@@ -160204,8 +164701,16 @@ static float HostDpi(HWND hwnd) {
 
 static void RenderFrame(Window* win) {
     HWND hwnd = Hwnd(win);
-    if (!hwnd) {
+    if (!hwnd || IsIconic(hwnd)) {
         return;
+    }
+    if (!win->active && win->lastDrawTime > 0) {
+        double now = TimeNow();
+        if (now - win->lastDrawTime < kInactiveFrameInterval - 0.020) {
+            win->pendingInvalidate = true;
+            PlatSetTimer(win, WindowTimerMs(win));
+            return;
+        }
     }
     RECT rc = {};
     GetClientRect(hwnd, &rc);
@@ -160369,13 +164874,37 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam,
             WindowKeyDown(win, (int)wParam, ShiftDown(), CtrlDown(), AltDown(),
                           WinDown());
             return 0;
+        case WM_SYSKEYDOWN: {
+
+            bool alt = AltDown() || (lParam & (1ll << 29)) != 0;
+            win->eatSysChar = false;
+            if (WindowKeyDown(win, (int)wParam, ShiftDown(), CtrlDown(), alt,
+                              WinDown())) {
+                win->eatSysChar = true;
+                return 0;
+            }
+            break;
+        }
         case WM_KEYUP:
             WindowKeyUp(win, (int)wParam, ShiftDown(), CtrlDown(), AltDown(),
                         WinDown());
             return 0;
+        case WM_SYSKEYUP: {
+            bool alt = AltDown() || (lParam & (1ll << 29)) != 0;
+            WindowKeyUp(win, (int)wParam, ShiftDown(), CtrlDown(), alt,
+                        WinDown());
+
+            return 0;
+        }
         case WM_CHAR:
             WindowChar(win, (uint32_t)wParam, CtrlDown(), AltDown());
             return 0;
+        case WM_SYSCHAR:
+            if (win->eatSysChar) {
+                win->eatSysChar = false;
+                return 0;
+            }
+            break;
         case WM_IME_SETCONTEXT:
 
             lParam &= ~(LPARAM)ISC_SHOWUICOMPOSITIONWINDOW;
@@ -160642,6 +165171,14 @@ void AppQuit(Window* win) {
 void AppInvalidate(Window* win) {
     if (win) {
         win->invalidations++;
+        if (!win->active && win->lastDrawTime > 0) {
+            double now = TimeNow();
+            if (now - win->lastDrawTime < kInactiveFrameInterval - 0.020) {
+                win->pendingInvalidate = true;
+                PlatSetTimer(win, WindowTimerMs(win));
+                return;
+            }
+        }
     }
     HWND hwnd = Hwnd(win);
     if (hwnd) {
@@ -161266,9 +165803,241 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
 #endif
 
+#if GPUI_OS_MAC
+#line 1 "src/sys/gpu_mac.cpp"
+
+#ifndef kIOMainPortDefault
+#define kIOMainPortDefault kIOMasterPortDefault
+#endif
+
+namespace gpui {
+
+struct GpuProbe {
+
+    CFStringRef creator = nullptr;
+    uint64_t lastNs = 0;
+    uint64_t lastAt = 0;
+    bool primed = false;
+    bool tried = false;
+    bool available = false;
+};
+
+static GpuProbe gProbe;
+
+static base::Mutex gProbeLock;
+
+static uint64_t MonoNanos() {
+    struct timespec ts = {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static bool NumberU64(CFNumberRef number, uint64_t* out) {
+    if (!number || CFGetTypeID(number) != CFNumberGetTypeID()) {
+        return false;
+    }
+    int64_t value = 0;
+    if (!CFNumberGetValue(number, kCFNumberSInt64Type, &value)) {
+        return false;
+    }
+    *out = value < 0 ? 0 : (uint64_t)value;
+    return true;
+}
+
+static bool ClientNanoseconds(io_registry_entry_t client, CFStringRef creator,
+                              uint64_t* out) {
+    CFMutableDictionaryRef properties = nullptr;
+    if (IORegistryEntryCreateCFProperties(
+            client, &properties, kCFAllocatorDefault, 0) != KERN_SUCCESS ||
+        !properties) {
+        return false;
+    }
+
+    bool ok = false;
+    auto owner = (CFStringRef)CFDictionaryGetValue(
+        properties, CFSTR("IOUserClientCreator"));
+    if (owner && CFGetTypeID(owner) == CFStringGetTypeID() &&
+        CFStringHasPrefix(owner, creator)) {
+        auto usage =
+            (CFArrayRef)CFDictionaryGetValue(properties, CFSTR("AppUsage"));
+        if (usage && CFGetTypeID(usage) == CFArrayGetTypeID()) {
+            uint64_t total = 0;
+            CFIndex n = CFArrayGetCount(usage);
+            for (CFIndex i = 0; i < n; i++) {
+                auto queue = (CFDictionaryRef)CFArrayGetValueAtIndex(usage, i);
+                if (!queue || CFGetTypeID(queue) != CFDictionaryGetTypeID()) {
+                    continue;
+                }
+                auto time = (CFNumberRef)CFDictionaryGetValue(
+                    queue, CFSTR("accumulatedGPUTime"));
+                uint64_t ns = 0;
+                if (NumberU64(time, &ns)) {
+                    total += ns;
+                }
+            }
+            *out = total;
+            ok = true;
+        }
+    }
+    CFRelease(properties);
+    return ok;
+}
+
+static bool AccumulatedNanoseconds(CFStringRef creator, uint64_t* out) {
+    CFMutableDictionaryRef matching = IOServiceMatching("IOAccelerator");
+    if (!matching) {
+        return false;
+    }
+    io_iterator_t accelerators = IO_OBJECT_NULL;
+
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching,
+                                     &accelerators) != KERN_SUCCESS) {
+        return false;
+    }
+
+    uint64_t total = 0;
+    bool any = false;
+    io_registry_entry_t accelerator = IO_OBJECT_NULL;
+    while ((accelerator = IOIteratorNext(accelerators))) {
+        io_iterator_t clients = IO_OBJECT_NULL;
+        kern_return_t kr = IORegistryEntryGetChildIterator(
+            accelerator, kIOServicePlane, &clients);
+        IOObjectRelease(accelerator);
+        if (kr != KERN_SUCCESS || clients == IO_OBJECT_NULL) {
+            continue;
+        }
+        io_registry_entry_t client = IO_OBJECT_NULL;
+        while ((client = IOIteratorNext(clients))) {
+            uint64_t used = 0;
+            if (ClientNanoseconds(client, creator, &used)) {
+                total += used;
+                any = true;
+            }
+            IOObjectRelease(client);
+        }
+        IOObjectRelease(clients);
+    }
+    IOObjectRelease(accelerators);
+    if (!any) {
+        return false;
+    }
+    *out = total;
+    return true;
+}
+
+static bool HasAccelerators() {
+    CFMutableDictionaryRef matching = IOServiceMatching("IOAccelerator");
+    if (!matching) {
+        return false;
+    }
+    io_iterator_t accelerators = IO_OBJECT_NULL;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, matching,
+                                     &accelerators) != KERN_SUCCESS) {
+        return false;
+    }
+    io_registry_entry_t accelerator = IOIteratorNext(accelerators);
+    bool any = accelerator != IO_OBJECT_NULL;
+    if (accelerator) {
+        IOObjectRelease(accelerator);
+    }
+    IOObjectRelease(accelerators);
+    return any;
+}
+
+static bool ProbeOpenLocked() {
+    if (gProbe.tried) {
+        return gProbe.available;
+    }
+    gProbe.tried = true;
+
+    if (!HasAccelerators()) {
+        return false;
+    }
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "pid %d,", (int)getpid());
+    if (n <= 0 || n >= (int)sizeof(buf)) {
+        return false;
+    }
+    gProbe.creator = CFStringCreateWithCString(kCFAllocatorDefault, buf,
+                                               kCFStringEncodingUTF8);
+    if (!gProbe.creator) {
+        return false;
+    }
+    gProbe.available = true;
+    return true;
+}
+
+bool GpuAvailable() {
+    gProbeLock.Lock();
+    bool available = ProbeOpenLocked();
+    gProbeLock.Unlock();
+    return available;
+}
+
+static float GpuUsagePercentLocked() {
+    if (!ProbeOpenLocked()) {
+        return -1.f;
+    }
+
+    uint64_t used = 0;
+    if (!AccumulatedNanoseconds(gProbe.creator, &used)) {
+        return -1.f;
+    }
+    uint64_t now = MonoNanos();
+    if (!gProbe.primed) {
+        gProbe.lastNs = used;
+        gProbe.lastAt = now;
+        gProbe.primed = true;
+        return -1.f;
+    }
+    uint64_t elapsed = now - gProbe.lastAt;
+    uint64_t previous = gProbe.lastNs;
+    gProbe.lastNs = used;
+    gProbe.lastAt = now;
+    if (elapsed == 0) {
+        return -1.f;
+    }
+
+    uint64_t busy = used >= previous ? used - previous : 0;
+    double percent = (double)busy / (double)elapsed * 100.0;
+    if (percent < 0) {
+        percent = 0;
+    }
+    if (percent > 100) {
+        percent = 100;
+    }
+    return (float)percent;
+}
+
+float GpuUsagePercent() {
+    gProbeLock.Lock();
+    float usage = GpuUsagePercentLocked();
+    gProbeLock.Unlock();
+    return usage;
+}
+
+void GpuProbeFree() {
+    gProbeLock.Lock();
+    if (gProbe.creator) {
+        CFRelease(gProbe.creator);
+    }
+    gProbe.creator = nullptr;
+    gProbe.lastNs = 0;
+    gProbe.lastAt = 0;
+    gProbe.primed = false;
+    gProbe.tried = false;
+    gProbe.available = false;
+    gProbeLock.Unlock();
+}
+
+}
+
+#endif
+
 #if GPUI_OS_LINUX || GPUI_OS_MAC || GPUI_OS_WASM
 #line 1 "src/sys/gpu_posix.cpp"
 
+#if !GPUI_OS_MAC
 namespace gpui {
 
 bool GpuAvailable() {
@@ -161282,6 +166051,7 @@ float GpuUsagePercent() {
 void GpuProbeFree() {}
 
 }
+#endif
 
 #endif
 
@@ -161830,6 +166600,231 @@ bool HttpGetNoRedirect(Str url, HttpRsp* out) {
 #line 1 "src/sys/http_wasm.cpp"
 
 namespace gpui {
+
+struct WasmHttpTransfer {
+    Func1<HttpAsyncResult> done;
+    HttpRsp response;
+};
+
+EM_JS(int, GpJsHttpBegin,
+      (int token, const char* url, int urlLen, const char* method,
+       int methodLen, int noRedirect), {
+    let G = globalThis.__gpuiHttp;
+    if (!G) {
+        G = {
+            pending: new Map(),
+            decoder: new TextDecoder("utf-8"),
+            encoder: new TextEncoder()
+        };
+        G.str = function(ptr, len) {
+            return ptr && len > 0
+                ? G.decoder.decode(HEAPU8.subarray(ptr, ptr + len))
+                : "";
+        };
+        G.encoded = function(text) {
+            if (!text) {
+                return { ptr: 0, len: 0 };
+            }
+            const bytes = G.encoder.encode(text);
+            const ptr = _malloc(bytes.length);
+            if (!ptr) {
+                return { ptr: 0, len: 0 };
+            }
+            HEAPU8.set(bytes, ptr);
+            return { ptr: ptr, len: bytes.length };
+        };
+        G.finish = function(tokenValue, ok, status, bytes, contentType,
+                            redirectUrl) {
+            let body = 0;
+            let bodyLen = 0;
+            const type = G.encoded(contentType);
+            const redirect = G.encoded(redirectUrl);
+            if (bytes && bytes.length > 0) {
+                bodyLen = bytes.length;
+                body = _malloc(bodyLen);
+                if (body) {
+                    HEAPU8.set(bytes, body);
+                } else {
+                    bodyLen = 0;
+                    ok = false;
+                }
+            }
+            _gpui_wasm_http_done(tokenValue, ok ? 1 : 0, status, body,
+                                 bodyLen, type.ptr, type.len, redirect.ptr,
+                                 redirect.len);
+            if (type.ptr) {
+                _free(type.ptr);
+            }
+            if (redirect.ptr) {
+                _free(redirect.ptr);
+            }
+        };
+        globalThis.__gpuiHttp = G;
+    }
+    if (!token || G.pending.has(token)) {
+        return 0;
+    }
+    G.pending.set(token, {
+        url: G.str(url, urlLen),
+        method: G.str(method, methodLen) || "GET",
+        headers: [],
+        body: null,
+        noRedirect: noRedirect !== 0
+    });
+    return 1;
+});
+
+EM_JS(void, GpJsHttpHeader,
+      (int token, const char* name, int nameLen, const char* value,
+       int valueLen), {
+    const G = globalThis.__gpuiHttp;
+    const request = G ? G.pending.get(token) : null;
+    if (request) {
+        request.headers.push([G.str(name, nameLen), G.str(value, valueLen)]);
+    }
+});
+
+EM_JS(void, GpJsHttpStart,
+      (int token, const uint8_t* body, int bodyLen, int timeoutMs,
+       int maxBody), {
+    const G = globalThis.__gpuiHttp;
+    const request = G ? G.pending.get(token) : null;
+    if (!request) {
+        return;
+    }
+    G.pending.delete(token);
+    if (body && bodyLen > 0) {
+        request.body = new Uint8Array(HEAPU8.subarray(body, body + bodyLen));
+    }
+    Promise.resolve().then(async function() {
+        const controller = new AbortController();
+        const timeout = setTimeout(function() {
+            controller.abort();
+        }, timeoutMs);
+        try {
+            const headers = new Headers();
+            for (const pair of request.headers) {
+                headers.append(pair[0], pair[1]);
+            }
+            const options = {
+                method: request.method,
+                headers: headers,
+                redirect: request.noRedirect ? "manual" : "follow",
+                credentials: "omit",
+                referrerPolicy: "no-referrer",
+                cache: "no-store",
+                signal: controller.signal
+            };
+            if (request.body) {
+                options.body = request.body;
+            }
+            const response = await fetch(request.url, options);
+            if (request.noRedirect &&
+                (response.type === "opaqueredirect" || response.status === 0)) {
+                throw new Error("the browser hid a manual redirect");
+            }
+            const length = Number(response.headers.get("content-length"));
+            if (Number.isFinite(length) && length > maxBody) {
+                throw new Error("the response body is too large");
+            }
+            const chunks = [];
+            let total = 0;
+            if (response.body && response.body.getReader) {
+                const reader = response.body.getReader();
+                for (;;) {
+                    const part = await reader.read();
+                    if (part.done) {
+                        break;
+                    }
+                    total += part.value.byteLength;
+                    if (total > maxBody) {
+                        await reader.cancel();
+                        throw new Error("the response body is too large");
+                    }
+                    chunks.push(part.value);
+                }
+            } else {
+                const whole = new Uint8Array(await response.arrayBuffer());
+                total = whole.byteLength;
+                if (total > maxBody) {
+                    throw new Error("the response body is too large");
+                }
+                chunks.push(whole);
+            }
+            const bytes = new Uint8Array(total);
+            let at = 0;
+            for (const chunk of chunks) {
+                bytes.set(chunk, at);
+                at += chunk.byteLength;
+            }
+            let redirectUrl = "";
+            if (request.noRedirect && response.status >= 300 &&
+                response.status < 400) {
+                const location = response.headers.get("location");
+                if (location) {
+                    redirectUrl = new URL(location, response.url).href;
+                }
+            }
+            G.finish(token, true, response.status, bytes,
+                     response.headers.get("content-type") || "", redirectUrl);
+        } catch (error) {
+            G.finish(token, false, 0, null, "", "");
+        } finally {
+            clearTimeout(timeout);
+        }
+    });
+});
+
+extern "C" EMSCRIPTEN_KEEPALIVE void gpui_wasm_http_done(
+    int token, int ok, int status, uint8_t* body, int bodyLen,
+    const char* contentType, int contentTypeLen, const char* redirectUrl,
+    int redirectUrlLen) {
+    WasmHttpTransfer* transfer = (WasmHttpTransfer*)(intptr_t)token;
+    if (!transfer) {
+        Free(nullptr, body);
+        return;
+    }
+    if (bodyLen < 0 || bodyLen > kHttpMaxBody) {
+        Free(nullptr, body);
+        body = nullptr;
+        bodyLen = 0;
+        ok = 0;
+    }
+    transfer->response.status = status;
+    transfer->response.body.els = body;
+    transfer->response.body.len = bodyLen;
+    transfer->response.body.cap = bodyLen;
+    if (contentType && contentTypeLen > 0) {
+        transfer->response
+            .contentType = StrDup(Str(contentType, contentTypeLen));
+    }
+    if (redirectUrl && redirectUrlLen > 0) {
+        transfer->response
+            .redirectUrl = StrDup(Str(redirectUrl, redirectUrlLen));
+    }
+    HttpAsyncResult result = {ok != 0, &transfer->response};
+    transfer->done.Call(result);
+    HttpRspFree(&transfer->response);
+    delete transfer;
+}
+
+bool HttpWasmSendAsync(const HttpReq& req, Func1<HttpAsyncResult> done) {
+    WasmHttpTransfer* transfer = new WasmHttpTransfer();
+    transfer->done = done;
+    int token = (int)(intptr_t)transfer;
+    if (!GpJsHttpBegin(token, req.url.s, req.url.len, req.method.s,
+                       req.method.len, req.noRedirect ? 1 : 0)) {
+        delete transfer;
+        return false;
+    }
+    for (int i = 0; i < req.nHeaders; i++) {
+        GpJsHttpHeader(token, req.headers[i].name.s, req.headers[i].name.len,
+                       req.headers[i].value.s, req.headers[i].value.len);
+    }
+    GpJsHttpStart(token, (const uint8_t*)req.body.s, req.body.len,
+                  kHttpTimeoutMs, kHttpMaxBody);
+    return true;
+}
 
 bool HttpSend(const HttpReq& req, HttpRsp* out) {
     (void)req;

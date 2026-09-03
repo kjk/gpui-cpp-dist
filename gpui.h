@@ -3711,13 +3711,15 @@ struct ClickEvent {
     int keyboardKey = 0;
 };
 
-enum : uint8_t {
+enum : int {
     KeyBack = 8,
     KeyTab = 9,
     KeyReturn = 13,
     KeyShift = 16,
     KeyControl = 17,
-    KeyMenu = 18,
+    KeyAlt = 18,
+
+    KeyMenu = KeyAlt,
     KeyEscape = 27,
     KeySpace = 32,
     KeyPageUp = 33,
@@ -3728,6 +3730,7 @@ enum : uint8_t {
     KeyUp = 38,
     KeyRight = 39,
     KeyDown = 40,
+    KeyInsert = 45,
     KeyDelete = 46,
 
     KeyA = 65,
@@ -3739,9 +3742,40 @@ enum : uint8_t {
     KeyX = 88,
     KeyY = 89,
     KeyZ = 90,
+    KeyApps = 93,
+    KeyF1 = 112,
+    KeyF24 = 135,
+    KeyBrowserBack = 166,
+    KeyBrowserForward = 167,
 
+    KeySemicolon = 186,
+    KeyEqual = 187,
+    KeyComma = 188,
+    KeyMinus = 189,
+    KeyPeriod = 190,
+    KeySlash = 191,
+    KeyBacktick = 192,
     KeyLeftBracket = 219,
-    KeyRightBracket = 221
+    KeyBackslash = 220,
+    KeyRightBracket = 221,
+    KeyQuote = 222,
+
+    KeyF25 = 256,
+    KeyF35 = 266,
+    KeyCut = 267,
+    KeyCopy = 268,
+    KeyPaste = 269,
+    KeyNew = 270,
+    KeyOpen = 271,
+    KeySave = 272,
+    KeyKpAdd = 273,
+    KeyKpSubtract = 274,
+    KeyKpMultiply = 275,
+    KeyKpDivide = 276,
+    KeyKpDecimal = 277,
+    KeyKpSeparator = 278,
+    KeyKpEqual = 279,
+    KeyKpBegin = 280
 };
 
 struct KeyEvent {
@@ -3753,6 +3787,8 @@ struct KeyEvent {
     bool alt = false;
 
     bool platform = false;
+
+    bool function = false;
 
     bool propagate = true;
 };
@@ -5134,6 +5170,8 @@ struct HitRect {
     bool stopClick = false;
     bool stopMouseDown = false;
     bool suppressTextSelection = false;
+
+    int paintLayer = 0;
 };
 
 struct AccessibilityNode {
@@ -5217,6 +5255,8 @@ struct TextHit {
     bool atom = false;
 
     int scope = 0;
+
+    int paintLayer = 0;
 };
 
 struct TextMeasCache {
@@ -5387,6 +5427,8 @@ struct FocusRect {
 
 struct DispatchNode {
     int subtreeEnd = 0;
+
+    int depth = 0;
     uint32_t context = 0;
     uint32_t action = 0;
     Listener fn = {};
@@ -6607,7 +6649,7 @@ const ScrollRect* HitScrollRect(PaintCtx* ctx, float x, float y);
 int TextHitOffsetAt(PaintCtx* ctx, float x, float y, bool nearest);
 
 int TextHitOffsetIn(PaintCtx* ctx, float x, float y, bool nearest, int scope,
-                    int* outScope);
+                    int* outScope, int minLayer = 0);
 int CopyTextHits(PaintCtx* ctx, int selA, int selB, char* out, int cap);
 
 int CopyTextHitsIn(PaintCtx* ctx, int selA, int selB, int scope, char* out,
@@ -6792,6 +6834,10 @@ struct Window {
     bool animFrame = false;
 
     double frameNow = 0;
+
+    double lastDrawTime = 0;
+
+    bool pendingInvalidate = false;
     bool mouseDown = false;
 
     bool stopPropagation = false;
@@ -6830,6 +6876,8 @@ struct Window {
 
     bool keyPressPending = false;
     int keyPressGen = 0;
+
+    bool eatSysChar = false;
 
     int scrollDragId = 0;
     float scrollDragGrab = 0;
@@ -7325,11 +7373,12 @@ bool WindowFocusWithin(const Window* win, int id);
 bool WindowRestoreFocus(Window* win, int id);
 
 bool WindowDispatchKeyAction(Window* win, int vk, bool shift, bool ctrl,
-                             bool alt, bool platform = false);
+                             bool alt, bool platform = false,
+                             bool function = false);
 
 uint32_t WindowResolveKeyAction(Window* win, int vk, bool shift, bool ctrl,
-                                bool alt, bool platform, intptr_t* arg,
-                                bool* pending);
+                                bool alt, bool platform, bool function,
+                                intptr_t* arg, bool* pending);
 
 constexpr bool KeySecondary(bool ctrl, bool platform) {
 #if GPUI_OS_MAC
@@ -11358,6 +11407,8 @@ struct KeyChord {
     bool alt = false;
 
     bool platform = false;
+
+    bool function = false;
 };
 
 bool KeyChordParse(Str spec, KeyChord* out);
@@ -24402,6 +24453,24 @@ El* FpsMonitorEl(Ctx* cx, FpsOverlayOpts opts = FpsOverlayOpts{});
 
 }
 
+#line 1 "src/gpui/accessibility_linux.h"
+
+namespace gpui {
+
+#if GPUI_OS_LINUX
+
+void AccessibilityLinuxInit(App* app, Str busAddress);
+void AccessibilityLinuxShutdown();
+int AccessibilityLinuxFd();
+void AccessibilityLinuxPump();
+void AccessibilityLinuxTreeChanged(Window* win);
+void AccessibilityLinuxFocusChanged(Window* win, int focusId);
+
+Point AccessibilityLinuxWindowOrigin(Window* win);
+#endif
+
+}
+
 #line 1 "src/gpui/accessibility_win.h"
 
 namespace gpui {
@@ -24533,6 +24602,8 @@ struct WinPaintOptions {
     WinPaintBackend backend = WinPaintBackend::Direct2D;
     WinPaintMsaa msaa = WinPaintMsaa::X4;
     WinSceneMode scene = WinSceneMode::Skip;
+
+    int gpuResetEvery = 0;
 };
 
 const WinPaintOptions& WinPaintOptionsGet();
@@ -24688,6 +24759,8 @@ void* PaintSharedD3dDevice(PaintApp* pa);
 
 void* PaintSharedDxgiFactory(PaintApp* pa);
 
+void PaintSharedD3dDeviceReset(PaintApp* pa);
+
 void* PaintSharedDwrite(PaintApp* pa);
 
 bool PaintImagePixels(const Image* img, const uint8_t** bgra, int* w, int* h);
@@ -24758,11 +24831,11 @@ void WindowDrawFrame(Window* win, void* native, int pxW, int pxH, float dipW,
 
 bool PlatReduceMotion();
 
-void WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
-                   bool platform = false);
+bool WindowKeyDown(Window* win, int key, bool shift, bool ctrl, bool alt,
+                   bool platform = false, bool function = false);
 
 void WindowKeyUp(Window* win, int key, bool shift, bool ctrl, bool alt,
-                 bool platform = false);
+                 bool platform = false, bool function = false);
 
 void WindowChar(Window* win, uint32_t ch, bool ctrl, bool alt);
 
@@ -28026,6 +28099,14 @@ constexpr int kHttpTimeoutMs = 15000;
 
 bool HttpUrlIsRemote(Str url);
 
+struct HttpAsyncResult {
+    bool ok = false;
+
+    HttpRsp* response = nullptr;
+};
+
+bool HttpSendAsync(const HttpReq& req, Func1<HttpAsyncResult> done);
+
 enum class FetchState : uint8_t {
 
     None = 0,
@@ -28044,6 +28125,8 @@ int HttpFetchPending();
 void HttpSetOnFetchDone(Func0 f);
 
 void HttpFetchClear();
+
+void HttpFetchDrop(Str url);
 
 void HttpSetEnabled(bool on);
 bool HttpEnabled();
@@ -28092,6 +28175,16 @@ bool FetchAuthorize(Str url, Str method, const Capabilities& capabilities,
 
 bool FetchSend(const FetchRequest& request, const Capabilities& capabilities,
                FetchResult* out);
+
+struct FetchAsyncResult {
+    bool ok = false;
+
+    FetchResult* result = nullptr;
+};
+
+bool FetchSendAsync(const FetchRequest& request,
+                    const Capabilities& capabilities,
+                    Func1<FetchAsyncResult> done);
 
 bool FetchFollowsLocation(int status);
 
