@@ -1,5 +1,5 @@
 #define GPUI_INCLUDE_PRIVATE_API 1
-#include "markdown.h"
+#include "html5ever.h"
 
 #include <climits>
 #include <cstdarg>
@@ -1966,1491 +1966,464 @@ static int VsnprintfUtf8(Str buf, const char* fmt, va_list args) {
 }
 }
 
-#line 1 "src/markdown-mini/markdown.cpp"
+#line 1 "src/html5ever-mini/html5ever.cpp"
 
-namespace markdown {
+namespace html5ever {
 
-using base::Alloc;
+using namespace base;
 
-struct MiniParser {
-    Arena* a = nullptr;
-    Str source = {};
-    const ParseOptions* options = nullptr;
-};
+static const char kVoidElements[] =
+    "area\0base\0br\0col\0embed\0hr\0img\0input\0link\0meta\0param\0source\0"
+    "track\0wbr\0";
+static const char kRawElements[] = "script\0style\0";
+static const char kEntityNames[] =
+    "AMP\0CounterClockwiseContourIntegral\0GT\0LT\0QUOT\0amp\0apos\0gt\0lt\0"
+    "nbsp\0quot\0";
+static const char kEntityValues[] = "&\0∳\0>\0<\0\"\0&\0'\0>\0<\0 \0\"\0";
 
-struct MiniLine {
-    int32_t start = 0;
-    int32_t end = 0;
-    int32_t next = 0;
-};
-
-struct MiniListMarker {
-    bool valid = false;
-    bool ordered = false;
-    int32_t start = 1;
-    int32_t indent = 0;
-    int32_t content = 0;
-};
-
-static bool MiniSpace(char c) {
-    return c == ' ' || c == '\t';
+static bool Space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
 }
 
-static bool MiniDigit(char c) {
-    return c >= '0' && c <= '9';
+static bool Alpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
-static bool MiniHex(char c) {
-    return MiniDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+static bool NameChar(char c) {
+    return Alpha(c) || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+           c == ':';
 }
 
-static bool MiniPunctuation(char c) {
-    switch (c) {
-        case '!':
-        case '"':
-        case '#':
-        case '$':
-        case '%':
-        case '&':
-        case '\'':
-        case '(':
-        case ')':
-        case '*':
-        case '+':
-        case ',':
-        case '-':
-        case '.':
-        case '/':
-        case ':':
-        case ';':
-        case '<':
-        case '=':
-        case '>':
-        case '?':
-        case '@':
-        case '[':
-        case '\\':
-        case ']':
-        case '^':
-        case '_':
-        case '`':
-        case '{':
-        case '|':
-        case '}':
-        case '~':
-            return true;
-        default:
-            return false;
-    }
+static ArenaStr Lower(Arena* a, Str value) {
+    ArenaStr result = ArenaStrDup(a, value);
+    StrLowerAscii(ArenaStrGet(a, result).s);
+    return result;
 }
 
-static Str MiniSlice(Str s, int32_t start, int32_t end) {
-    if (!s.s || start < 0 || end < start || end > s.len) {
-        return {};
+static int EncodeUtf8(char* out, uint32_t cp) {
+    if (cp <= 0x7f) {
+        out[0] = (char)cp;
+        return 1;
     }
-    return Str(s.s + start, end - start);
+    if (cp <= 0x7ff) {
+        out[0] = (char)(0xc0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3f));
+        return 2;
+    }
+    if (cp <= 0xffff) {
+        out[0] = (char)(0xe0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+        out[2] = (char)(0x80 | (cp & 0x3f));
+        return 3;
+    }
+    out[0] = (char)(0xf0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
+    out[3] = (char)(0x80 | (cp & 0x3f));
+    return 4;
 }
 
-static Str MiniTrim(Str s) {
-    int32_t start = 0;
-    int32_t end = s.len;
-    while (start < end && MiniSpace(s.s[start])) {
-        start++;
-    }
-    while (end > start && MiniSpace(s.s[end - 1])) {
-        end--;
-    }
-    return MiniSlice(s, start, end);
-}
-
-static Str MiniOwn(Arena* a, Str s) {
-    char* out = (char*)Alloc(a, s.len + 1);
-    if (!out) {
-        return {};
-    }
-    if (s.len > 0) {
-        memcpy(out, s.s, (size_t)s.len);
-    }
-    out[s.len] = 0;
-    return Str(out, s.len);
-}
-
-static MiniLine MiniReadLine(Str source, int32_t at) {
-    MiniLine line;
-    line.start = at;
-    while (at < source.len && source.s[at] != '\n' && source.s[at] != '\r') {
-        at++;
-    }
-    line.end = at;
-    if (at < source.len && source.s[at] == '\r') {
-        at++;
-        if (at < source.len && source.s[at] == '\n') {
-            at++;
-        }
-    } else if (at < source.len) {
-        at++;
-    }
-    line.next = at;
-    return line;
-}
-
-static Str MiniLineText(Str source, const MiniLine& line) {
-    return MiniSlice(source, line.start, line.end);
-}
-
-static int32_t MiniIndent(Str line) {
-    int32_t n = 0;
-    while (n < line.len && n < 4) {
-        if (line.s[n] == ' ') {
-            n++;
-        } else if (line.s[n] == '\t') {
-            return 4;
-        } else {
-            break;
-        }
-    }
-    return n;
-}
-
-static bool MiniBlank(Str line) {
-    for (int32_t i = 0; i < line.len; i++) {
-        if (!MiniSpace(line.s[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static Node* MiniNode(MiniParser* p, NodeKind kind, Node* parent) {
-    Node* node = NodeNew(p->a, kind);
-    if (node && parent) {
-        NodeAddChild(p->a, parent, node);
-    }
-    return node;
-}
-
-static void MiniText(MiniParser* p, Node* parent, Str value) {
-    if (value.len <= 0) {
-        return;
-    }
-    Node* text = MiniNode(p, NodeKind::Text, parent);
-    if (text) {
-        NodeSetStr(p->a, text, NodeStrKind::Value, value);
-    }
-}
-
-static int32_t MiniFind(Str text, int32_t at, char marker, int32_t count) {
-    for (int32_t i = at; i + count <= text.len; i++) {
-        if (text.s[i] == '\\') {
-            i++;
-            continue;
-        }
-        int32_t n = 0;
-        while (i + n < text.len && text.s[i + n] == marker) {
-            n++;
-        }
-        if (n >= count && i > at && !MiniSpace(text.s[i - 1])) {
-            return i;
-        }
-        i += n > 0 ? n - 1 : 0;
-    }
-    return -1;
-}
-
-static int32_t MiniBracketEnd(Str text, int32_t at) {
-    int32_t depth = 1;
-    for (int32_t i = at; i < text.len; i++) {
-        if (text.s[i] == '\\' && i + 1 < text.len) {
-            i++;
-            continue;
-        }
-        if (text.s[i] == '[') {
-            depth++;
-        } else if (text.s[i] == ']' && --depth == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-static int32_t MiniResourceEnd(Str text, int32_t at) {
-    int32_t depth = 1;
-    char quote = 0;
-    for (int32_t i = at; i < text.len; i++) {
-        char c = text.s[i];
-        if (c == '\\' && i + 1 < text.len) {
-            i++;
-            continue;
-        }
-        if (quote) {
-            if (c == quote) {
-                quote = 0;
-            }
-            continue;
-        }
-        if (c == '"' || c == '\'') {
-            quote = c;
-        } else if (c == '(') {
-            depth++;
-        } else if (c == ')' && --depth == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-static void MiniInline(MiniParser* p, Node* parent, Str text);
-
-static bool MiniLink(MiniParser* p, Node* parent, Str text, int32_t at,
-                     int32_t* after) {
-    bool image = text.s[at] == '!';
-    int32_t open = at + (image ? 1 : 0);
-    if (open >= text.len || text.s[open] != '[') {
-        return false;
-    }
-    if (image && !p->options->constructs.labelStartImage) {
-        return false;
-    }
-    if (!image && !p->options->constructs.labelStartLink) {
-        return false;
-    }
-    int32_t close = MiniBracketEnd(text, open + 1);
-    if (close < 0 || close + 1 >= text.len || text.s[close + 1] != '(') {
-        return false;
-    }
-    int32_t resourceEnd = MiniResourceEnd(text, close + 2);
-    if (resourceEnd < 0) {
-        return false;
-    }
-
-    Str body = MiniTrim(MiniSlice(text, close + 2, resourceEnd));
-    Str url = {};
-    Str title = {};
-    if (body.len > 1 && body.s[0] == '<') {
-        int32_t end = 1;
-        while (end < body.len && body.s[end] != '>') {
-            end++;
-        }
-        if (end >= body.len) {
-            return false;
-        }
-        url = MiniSlice(body, 1, end);
-        body = MiniTrim(MiniSlice(body, end + 1, body.len));
-    } else {
-        int32_t end = 0;
-        int32_t depth = 0;
-        while (end < body.len) {
-            char c = body.s[end];
-            if (c == '(') {
-                depth++;
-            } else if (c == ')' && depth > 0) {
-                depth--;
-            } else if (MiniSpace(c) && depth == 0) {
-                break;
-            }
-            end++;
-        }
-        url = MiniSlice(body, 0, end);
-        body = MiniTrim(MiniSlice(body, end, body.len));
-    }
-    if (body.len >= 2) {
-        char first = body.s[0];
-        char last = body.s[body.len - 1];
-        if ((first == '"' && last == '"') || (first == '\'' && last == '\'') ||
-            (first == '(' && last == ')')) {
-            title = MiniSlice(body, 1, body.len - 1);
-        }
-    }
-
-    Str label = MiniSlice(text, open + 1, close);
-    Node* node = MiniNode(p, image ? NodeKind::Image : NodeKind::Link, parent);
-    if (!node) {
-        return false;
-    }
-    NodeSetStr(p->a, node, NodeStrKind::Url, url);
-    NodeSetStr(p->a, node, NodeStrKind::Title, title);
-    if (image) {
-        NodeSetStr(p->a, node, NodeStrKind::Alt, label);
-    } else {
-        MiniInline(p, node, label);
-    }
-    *after = resourceEnd + 1;
-    return true;
-}
-
-static base::TempStr MiniUtf8Temp(uint32_t cp) {
-    base::TempStr out = base::AllocStrTemp(4);
-    if (cp < 0x80) {
-        out.s[0] = (char)cp;
-        out.len = 1;
-        return out;
-    }
-    if (cp < 0x800) {
-        out.s[0] = (char)(0xc0 | (cp >> 6));
-        out.s[1] = (char)(0x80 | (cp & 0x3f));
-        out.len = 2;
-        return out;
-    }
-    if (cp < 0x10000) {
-        out.s[0] = (char)(0xe0 | (cp >> 12));
-        out.s[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
-        out.s[2] = (char)(0x80 | (cp & 0x3f));
-        out.len = 3;
-        return out;
-    }
-    out.s[0] = (char)(0xf0 | (cp >> 18));
-    out.s[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
-    out.s[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
-    out.s[3] = (char)(0x80 | (cp & 0x3f));
-    return out;
-}
-
-static bool MiniEntity(MiniParser* p, Str text, int32_t at, int32_t* after,
-                       Str* value) {
-    int32_t semi = at + 1;
-    while (semi < text.len && semi - at <= 33 && text.s[semi] != ';' &&
-           !MiniSpace(text.s[semi])) {
-        semi++;
-    }
-    if (semi >= text.len || text.s[semi] != ';' || semi == at + 1) {
-        return false;
-    }
-    Str name = MiniSlice(text, at + 1, semi);
-    if (name.s[0] == '#') {
-        int32_t start = 1;
-        int radix = 10;
-        if (start < name.len &&
-            (name.s[start] == 'x' || name.s[start] == 'X')) {
-            start++;
-            radix = 16;
-        }
-        if (start == name.len) {
-            return false;
-        }
-        for (int32_t i = start; i < name.len; i++) {
-            if ((radix == 10 && !MiniDigit(name.s[i])) ||
-                (radix == 16 && !MiniHex(name.s[i]))) {
-                return false;
-            }
-        }
-        *value = DecodeNumeric(p->a, MiniSlice(name, start, name.len), radix);
-    } else {
-        *value = DecodeNamed(p->a, name);
-    }
-    if (!value->s) {
-        return false;
-    }
-    *after = semi + 1;
-    return true;
-}
-
-static void MiniInline(MiniParser* p, Node* parent, Str text) {
-    int32_t plain = 0;
-    int32_t at = 0;
-    while (at < text.len) {
-        int32_t after = at;
-        NodeKind markKind = NodeKind::Text;
-        int32_t close = -1;
-        char c = text.s[at];
-
-        bool linkStart = c == '[' || (c == '!' && at + 1 < text.len &&
-                                      text.s[at + 1] == '[');
-        bool linkEnabled = p->options->constructs.labelEnd &&
-                           (c == '!' ? p->options->constructs.labelStartImage
-                                     : p->options->constructs.labelStartLink);
-        if (linkStart && linkEnabled) {
-            int32_t labelOpen = at + (c == '!' ? 1 : 0);
-            int32_t labelClose = MiniBracketEnd(text, labelOpen + 1);
-            if (labelClose >= 0 && labelClose + 1 < text.len &&
-                text.s[labelClose + 1] == '(') {
-                int32_t resourceEnd = MiniResourceEnd(text, labelClose + 2);
-                if (resourceEnd >= 0) {
-                    if (at > plain) {
-                        MiniText(p, parent, MiniSlice(text, plain, at));
-                    }
-                    if (MiniLink(p, parent, text, at, &after)) {
-                        at = after;
-                        plain = at;
-                        continue;
-                    }
-                }
-            }
-        }
-
-        if (p->options->constructs.codeText && c == '`') {
-            int32_t count = 1;
-            while (at + count < text.len && text.s[at + count] == '`') {
-                count++;
-            }
-            close = MiniFind(text, at + count, '`', count);
-            if (close >= 0) {
-                if (at > plain) {
-                    MiniText(p, parent, MiniSlice(text, plain, at));
-                }
-                Node* code = MiniNode(p, NodeKind::InlineCode, parent);
-                Str value = MiniSlice(text, at + count, close);
-                char* normalized = (char*)Alloc(p->a, value.len + 1);
-                if (normalized) {
-                    for (int32_t i = 0; i < value.len; i++) {
-                        normalized[i] = value.s[i] == '\n' || value.s[i] == '\r'
-                                            ? ' '
-                                            : value.s[i];
-                    }
-                    normalized[value.len] = 0;
-                    NodeSetStr(p->a, code, NodeStrKind::Value,
-                               Str(normalized, value.len));
-                }
-                at = close + count;
-                plain = at;
-                continue;
-            }
-        }
-
-        if (p->options->constructs.attention && (c == '*' || c == '_')) {
-            int32_t count = 1;
-            while (count < 3 && at + count < text.len &&
-                   text.s[at + count] == c) {
-                count++;
-            }
-            bool intraword = c == '_' && at > 0 && at + count < text.len &&
-                             !MiniSpace(text.s[at - 1]) &&
-                             !MiniPunctuation(text.s[at - 1]) &&
-                             !MiniSpace(text.s[at + count]) &&
-                             !MiniPunctuation(text.s[at + count]);
-            if (!intraword && at + count < text.len &&
-                !MiniSpace(text.s[at + count])) {
-                close = MiniFind(text, at + count, c, count);
-            }
-            if (close >= 0) {
-                if (at > plain) {
-                    MiniText(p, parent, MiniSlice(text, plain, at));
-                }
-                if (count == 3) {
-                    Node* strong = MiniNode(p, NodeKind::Strong, parent);
-                    Node* emphasis = MiniNode(p, NodeKind::Emphasis, strong);
-                    MiniInline(p, emphasis, MiniSlice(text, at + 3, close));
-                } else {
-                    markKind =
-                        count == 2 ? NodeKind::Strong : NodeKind::Emphasis;
-                    Node* marked = MiniNode(p, markKind, parent);
-                    MiniInline(p, marked, MiniSlice(text, at + count, close));
-                }
-                at = close + count;
-                plain = at;
-                continue;
-            }
-        }
-
-        if (c == '\\' && at + 1 < text.len) {
-            char next = text.s[at + 1];
-            if (p->options->constructs.hardBreakEscape &&
-                (next == '\n' || next == '\r')) {
-                if (at > plain) {
-                    MiniText(p, parent, MiniSlice(text, plain, at));
-                }
-                MiniNode(p, NodeKind::Break, parent);
-                at +=
-                    next == '\r' && at + 2 < text.len && text.s[at + 2] == '\n'
-                        ? 3
-                        : 2;
-                plain = at;
-                continue;
-            }
-            if (p->options->constructs.characterEscape &&
-                MiniPunctuation(next)) {
-                if (at > plain) {
-                    MiniText(p, parent, MiniSlice(text, plain, at));
-                }
-                MiniText(p, parent, MiniSlice(text, at + 1, at + 2));
-                at += 2;
-                plain = at;
-                continue;
-            }
-        }
-
-        if (p->options->constructs.characterReference && c == '&') {
-            Str value = {};
-            if (MiniEntity(p, text, at, &after, &value)) {
-                if (at > plain) {
-                    MiniText(p, parent, MiniSlice(text, plain, at));
-                }
-                MiniText(p, parent, value);
-                at = after;
-                plain = at;
-                continue;
-            }
-        }
-
-        if (c == '\n' || c == '\r') {
-            int32_t textEnd = at;
-            bool hard = false;
-            if (p->options->constructs.hardBreakTrailing) {
-                int32_t spaces = 0;
-                while (textEnd > plain && text.s[textEnd - 1] == ' ') {
-                    textEnd--;
-                    spaces++;
-                }
-                hard = spaces >= 2;
-                if (!hard) {
-                    textEnd = at;
-                }
-            }
-            if (textEnd > plain) {
-                MiniText(p, parent, MiniSlice(text, plain, textEnd));
-            }
-            if (hard) {
-                MiniNode(p, NodeKind::Break, parent);
-            } else {
-                MiniText(p, parent, StrL(" "));
-            }
-            at += c == '\r' && at + 1 < text.len && text.s[at + 1] == '\n' ? 2
-                                                                           : 1;
-            plain = at;
-            continue;
-        }
-        at++;
-    }
-    if (text.len > plain) {
-        MiniText(p, parent, MiniSlice(text, plain, text.len));
-    }
-}
-
-static bool MiniAtx(Str line, int32_t* level, Str* content) {
-    int32_t at = MiniIndent(line);
-    if (at > 3) {
-        return false;
-    }
-    int32_t count = 0;
-    while (at + count < line.len && line.s[at + count] == '#' && count < 7) {
-        count++;
-    }
-    if (count < 1 || count > 6 ||
-        (at + count < line.len && !MiniSpace(line.s[at + count]))) {
-        return false;
-    }
-    int32_t start = at + count;
-    while (start < line.len && MiniSpace(line.s[start])) {
-        start++;
-    }
-    int32_t end = line.len;
-    while (end > start && MiniSpace(line.s[end - 1])) {
-        end--;
-    }
-    int32_t hashEnd = end;
-    while (end > start && line.s[end - 1] == '#') {
-        end--;
-    }
-    if (end == hashEnd || (end > start && !MiniSpace(line.s[end - 1]))) {
-        end = hashEnd;
-    } else {
-        while (end > start && MiniSpace(line.s[end - 1])) {
-            end--;
-        }
-    }
-    *level = count;
-    *content = MiniSlice(line, start, end);
-    return true;
-}
-
-static bool MiniSetext(Str line, int32_t* level) {
-    Str value = MiniTrim(line);
-    if (value.len <= 0 || (value.s[0] != '=' && value.s[0] != '-')) {
-        return false;
-    }
-    char marker = value.s[0];
-    int32_t count = 0;
-    for (int32_t i = 0; i < value.len; i++) {
-        if (value.s[i] == marker) {
-            count++;
-        } else if (!MiniSpace(value.s[i])) {
-            return false;
-        }
-    }
-    if (count == 0) {
-        return false;
-    }
-    *level = marker == '=' ? 1 : 2;
-    return true;
-}
-
-static bool MiniThematic(Str line) {
-    Str value = MiniTrim(line);
-    if (value.len < 3 ||
-        (value.s[0] != '*' && value.s[0] != '-' && value.s[0] != '_')) {
-        return false;
-    }
-    char marker = value.s[0];
-    int32_t count = 0;
-    for (int32_t i = 0; i < value.len; i++) {
-        if (value.s[i] == marker) {
-            count++;
-        } else if (!MiniSpace(value.s[i])) {
-            return false;
-        }
-    }
-    return count >= 3;
-}
-
-static bool MiniFence(Str line, char* marker, int32_t* count, Str* info) {
-    int32_t at = MiniIndent(line);
-    if (at > 3 || at >= line.len || (line.s[at] != '`' && line.s[at] != '~')) {
-        return false;
-    }
-    char c = line.s[at];
-    int32_t n = 0;
-    while (at + n < line.len && line.s[at + n] == c) {
-        n++;
-    }
-    if (n < 3) {
-        return false;
-    }
-    *marker = c;
-    *count = n;
-    *info = MiniTrim(MiniSlice(line, at + n, line.len));
-    return true;
-}
-
-static bool MiniFenceClose(Str line, char marker, int32_t count) {
-    int32_t at = MiniIndent(line);
-    if (at > 3) {
-        return false;
-    }
-    int32_t n = 0;
-    while (at + n < line.len && line.s[at + n] == marker) {
-        n++;
-    }
-    if (n < count) {
-        return false;
-    }
-    for (int32_t i = at + n; i < line.len; i++) {
-        if (!MiniSpace(line.s[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static MiniListMarker MiniList(Str line) {
-    MiniListMarker out;
-    int32_t at = MiniIndent(line);
-    if (at > 3 || at >= line.len) {
-        return out;
-    }
-    out.indent = at;
-    char c = line.s[at];
-    if (c == '-' || c == '+' || c == '*') {
-        if (at + 1 < line.len && !MiniSpace(line.s[at + 1])) {
-            return out;
-        }
-        out.valid = true;
-        out.content = at + 1 < line.len ? at + 2 : line.len;
-        while (out.content < line.len && MiniSpace(line.s[out.content]) &&
-               out.content < at + 5) {
-            out.content++;
-        }
-        return out;
-    }
-    if (!MiniDigit(c)) {
-        return out;
-    }
-    int32_t value = 0;
-    int32_t digits = 0;
-    while (at + digits < line.len && MiniDigit(line.s[at + digits]) &&
-           digits < 9) {
-        value = value * 10 + line.s[at + digits] - '0';
-        digits++;
-    }
-    int32_t mark = at + digits;
-    if (digits == 0 || mark >= line.len ||
-        (line.s[mark] != '.' && line.s[mark] != ')') ||
-        (mark + 1 < line.len && !MiniSpace(line.s[mark + 1]))) {
-        return out;
-    }
-    out.valid = true;
-    out.ordered = true;
-    out.start = value;
-    out.content = mark + 1 < line.len ? mark + 2 : line.len;
-    while (out.content < line.len && MiniSpace(line.s[out.content]) &&
-           out.content < mark + 5) {
-        out.content++;
-    }
-    return out;
-}
-
-static bool MiniQuote(Str line, int32_t* content) {
-    int32_t at = MiniIndent(line);
-    if (at > 3 || at >= line.len || line.s[at] != '>') {
-        return false;
-    }
-    at++;
-    if (at < line.len && line.s[at] == ' ') {
-        at++;
-    }
-    *content = at;
-    return true;
-}
-
-static Str MiniCopiedLines(MiniParser* p, int32_t start, int32_t end,
-                           int32_t stripFirst, int32_t stripRest) {
-    char* out = (char*)Alloc(p->a, end - start + 1);
-    if (!out) {
-        return {};
-    }
-    int32_t used = 0;
-    int32_t at = start;
-    bool first = true;
-    while (at < end) {
-        MiniLine line = MiniReadLine(p->source, at);
-        if (line.end > end) {
-            line.end = end;
-            line.next = end;
-        }
-        Str value = MiniLineText(p->source, line);
-        int32_t cut =
-            first ? (stripFirst < value.len ? stripFirst : value.len) : 0;
-        if (!first) {
-            while (cut < value.len && cut < stripRest &&
-                   MiniSpace(value.s[cut])) {
-                cut++;
-            }
-        }
-        if (value.len > cut) {
-            memcpy(out + used, value.s + cut, (size_t)(value.len - cut));
-            used += value.len - cut;
-        }
-        at = line.next;
-        if (at < end) {
-            out[used++] = '\n';
-        }
-        first = false;
-    }
-    out[used] = 0;
-    return Str(out, used);
-}
-
-static void MiniBlocks(MiniParser* p, Node* parent, int32_t start, int32_t end);
-
-static int32_t MiniCodeFence(MiniParser* p, Node* parent,
-                             const MiniLine& opening, char marker,
-                             int32_t count, Str info, int32_t end) {
-    int32_t contentStart = opening.next;
-    int32_t at = contentStart;
-    int32_t contentEnd = end;
-    int32_t after = end;
-    while (at < end) {
-        MiniLine line = MiniReadLine(p->source, at);
-        if (MiniFenceClose(MiniLineText(p->source, line), marker, count)) {
-            contentEnd = at;
-            after = line.next;
-            break;
-        }
-        at = line.next;
-    }
-    while (contentEnd > contentStart && (p->source.s[contentEnd - 1] == '\n' ||
-                                         p->source.s[contentEnd - 1] == '\r')) {
-        contentEnd--;
-    }
-    Node* code = MiniNode(p, NodeKind::Code, parent);
-    NodeSetStr(p->a, code, NodeStrKind::Value,
-               MiniSlice(p->source, contentStart, contentEnd));
-    int32_t split = 0;
-    while (split < info.len && !MiniSpace(info.s[split])) {
-        split++;
-    }
-    NodeSetStr(p->a, code, NodeStrKind::Lang, MiniSlice(info, 0, split));
-    NodeSetStr(p->a, code, NodeStrKind::Meta,
-               MiniTrim(MiniSlice(info, split, info.len)));
-    return after;
-}
-
-static int32_t MiniBlockquote(MiniParser* p, Node* parent, int32_t start,
-                              int32_t end) {
-    int32_t at = start;
-    int32_t cap = end - start + 1;
-    char* out = (char*)Alloc(p->a, cap);
-    if (!out) {
-        return end;
-    }
-    int32_t used = 0;
-    while (at < end) {
-        MiniLine line = MiniReadLine(p->source, at);
-        Str value = MiniLineText(p->source, line);
-        int32_t content = 0;
-        if (!MiniQuote(value, &content)) {
-            if (!MiniBlank(value)) {
-                break;
-            }
-            MiniLine next = MiniReadLine(p->source, line.next);
-            int32_t ignored = 0;
-            if (line.next >= end ||
-                !MiniQuote(MiniLineText(p->source, next), &ignored)) {
-                break;
-            }
-            content = value.len;
-        }
-        if (used > 0) {
-            out[used++] = '\n';
-        }
-        if (value.len > content) {
-            memcpy(out + used, value.s + content,
-                   (size_t)(value.len - content));
-            used += value.len - content;
-        }
-        at = line.next;
-    }
-    out[used] = 0;
-    Node* quote = MiniNode(p, NodeKind::Blockquote, parent);
-    MiniParser nested = *p;
-    nested.source = Str(out, used);
-    MiniBlocks(&nested, quote, 0, used);
-    return at;
-}
-
-static int32_t MiniListBlock(MiniParser* p, Node* parent, int32_t start,
-                             int32_t end, MiniListMarker first) {
-    Node* list = MiniNode(p, NodeKind::List, parent);
-    list->Set(NodeOrdered, first.ordered);
-    list->Set(NodeHasStart, first.ordered);
-    if (first.ordered) {
-        NodeSetPerKind(p->a, list, (uint32_t)first.start);
-    }
-    int32_t at = start;
-    while (at < end) {
-        MiniLine opening = MiniReadLine(p->source, at);
-        Str openingText = MiniLineText(p->source, opening);
-        MiniListMarker marker = MiniList(openingText);
-        if (!marker.valid || marker.ordered != first.ordered ||
-            marker.indent != first.indent) {
-            break;
-        }
-        int32_t itemStart = at;
-        int32_t scan = opening.next;
-        int32_t itemEnd = scan;
-        bool spread = false;
-        bool sawBlank = false;
-        while (scan < end) {
-            MiniLine line = MiniReadLine(p->source, scan);
-            Str value = MiniLineText(p->source, line);
-            if (MiniBlank(value)) {
-                sawBlank = true;
-                itemEnd = line.next;
-                scan = line.next;
-                continue;
-            }
-            MiniListMarker next = MiniList(value);
-            if (next.valid && next.ordered == first.ordered &&
-                next.indent == first.indent) {
-                spread = spread || sawBlank;
-                break;
-            }
-            int32_t indent = MiniIndent(value);
-            if (indent <= first.indent) {
-                break;
-            }
-            spread = spread || sawBlank;
-            itemEnd = line.next;
-            scan = line.next;
-        }
-        Node* item = MiniNode(p, NodeKind::ListItem, list);
-        item->Set(NodeSpread, spread);
-        list->Set(NodeSpread, list->Has(NodeSpread) || spread);
-
-        Str copied = MiniCopiedLines(p, itemStart, itemEnd, marker.content,
-                                     marker.content);
-        MiniParser nested = *p;
-        nested.source = copied;
-        MiniBlocks(&nested, item, 0, copied.len);
-        at = scan;
-    }
-    return at;
-}
-
-static bool MiniBlockStart(MiniParser* p, Str line) {
-    int32_t level = 0;
-    Str content = {};
-    char marker = 0;
-    int32_t count = 0;
-    Str info = {};
-    int32_t quote = 0;
-    return (p->options->constructs.headingAtx &&
-            MiniAtx(line, &level, &content)) ||
-           (p->options->constructs.codeFenced &&
-            MiniFence(line, &marker, &count, &info)) ||
-           (p->options->constructs.blockQuote && MiniQuote(line, &quote)) ||
-           (p->options->constructs.thematicBreak && MiniThematic(line)) ||
-           (p->options->constructs.listItem && MiniList(line).valid) ||
-           (p->options->constructs.codeIndented && MiniIndent(line) >= 4);
-}
-
-static void MiniBlocks(MiniParser* p, Node* parent, int32_t start,
-                       int32_t end) {
-    int32_t at = start;
-    while (at < end) {
-        MiniLine line = MiniReadLine(p->source, at);
-        Str text = MiniLineText(p->source, line);
-        if (MiniBlank(text)) {
-            at = line.next;
-            continue;
-        }
-
-        int32_t level = 0;
-        Str content = {};
-        if (p->options->constructs.headingAtx &&
-            MiniAtx(text, &level, &content)) {
-            Node* heading = MiniNode(p, NodeKind::Heading, parent);
-            NodeSetPerKind(p->a, heading, (uint32_t)level);
-            MiniInline(p, heading, content);
-            at = line.next;
-            continue;
-        }
-
-        char fenceMarker = 0;
-        int32_t fenceCount = 0;
-        Str info = {};
-        if (p->options->constructs.codeFenced &&
-            MiniFence(text, &fenceMarker, &fenceCount, &info)) {
-            at = MiniCodeFence(p, parent, line, fenceMarker, fenceCount, info,
-                               end);
-            continue;
-        }
-
-        int32_t quoteContent = 0;
-        if (p->options->constructs.blockQuote &&
-            MiniQuote(text, &quoteContent)) {
-            at = MiniBlockquote(p, parent, at, end);
-            continue;
-        }
-
-        if (p->options->constructs.thematicBreak && MiniThematic(text)) {
-            MiniNode(p, NodeKind::ThematicBreak, parent);
-            at = line.next;
-            continue;
-        }
-
-        MiniListMarker list = MiniList(text);
-        if (p->options->constructs.listItem && list.valid) {
-            at = MiniListBlock(p, parent, at, end, list);
-            continue;
-        }
-
-        if (p->options->constructs.codeIndented && MiniIndent(text) >= 4) {
-            int32_t scan = at;
-            while (scan < end) {
-                MiniLine codeLine = MiniReadLine(p->source, scan);
-                Str codeText = MiniLineText(p->source, codeLine);
-                if (!MiniBlank(codeText) && MiniIndent(codeText) < 4) {
-                    break;
-                }
-                scan = codeLine.next;
-            }
-            Str value = MiniCopiedLines(p, at, scan, 4, 4);
-            while (value.len > 0 && value.s[value.len - 1] == '\n') {
-                value.len--;
-            }
-            Node* code = MiniNode(p, NodeKind::Code, parent);
-            NodeSetStr(p->a, code, NodeStrKind::Value, value);
-            at = scan;
-            continue;
-        }
-
-        MiniLine next = MiniReadLine(p->source, line.next);
-        if (p->options->constructs.headingSetext && line.next < end &&
-            MiniSetext(MiniLineText(p->source, next), &level)) {
-            Node* heading = MiniNode(p, NodeKind::Heading, parent);
-            NodeSetPerKind(p->a, heading, (uint32_t)level);
-            MiniInline(p, heading, MiniTrim(text));
-            at = next.next;
-            continue;
-        }
-
-        int32_t paragraphEnd = line.end;
-        int32_t scan = line.next;
-        while (scan < end) {
-            MiniLine part = MiniReadLine(p->source, scan);
-            Str partText = MiniLineText(p->source, part);
-            if (MiniBlank(partText) || MiniBlockStart(p, partText)) {
-                break;
-            }
-            paragraphEnd = part.end;
-            scan = part.next;
-        }
-        Node* paragraph = MiniNode(p, NodeKind::Paragraph, parent);
-        MiniInline(p, paragraph,
-                   MiniSlice(p->source, line.start, paragraphEnd));
-        at = scan;
-    }
-}
-
-Constructs Constructs::Gfm() {
-    Constructs constructs;
-
-    constructs.gfmAutolinkLiteral = true;
-    constructs.gfmFootnoteDefinition = true;
-    constructs.gfmLabelStartFootnote = true;
-    constructs.gfmStrikethrough = true;
-    constructs.gfmTable = true;
-    constructs.gfmTaskListItem = true;
-    return constructs;
-}
-
-ParseOptions ParseOptions::Gfm() {
-    ParseOptions options;
-    options.constructs = Constructs::Gfm();
-    return options;
-}
-
-Node* ToMdast(Arena* a, Str source, const ParseOptions& options) {
-    if (!a) {
-        return nullptr;
-    }
-    MiniParser parser;
-    parser.a = a;
-    parser.source = source;
-    parser.options = &options;
-    Node* root = NodeNew(a, NodeKind::Root);
-    if (root && source.s && source.len > 0) {
-        MiniBlocks(&parser, root, 0, source.len);
-    }
-    return root;
-}
-
-Str DecodeNamed(Arena* a, Str name) {
-    const char* value = nullptr;
-    if (base::StrEq(name, StrL("amp")) || base::StrEq(name, StrL("AMP"))) {
-        value = "&";
-    } else if (base::StrEq(name, StrL("lt")) || base::StrEq(name, StrL("LT"))) {
-        value = "<";
-    } else if (base::StrEq(name, StrL("gt")) || base::StrEq(name, StrL("GT"))) {
-        value = ">";
-    } else if (base::StrEq(name, StrL("quot")) ||
-               base::StrEq(name, StrL("QUOT"))) {
-        value = "\"";
-    } else if (base::StrEq(name, StrL("apos"))) {
-        value = "'";
-    } else if (base::StrEq(name, StrL("nbsp"))) {
-        value = "\xc2\xa0";
-    }
-    return value ? MiniOwn(a, Str((char*)value)) : Str{};
-}
-
-Str DecodeNumeric(Arena* a, Str value, int radix) {
-    uint32_t cp = 0;
-    bool bad = value.len <= 0 || (radix != 10 && radix != 16);
-    for (int32_t i = 0; !bad && i < value.len; i++) {
-        uint8_t c = (uint8_t)value.s[i];
-        uint32_t digit = 0;
-        if (c >= '0' && c <= '9') {
-            digit = (uint32_t)(c - '0');
-        } else if (c >= 'a' && c <= 'f') {
-            digit = (uint32_t)(c - 'a' + 10);
-        } else if (c >= 'A' && c <= 'F') {
-            digit = (uint32_t)(c - 'A' + 10);
-        } else {
-            bad = true;
-            break;
-        }
-        if (digit >= (uint32_t)radix ||
-            cp > (0x10ffffu - digit) / (uint32_t)radix) {
-            bad = true;
-            break;
-        }
-        cp = cp * (uint32_t)radix + digit;
-    }
-    bad = bad || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ||
-          cp <= 0x08 || cp == 0x0b || (cp >= 0x0e && cp <= 0x1f) ||
-          (cp >= 0x7f && cp <= 0x9f);
-    if (bad) {
+static void AppendCp(Arena* a, StrBuilder& out, uint32_t cp) {
+    if (cp == 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
         cp = 0xfffd;
     }
-    return MiniOwn(a, MiniUtf8Temp(cp));
+    char bytes[4];
+    int n = EncodeUtf8(bytes, cp);
+    StrBuilderAppend(a, out, Str(bytes, n));
 }
 
-}
-
-#line 1 "src/markdown/mdast.cpp"
-
-namespace markdown {
-
-using base::Alloc;
-
-Node* NodeNew(Arena* a, NodeKind kind) {
-
-    void* mem = a->Push(sizeof(Node), alignof(Node), false);
-    if (!mem) {
-        return nullptr;
+static ArenaStr Decode(Arena* a, Str value) {
+    bool needsDecode = false;
+    for (int i = 0; i < value.len; i++) {
+        if (value.s[i] == '&') {
+            needsDecode = true;
+            break;
+        }
     }
-    Node* node = new (mem) Node();
+    if (!needsDecode) return ArenaStrDup(a, value);
+
+    StrBuilder out;
+    StrBuilderReserve(a, out, value.len);
+    for (int i = 0; i < value.len;) {
+        if (value.s[i] != '&') {
+            StrBuilderAppendChar(a, out, value.s[i++]);
+            continue;
+        }
+        int start = i++;
+        if (i < value.len && value.s[i] == '#') {
+            i++;
+            int radix = 10;
+            if (i < value.len && (value.s[i] == 'x' || value.s[i] == 'X')) {
+                radix = 16;
+                i++;
+            }
+            int digits = i;
+            uint32_t cp = 0;
+            while (i < value.len) {
+                char c = value.s[i];
+                int d = c >= '0' && c <= '9'                  ? c - '0'
+                        : radix == 16 && c >= 'a' && c <= 'f' ? c - 'a' + 10
+                        : radix == 16 && c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                                              : -1;
+                if (d < 0) break;
+                cp = cp * (uint32_t)radix + (uint32_t)d;
+                i++;
+            }
+            if (i == digits) {
+                i = start + 1;
+                StrBuilderAppendChar(a, out, '&');
+                continue;
+            }
+            if (i < value.len && value.s[i] == ';') i++;
+            AppendCp(a, out, cp);
+            continue;
+        }
+        int end = i;
+        while (end < value.len && Alpha(value.s[end])) end++;
+        Str decoded = {};
+        int used = 0;
+        for (int n = end - i; n > 0; n--) {
+            int ix = SeqStrIndex(kEntityNames, Str(value.s + i, n));
+            if (ix >= 0) {
+                decoded = SeqStrByIndex(kEntityValues, ix);
+                used = n;
+                break;
+            }
+        }
+        if (!decoded.s) {
+            i = start + 1;
+            StrBuilderAppendChar(a, out, '&');
+            continue;
+        }
+        StrBuilderAppend(a, out, decoded);
+        i += used;
+        if (i < value.len && value.s[i] == ';') i++;
+    }
+    return ArenaStrDup(a, StrBuilderTakeStr(a, out));
+}
+
+struct Lex {
+    Arena* a = nullptr;
+    Str source = {};
+    int at = 0;
+    int line = 1;
+    TokenSink sink = nullptr;
+    void* user = nullptr;
+    TokenizerOptions options = {};
+};
+
+static void Emit(Lex* l, const Token& token) {
+    if (l->sink) l->sink(l->user, &token);
+}
+
+static void SkipSpace(Lex* l) {
+    while (l->at < l->source.len && Space(l->source.s[l->at])) {
+        if (l->source.s[l->at++] == '\n') l->line++;
+    }
+}
+
+static ArenaStr Name(Lex* l) {
+    int start = l->at;
+    while (l->at < l->source.len && NameChar(l->source.s[l->at])) l->at++;
+    return Lower(l->a, Str(l->source.s + start, l->at - start));
+}
+
+static Attribute* Attrs(Lex* l, bool* selfClose) {
+    Attribute* first = nullptr;
+    Attribute* last = nullptr;
+    *selfClose = false;
+    for (;;) {
+        SkipSpace(l);
+        if (l->at >= l->source.len) return first;
+        if (l->source.s[l->at] == '>') {
+            l->at++;
+            return first;
+        }
+        if (l->source.s[l->at] == '/' && l->at + 1 < l->source.len &&
+            l->source.s[l->at + 1] == '>') {
+            l->at += 2;
+            *selfClose = true;
+            return first;
+        }
+        int start = l->at;
+        while (l->at < l->source.len && NameChar(l->source.s[l->at])) l->at++;
+        if (start == l->at) {
+            l->at++;
+            continue;
+        }
+        ArenaStr name = Lower(l->a, Str(l->source.s + start, l->at - start));
+        SkipSpace(l);
+        ArenaStr value = {};
+        if (l->at < l->source.len && l->source.s[l->at] == '=') {
+            l->at++;
+            SkipSpace(l);
+            char quote = 0;
+            if (l->at < l->source.len &&
+                (l->source.s[l->at] == '\'' || l->source.s[l->at] == '"')) {
+                quote = l->source.s[l->at++];
+            }
+            start = l->at;
+            while (l->at < l->source.len &&
+                   (quote ? l->source.s[l->at] != quote
+                          : !Space(l->source.s[l->at]) &&
+                                l->source.s[l->at] != '>')) {
+                l->at++;
+            }
+            value = Decode(l->a, Str(l->source.s + start, l->at - start));
+            if (quote && l->at < l->source.len) l->at++;
+        }
+        Attribute* attr = ArenaNew<Attribute>(l->a);
+        attr->name = name;
+        attr->value = value;
+        if (last)
+            last->next = ArenaPtrOf(l->a, attr);
+        else
+            first = attr;
+        last = attr;
+    }
+}
+
+static int RawEnd(Lex* l, Str name) {
+    for (int i = l->at; i + name.len + 2 <= l->source.len; i++) {
+        if (l->source.s[i] == '<' && l->source.s[i + 1] == '/' &&
+            StrEqI(Str(l->source.s + i + 2, name.len), name)) {
+            return i;
+        }
+    }
+    return l->source.len;
+}
+
+void Tokenize(Arena* a, Str source, TokenSink sink, void* user,
+              TokenizerOptions options) {
+    if (!a || !sink) return;
+    Lex l;
+    l.a = a;
+    l.source = source;
+    l.sink = sink;
+    l.user = user;
+    l.options = options;
+    Str rawName = {};
+    while (l.at < source.len) {
+        if (rawName.s) {
+            int end = RawEnd(&l, rawName);
+            Token token;
+            token.kind = TokenKind::Character;
+            token.data = ArenaStrDup(a, Str(source.s + l.at, end - l.at));
+            token.line = l.line;
+            l.at = end;
+            rawName = {};
+            Emit(&l, token);
+            continue;
+        }
+        if (source.s[l.at] != '<') {
+            int start = l.at;
+            while (l.at < source.len && source.s[l.at] != '<') l.at++;
+            Token token;
+            token.kind = TokenKind::Character;
+            token.data = Decode(a, Str(source.s + start, l.at - start));
+            token.line = l.line;
+            Emit(&l, token);
+            continue;
+        }
+        if (l.at + 3 < source.len &&
+            StrEq(Str(source.s + l.at, 4), StrL("<!--"))) {
+            l.at += 4;
+            int start = l.at;
+            while (l.at + 2 < source.len &&
+                   !(source.s[l.at] == '-' && source.s[l.at + 1] == '-' &&
+                     source.s[l.at + 2] == '>')) {
+                l.at++;
+            }
+            Token token;
+            token.kind = TokenKind::Comment;
+            token.data = ArenaStrDup(a, Str(source.s + start, l.at - start));
+            if (l.at + 2 < source.len) l.at += 3;
+            Emit(&l, token);
+            continue;
+        }
+        if (l.at + 1 < source.len && source.s[l.at + 1] == '!') {
+            l.at += 2;
+            while (l.at < source.len && source.s[l.at] != '>') l.at++;
+            if (l.at < source.len) l.at++;
+            continue;
+        }
+        Token token;
+        token.line = l.line;
+        if (l.at + 1 < source.len && source.s[l.at + 1] == '/') {
+            l.at += 2;
+            token.kind = TokenKind::EndTag;
+            token.name = Name(&l);
+            while (l.at < source.len && source.s[l.at] != '>') l.at++;
+            if (l.at < source.len) l.at++;
+        } else if (l.at + 1 < source.len && Alpha(source.s[l.at + 1])) {
+            l.at++;
+            token.kind = TokenKind::StartTag;
+            token.name = Name(&l);
+            token.attrs = ArenaPtrOf(a, Attrs(&l, &token.selfClosing));
+            if (!token.selfClosing &&
+                SeqStrContainsI(kRawElements, TokenName(a, &token))) {
+                rawName = TokenName(a, &token);
+            }
+        } else {
+            token.kind = TokenKind::Character;
+            token.data = ArenaStrDup(a, Str(source.s + l.at++, 1));
+        }
+        Emit(&l, token);
+    }
+    Token eof;
+    eof.kind = TokenKind::Eof;
+    eof.line = l.line;
+    Emit(&l, eof);
+}
+
+static Node* NewNode(Arena* a, NodeKind kind, Str name = {}) {
+    Node* node = ArenaNew<Node>(a);
     node->kind = kind;
+    node->name = ArenaStrDup(a, name);
     return node;
 }
 
-bool NodeHasChildren(NodeKind kind) {
-    switch (kind) {
-        case NodeKind::Root:
-        case NodeKind::Paragraph:
-        case NodeKind::Heading:
-        case NodeKind::Blockquote:
-        case NodeKind::List:
-        case NodeKind::ListItem:
-        case NodeKind::Emphasis:
-        case NodeKind::Strong:
-        case NodeKind::Link:
-        case NodeKind::LinkReference:
-        case NodeKind::FootnoteDefinition:
-        case NodeKind::Table:
-        case NodeKind::TableRow:
-        case NodeKind::TableCell:
-        case NodeKind::Delete:
-            return true;
-        default:
-            return false;
-    }
+static void Append(Arena* a, Node* parent, Node* child) {
+    child->parent = ArenaPtrOf(a, parent);
+    Node* last = NodeLast(a, parent);
+    if (last)
+        last->next = ArenaPtrOf(a, child);
+    else
+        parent->first = ArenaPtrOf(a, child);
+    parent->last = ArenaPtrOf(a, child);
 }
 
-static bool NodeHasOwnValue(const Node* node) {
-    switch (node->kind) {
-        case NodeKind::Toml:
-        case NodeKind::Yaml:
-        case NodeKind::InlineCode:
-        case NodeKind::InlineMath:
-        case NodeKind::Html:
-        case NodeKind::Text:
-        case NodeKind::Code:
-        case NodeKind::Math:
-            return true;
-        default:
-            return false;
-    }
-}
+struct Build {
+    Arena* a = nullptr;
+    Node* doc = nullptr;
+    ArenaVec<Node*> stack{};
+    ParseOptions options = {};
+};
 
-static int32_t NodeToStringLen(Arena* a, const Node* node) {
-    if (NodeHasChildren(node->kind)) {
-        int32_t len = 0;
-        for (const Node* child : NodeKids(a, node)) {
-            len += NodeToStringLen(a, child);
+static void OnToken(void* user, const Token* token) {
+    Build* b = (Build*)user;
+    Node* parent = b->stack.len ? b->stack[b->stack.len - 1] : b->doc;
+    if (token->kind == TokenKind::Character) {
+        if (ArenaStrLen(b->a, token->data) <= 0) return;
+        Node* node = NewNode(b->a, NodeKind::Text);
+        node->data = token->data;
+        Append(b->a, parent, node);
+    } else if (token->kind == TokenKind::Comment) {
+        Node* node = NewNode(b->a, NodeKind::Comment);
+        node->data = token->data;
+        Append(b->a, parent, node);
+    } else if (token->kind == TokenKind::Doctype && !b->options.dropDoctype) {
+        Node* node = NewNode(b->a, NodeKind::Doctype);
+        node->name = token->name;
+        Append(b->a, parent, node);
+    } else if (token->kind == TokenKind::StartTag) {
+        Str name = TokenName(b->a, token);
+        Node* node = NewNode(b->a, NodeKind::Element);
+        node->name = token->name;
+        node->attrs = token->attrs;
+        Append(b->a, parent, node);
+        if (!token->selfClosing && !SeqStrContainsI(kVoidElements, name)) {
+            b->stack.Append(b->a, node);
         }
-        return len;
-    }
-    if (!NodeHasOwnValue(node)) {
-        return 0;
-    }
-    return NodeGetStrLen(a, node, NodeStrKind::Value);
-}
-
-static int32_t NodeToStringFill(Arena* a, const Node* node, char* out,
-                                int32_t at) {
-    if (NodeHasChildren(node->kind)) {
-        for (const Node* child : NodeKids(a, node)) {
-            at = NodeToStringFill(a, child, out, at);
-        }
-        return at;
-    }
-    Str value =
-        NodeHasOwnValue(node) ? NodeGetStr(a, node, NodeStrKind::Value) : Str{};
-    if (value.len > 0) {
-        memcpy(out + at, value.s, (size_t)value.len);
-        at += value.len;
-    }
-    return at;
-}
-
-Str NodeToString(Arena* a, const Node* node) {
-
-    int32_t len = NodeToStringLen(a, node);
-    char* out = (char*)Alloc(a, len + 1);
-    if (!out) {
-        return {};
-    }
-    int32_t at = NodeToStringFill(a, node, out, 0);
-    out[at] = 0;
-    return Str(out, at);
-}
-
-constexpr int32_t kRecNext = 0;
-constexpr int32_t kRecKind = 4;
-constexpr int32_t kRecLen = 5;
-
-static char* RecAt(Arena* a, ArenaStr off) {
-    return off == kArenaStrNone ? nullptr : (char*)base::ArenaAtOffset(a, off);
-}
-
-static ArenaStr RecNext(const char* rec) {
-    ArenaStr next = kArenaStrNone;
-    memcpy(&next, rec + kRecNext, sizeof(next));
-    return next;
-}
-
-static void RecSetNext(char* rec, ArenaStr next) {
-    memcpy(rec + kRecNext, &next, sizeof(next));
-}
-
-static Str RecStr(const char* rec, int32_t* headOut = nullptr) {
-    uint32_t len = 0;
-    int32_t head = kRecLen + base::VarintGet(rec + kRecLen, &len);
-    if (headOut) {
-        *headOut = head;
-    }
-    return Str((char*)rec + head, (int32_t)len);
-}
-
-static char* FindRec(Arena* a, const Node* n, NodeStrKind k, char** prevOut) {
-    char* prev = nullptr;
-    for (ArenaStr at = n->firstStr; at != kArenaStrNone;) {
-        char* rec = RecAt(a, at);
-        if (!rec) {
-            break;
-        }
-        if ((NodeStrKind)(uint8_t)rec[kRecKind] == k) {
-            if (prevOut) {
-                *prevOut = prev;
+    } else if (token->kind == TokenKind::EndTag) {
+        for (int i = b->stack.len - 1; i >= 0; i--) {
+            if (StrEqI(NodeName(b->a, b->stack[i]), TokenName(b->a, token))) {
+                b->stack.Truncate(i);
+                break;
             }
-            return rec;
         }
-        prev = rec;
-        at = RecNext(rec);
     }
-    if (prevOut) {
-        *prevOut = nullptr;
+}
+
+static Node* Parse(Arena* a, Str source, ParseOptions options) {
+    if (!a) return nullptr;
+    Build build;
+    build.a = a;
+    build.options = options;
+    build.doc = NewNode(a, NodeKind::Document);
+    Tokenize(a, source, OnToken, &build, options.tokenizer);
+    return build.doc;
+}
+
+Node* ParseDocument(Arena* a, Str source, ParseOptions options) {
+    return Parse(a, source, options);
+}
+
+Node* ParseFragment(Arena* a, Str source, Str context, ParseOptions options) {
+    (void)context;
+    return Parse(a, source, options);
+}
+
+const Attribute* Attr(Arena* a, const Node* node, Str name) {
+    for (const Attribute* at = NodeAttrs(a, node); at;
+         at = AttributeNext(a, at)) {
+        if (StrEqI(AttributeName(a, at), name)) return at;
     }
     return nullptr;
 }
 
-static char* RecNew(Arena* a, Node* n, NodeStrKind k, uint32_t len,
-                    int32_t* headOut) {
-    int32_t head = kRecLen + base::VarintSize(len);
-
-    char* rec = (char*)a->Push((uint64_t)head + len + 1, 1, false);
-    if (!rec) {
-        return nullptr;
-    }
-    ArenaStr at = (ArenaStr)base::ArenaOffsetOf(a, rec);
-    RecSetNext(rec, n->firstStr);
-    rec[kRecKind] = (char)(uint8_t)k;
-    base::VarintPut(rec + kRecLen, len);
-    rec[head + len] = 0;
-    n->firstStr = at;
-    *headOut = head;
-    return rec;
+Str AttrValue(Arena* a, const Node* node, Str name) {
+    return AttributeValue(a, Attr(a, node, name));
 }
 
-Str NodeGetStr(Arena* a, const Node* n, NodeStrKind k) {
-    char* rec = FindRec(a, n, k, nullptr);
-    return rec ? RecStr(rec) : Str{};
-}
-
-int32_t NodeGetStrLen(Arena* a, const Node* n, NodeStrKind k) {
-    char* rec = FindRec(a, n, k, nullptr);
-    return rec ? RecStr(rec).len : 0;
-}
-
-bool NodeHasStr(Arena* a, const Node* n, NodeStrKind k) {
-    return FindRec(a, n, k, nullptr) != nullptr;
-}
-
-void NodeClearStr(Arena* a, Node* n, NodeStrKind k) {
-    char* prev = nullptr;
-    char* rec = FindRec(a, n, k, &prev);
-    if (!rec) {
-        return;
-    }
-
-    if (prev) {
-        RecSetNext(prev, RecNext(rec));
-    } else {
-        n->firstStr = RecNext(rec);
+static void WriteEscaped(Arena* a, StrBuilder& out, Str value, bool attribute) {
+    for (int i = 0; i < value.len; i++) {
+        char c = value.s[i];
+        if (c == '&')
+            StrBuilderAppend(a, out, StrL("&amp;"));
+        else if (c == '<')
+            StrBuilderAppend(a, out, StrL("&lt;"));
+        else if (c == '>' && !attribute)
+            StrBuilderAppend(a, out, StrL("&gt;"));
+        else if (c == '"' && attribute)
+            StrBuilderAppend(a, out, StrL("&quot;"));
+        else
+            StrBuilderAppendChar(a, out, c);
     }
 }
 
-void NodeSetStr(Arena* a, Node* n, NodeStrKind k, Str s) {
-    if (!a || !n) {
-        return;
-    }
-    NodeClearStr(a, n, k);
-    if (!s.s || s.len <= 0) {
-        return;
-    }
-    int32_t head = 0;
-    char* rec = RecNew(a, n, k, (uint32_t)s.len, &head);
-    if (rec) {
-        memcpy(rec + head, s.s, (size_t)s.len);
-    }
-}
-
-void NodeGrowStr(Arena* a, Node* n, NodeStrKind k, Str more) {
-    if (!a || !n || !more.s || more.len <= 0) {
-        return;
-    }
-    char* prev = nullptr;
-    char* rec = FindRec(a, n, k, &prev);
-    if (!rec) {
-        NodeSetStr(a, n, k, more);
-        return;
-    }
-
-    int32_t head = 0;
-    Str had = RecStr(rec, &head);
-    uint32_t nlen = (uint32_t)had.len + (uint32_t)more.len;
-    int32_t nhead = kRecLen + base::VarintSize(nlen);
-
-    uint64_t used = base::ArenaUsed(a);
-    uint64_t end = (uint64_t)base::ArenaOffsetOf(a, rec) + (uint64_t)head +
-                   (uint64_t)had.len + 1;
-
-    bool newest = end == used;
-    uint64_t want = newest ? (uint64_t)(nhead - head) + (uint64_t)more.len
-                           : (uint64_t)nhead + nlen + 1;
-    char* dst = (char*)a->Push(want, 1, false);
-    if (!dst) {
-        return;
-    }
-    uint64_t at = base::ArenaOffsetOf(a, dst);
-
-    if (newest && at == used) {
-        if (nhead != head) {
-            memmove(rec + nhead, rec + head, (size_t)had.len);
+static void Write(Arena* a, StrBuilder& out, const Node* node, bool include) {
+    bool element = node->kind == NodeKind::Element;
+    if (include && node->kind == NodeKind::Text) {
+        const Node* parent = NodeParent(a, node);
+        if (parent && SeqStrContainsI(kRawElements, NodeName(a, parent)))
+            StrBuilderAppend(a, out, NodeData(a, node));
+        else
+            WriteEscaped(a, out, NodeData(a, node), false);
+    } else if (include && node->kind == NodeKind::Comment) {
+        StrBuilderAppend(a, out, StrL("<!--"));
+        StrBuilderAppend(a, out, NodeData(a, node));
+        StrBuilderAppend(a, out, StrL("-->"));
+    } else if (include && element) {
+        StrBuilderAppendChar(a, out, '<');
+        StrBuilderAppend(a, out, NodeName(a, node));
+        for (const Attribute* at = NodeAttrs(a, node); at;
+             at = AttributeNext(a, at)) {
+            StrBuilderAppendChar(a, out, ' ');
+            StrBuilderAppend(a, out, AttributeName(a, at));
+            StrBuilderAppend(a, out, StrL("=\""));
+            WriteEscaped(a, out, AttributeValue(a, at), true);
+            StrBuilderAppendChar(a, out, '"');
         }
-        base::VarintPut(rec + kRecLen, nlen);
-        memcpy(rec + nhead + had.len, more.s, (size_t)more.len);
-        rec[nhead + nlen] = 0;
-        return;
+        StrBuilderAppendChar(a, out, '>');
     }
-
-    dst[kRecKind] = (char)(uint8_t)k;
-    base::VarintPut(dst + kRecLen, nlen);
-    memcpy(dst + nhead, had.s, (size_t)had.len);
-    memcpy(dst + nhead + had.len, more.s, (size_t)more.len);
-    dst[nhead + nlen] = 0;
-    if (prev) {
-        RecSetNext(prev, RecNext(rec));
-    } else {
-        n->firstStr = RecNext(rec);
+    for (const Node* child = NodeFirst(a, node); child;
+         child = NodeNext(a, child)) {
+        Write(a, out, child, true);
     }
-    RecSetNext(dst, n->firstStr);
-    n->firstStr = (ArenaStr)at;
+    if (include && element &&
+        !SeqStrContainsI(kVoidElements, NodeName(a, node))) {
+        StrBuilderAppend(a, out, StrL("</"));
+        StrBuilderAppend(a, out, NodeName(a, node));
+        StrBuilderAppendChar(a, out, '>');
+    }
 }
 
-uint32_t NodePerKind(Arena* a, const Node* n) {
-    char* rec = FindRec(a, n, NodeStrKind::PerKind, nullptr);
-    if (!rec) {
-        return 0;
-    }
-    uint32_t word = 0;
-    Str bytes = RecStr(rec);
-    base::VarintGet(bytes.s, &word);
-    return word;
-}
-
-void NodeSetPerKind(Arena* a, Node* n, uint32_t word) {
-    base::TempStr buf = base::AllocStrTemp(8);
-    buf.len = base::VarintPut(buf.s, word);
-    NodeSetStr(a, n, NodeStrKind::PerKind, buf);
-}
-
-static uint8_t* AlignAt(Arena* a, ArenaAlign al, int32_t* count) {
-    *count = 0;
-    if (al == kArenaAlignNone) {
-        return nullptr;
-    }
-    char* p = (char*)base::ArenaAtOffset(a, al);
-    if (!p) {
-        return nullptr;
-    }
-    uint32_t n = 0;
-    int head = base::VarintGet(p, &n);
-    *count = (int32_t)n;
-    return (uint8_t*)p + head;
-}
-
-ArenaAlign ArenaAlignNew(Arena* a, int32_t count) {
-    if (!a || count <= 0) {
-        return kArenaAlignNone;
-    }
-    int32_t head = base::VarintSize((uint32_t)count);
-    int32_t bytes = (count + 3) / 4;
-
-    char* mem = (char*)a->Push((uint64_t)head + (uint64_t)bytes, 1, false);
-    if (!mem) {
-        return kArenaAlignNone;
-    }
-    memset(mem, 0, (size_t)head + (size_t)bytes);
-    base::VarintPut(mem, (uint32_t)count);
-    return (ArenaAlign)base::ArenaOffsetOf(a, mem);
-}
-
-int32_t ArenaAlignCount(Arena* a, ArenaAlign al) {
-    int32_t count = 0;
-    AlignAt(a, al, &count);
-    return count;
-}
-
-AlignKind ArenaAlignAt(Arena* a, ArenaAlign al, int32_t i) {
-    int32_t count = 0;
-    uint8_t* bits = AlignAt(a, al, &count);
-    if (!bits || i < 0 || i >= count) {
-        return AlignKind::None;
-    }
-    return (AlignKind)((bits[i / 4] >> ((i % 4) * 2)) & 3);
-}
-
-void ArenaAlignSet(Arena* a, ArenaAlign al, int32_t i, AlignKind k) {
-    int32_t count = 0;
-    uint8_t* bits = AlignAt(a, al, &count);
-    if (!bits || i < 0 || i >= count) {
-        return;
-    }
-    int32_t shift = (i % 4) * 2;
-    uint8_t was = (uint8_t)(bits[i / 4] & ~(3 << shift));
-    bits[i / 4] = (uint8_t)(was | (((uint8_t)k & 3) << shift));
-}
-
-UnistPosition GetUnistPosition(Str md, uint32_t start, uint32_t end) {
-    UnistPosition out;
-    int32_t line = 1;
-    int32_t column = 1;
-    int32_t at = 0;
-    int32_t stop = (int32_t)end;
-    if (!md.s) {
-        return out;
-    }
-    if (stop > md.len) {
-        stop = md.len;
-    }
-    bool haveStart = false;
-    while (at <= stop) {
-        if (!haveStart && at == (int32_t)start) {
-            out.start = UnistPoint{line, column, at};
-            haveStart = true;
-        }
-        if (at == stop) {
-            break;
-        }
-        uint8_t byte = (uint8_t)md.s[at];
-        if (byte == '\r' && at + 1 < md.len && md.s[at + 1] == '\n') {
-
-            at += 1;
-            continue;
-        }
-        if (byte == '\n' || byte == '\r') {
-            line += 1;
-            column = 1;
-            at += 1;
-            continue;
-        }
-        if (byte == '\t') {
-            int32_t remainder = column % kTabSize;
-            column += remainder == 0 ? 1 : 1 + kTabSize - remainder;
-            at += 1;
-            continue;
-        }
-        column += 1;
-        at += 1;
-    }
-    if (!haveStart) {
-
-        out.start = UnistPoint{line, column, at};
-    }
-    out.end = UnistPoint{line, column, at};
-    return out;
+Str Serialize(Arena* a, const Node* node, SerializeOptions options) {
+    if (!a || !node) return {};
+    StrBuilder out;
+    Write(a, out, node, options.includeNode);
+    return StrBuilderTakeStr(a, out);
 }
 
 }

@@ -18,18 +18,8 @@ float StrToFloatUnchecked(Str s) {
     if (!s.s || s.len <= 0) {
         return 0;
     }
-    char local[128];
-    char* buf = local;
-    if (s.len >= (int)sizeof(local)) {
-        Str temp = AllocStrTemp(s.len);
-        if (!temp.s) {
-            return 0;
-        }
-        buf = temp.s;
-    }
-    memcpy(buf, s.s, (size_t)s.len);
-    buf[s.len] = 0;
-    return strtof(buf, nullptr);
+    TempStr text = StrDupTemp(s);
+    return text.s ? strtof(text.s, nullptr) : 0;
 }
 
 int StrToIntUnchecked(Str s) {
@@ -597,7 +587,7 @@ void DestroyTempArena() {
     gTempArena = nullptr;
 }
 
-Str AllocStrTemp(int size) {
+TempStr AllocStrTemp(int size) {
     if (size == 0) {
         return {};
     }
@@ -605,6 +595,31 @@ Str AllocStrTemp(int size) {
     char* res = (char*)arena->Push((uint64_t)size + 1, 1, false);
     res[size] = 0;
     return Str(res, size);
+}
+
+TempStr StrDupTemp(Str s) {
+    return StrDup(GetTempArena(), s);
+}
+
+TempStr ReadBoundedFileTemp(Str path, int limit) {
+    if (!path || limit <= 0) {
+        return {};
+    }
+    TempStr pathZ = StrDupTemp(path);
+    FILE* file = fopen(pathZ.s, "rb");
+    if (!file) {
+        return {};
+    }
+    TempStr result = AllocStrTemp(limit);
+    size_t n = fread(result.s, 1, (size_t)limit + 1, file);
+    bool ok = !ferror(file) && n <= (size_t)limit;
+    fclose(file);
+    if (!ok) {
+        return {};
+    }
+    result.s[n] = 0;
+    result.len = (int)n;
+    return result;
 }
 
 GPUI_NOINLINE void* ArenaVecAlloc(Arena* a, int count, int elSize, int align,
@@ -1045,6 +1060,15 @@ bool StrEq(Str s1, const char* s2) {
     return StrEq(s1, Str(s2));
 }
 
+int StrCmp(Str s1, Str s2) {
+    int common = std::min(s1.len, s2.len);
+    int cmp = common > 0 ? memcmp(s1.s, s2.s, (size_t)common) : 0;
+    if (cmp != 0) {
+        return cmp;
+    }
+    return s1.len < s2.len ? -1 : s1.len > s2.len ? 1 : 0;
+}
+
 GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2) {
     if (s1.s == s2.s || s1.len == 0) {
         return true;
@@ -1231,20 +1255,24 @@ bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut) {
 }
 
 static int SeqStrIndexCmp(SeqStrings strs, Str toFind, bool ignoreCase) {
-    if (!strs || !toFind) {
-        return -1;
-    }
-    int off = 0;
+    if (!strs || !toFind) return -1;
+    const char* candidate = strs;
     int idx = 0;
-    while (strs[off]) {
-        Str at = SeqStrAt(strs, off);
-        bool same = ignoreCase ? StrEqI(at, toFind) : StrEq(at, toFind);
-        if (same) {
-            return idx;
+    while (*candidate) {
+        int i = 0;
+        while (i < toFind.len && candidate[i]) {
+            char a = candidate[i];
+            char b = toFind.s[i];
+            if (ignoreCase) {
+                if (a >= 'A' && a <= 'Z') a = (char)(a + ('a' - 'A'));
+                if (b >= 'A' && b <= 'Z') b = (char)(b + ('a' - 'A'));
+            }
+            if (a != b) break;
+            i++;
         }
-        if (!SeqStrAdvance(strs, off)) {
-            break;
-        }
+        if (i == toFind.len && !candidate[i]) return idx;
+        while (*candidate) candidate++;
+        candidate++;
         idx++;
     }
     return -1;
@@ -1256,6 +1284,10 @@ int SeqStrIndex(SeqStrings strs, Str toFind) {
 
 int SeqStrIndexIS(SeqStrings strs, Str toFind) {
     return SeqStrIndexCmp(strs, toFind, true);
+}
+
+bool SeqStrContainsI(SeqStrings strs, Str toFind) {
+    return SeqStrIndexCmp(strs, toFind, true) >= 0;
 }
 
 Str SeqStrByIndex(SeqStrings strs, int idx) {
@@ -14076,8 +14108,8 @@ static int32_t NodeToStringFill(Arena* a, const Node* node, char* out,
         }
         return at;
     }
-    Str value = NodeHasOwnValue(node) ? NodeGetStr(a, node, NodeStrKind::Value)
-                                      : Str{};
+    Str value =
+        NodeHasOwnValue(node) ? NodeGetStr(a, node, NodeStrKind::Value) : Str{};
     if (value.len > 0) {
         memcpy(out + at, value.s, (size_t)value.len);
         at += value.len;
@@ -14272,9 +14304,9 @@ uint32_t NodePerKind(Arena* a, const Node* n) {
 }
 
 void NodeSetPerKind(Arena* a, Node* n, uint32_t word) {
-    char buf[8];
-    int len = base::VarintPut(buf, word);
-    NodeSetStr(a, n, NodeStrKind::PerKind, Str(buf, len));
+    base::TempStr buf = base::AllocStrTemp(8);
+    buf.len = base::VarintPut(buf.s, word);
+    NodeSetStr(a, n, NodeStrKind::PerKind, buf);
 }
 
 static uint8_t* AlignAt(Arena* a, ArenaAlign al, int32_t* count) {
@@ -14600,645 +14632,332 @@ Vec<Event> Parse(ParseState* parseState) {
 
 namespace markdown {
 
-State Call(Tokenizer* t, StateName name) {
-    switch (name) {
-        case StateName::AttentionStart:
-            return AttentionStart(t);
-        case StateName::AttentionInside:
-            return AttentionInside(t);
-        case StateName::AutolinkStart:
-            return AutolinkStart(t);
-        case StateName::AutolinkOpen:
-            return AutolinkOpen(t);
-        case StateName::AutolinkSchemeOrEmailAtext:
-            return AutolinkSchemeOrEmailAtext(t);
-        case StateName::AutolinkSchemeInsideOrEmailAtext:
-            return AutolinkSchemeInsideOrEmailAtext(t);
-        case StateName::AutolinkUrlInside:
-            return AutolinkUrlInside(t);
-        case StateName::AutolinkEmailAtSignOrDot:
-            return AutolinkEmailAtSignOrDot(t);
-        case StateName::AutolinkEmailAtext:
-            return AutolinkEmailAtext(t);
-        case StateName::AutolinkEmailValue:
-            return AutolinkEmailValue(t);
-        case StateName::AutolinkEmailLabel:
-            return AutolinkEmailLabel(t);
-        case StateName::BlankLineStart:
-            return BlankLineStart(t);
-        case StateName::BlankLineAfter:
-            return BlankLineAfter(t);
-        case StateName::BlockQuoteStart:
-            return BlockQuoteStart(t);
-        case StateName::BlockQuoteContStart:
-            return BlockQuoteContStart(t);
-        case StateName::BlockQuoteContBefore:
-            return BlockQuoteContBefore(t);
-        case StateName::BlockQuoteContAfter:
-            return BlockQuoteContAfter(t);
-        case StateName::BomStart:
-            return BomStart(t);
-        case StateName::BomInside:
-            return BomInside(t);
-        case StateName::CharacterEscapeStart:
-            return CharacterEscapeStart(t);
-        case StateName::CharacterEscapeInside:
-            return CharacterEscapeInside(t);
-        case StateName::CharacterReferenceStart:
-            return CharacterReferenceStart(t);
-        case StateName::CharacterReferenceOpen:
-            return CharacterReferenceOpen(t);
-        case StateName::CharacterReferenceNumeric:
-            return CharacterReferenceNumeric(t);
-        case StateName::CharacterReferenceValue:
-            return CharacterReferenceValue(t);
-        case StateName::CodeIndentedStart:
-            return CodeIndentedStart(t);
-        case StateName::CodeIndentedAtBreak:
-            return CodeIndentedAtBreak(t);
-        case StateName::CodeIndentedAfter:
-            return CodeIndentedAfter(t);
-        case StateName::CodeIndentedFurtherStart:
-            return CodeIndentedFurtherStart(t);
-        case StateName::CodeIndentedInside:
-            return CodeIndentedInside(t);
-        case StateName::CodeIndentedFurtherBegin:
-            return CodeIndentedFurtherBegin(t);
-        case StateName::CodeIndentedFurtherAfter:
-            return CodeIndentedFurtherAfter(t);
-        case StateName::ContentChunkStart:
-            return ContentChunkStart(t);
-        case StateName::ContentChunkInside:
-            return ContentChunkInside(t);
-        case StateName::ContentDefinitionBefore:
-            return ContentDefinitionBefore(t);
-        case StateName::ContentDefinitionAfter:
-            return ContentDefinitionAfter(t);
-        case StateName::DataStart:
-            return DataStart(t);
-        case StateName::DataInside:
-            return DataInside(t);
-        case StateName::DataAtBreak:
-            return DataAtBreak(t);
-        case StateName::DefinitionStart:
-            return DefinitionStart(t);
-        case StateName::DefinitionBefore:
-            return DefinitionBefore(t);
-        case StateName::DefinitionLabelAfter:
-            return DefinitionLabelAfter(t);
-        case StateName::DefinitionLabelNok:
-            return DefinitionLabelNok(t);
-        case StateName::DefinitionMarkerAfter:
-            return DefinitionMarkerAfter(t);
-        case StateName::DefinitionDestinationBefore:
-            return DefinitionDestinationBefore(t);
-        case StateName::DefinitionDestinationAfter:
-            return DefinitionDestinationAfter(t);
-        case StateName::DefinitionDestinationMissing:
-            return DefinitionDestinationMissing(t);
-        case StateName::DefinitionTitleBefore:
-            return DefinitionTitleBefore(t);
-        case StateName::DefinitionAfter:
-            return DefinitionAfter(t);
-        case StateName::DefinitionAfterWhitespace:
-            return DefinitionAfterWhitespace(t);
-        case StateName::DefinitionTitleBeforeMarker:
-            return DefinitionTitleBeforeMarker(t);
-        case StateName::DefinitionTitleAfter:
-            return DefinitionTitleAfter(t);
-        case StateName::DefinitionTitleAfterOptionalWhitespace:
-            return DefinitionTitleAfterOptionalWhitespace(t);
-        case StateName::DestinationStart:
-            return DestinationStart(t);
-        case StateName::DestinationEnclosedBefore:
-            return DestinationEnclosedBefore(t);
-        case StateName::DestinationEnclosed:
-            return DestinationEnclosed(t);
-        case StateName::DestinationEnclosedEscape:
-            return DestinationEnclosedEscape(t);
-        case StateName::DestinationRaw:
-            return DestinationRaw(t);
-        case StateName::DestinationRawEscape:
-            return DestinationRawEscape(t);
-        case StateName::DocumentStart:
-            return DocumentStart(t);
-        case StateName::DocumentBeforeFrontmatter:
-            return DocumentBeforeFrontmatter(t);
-        case StateName::DocumentContainerExistingBefore:
-            return DocumentContainerExistingBefore(t);
-        case StateName::DocumentContainerExistingAfter:
-            return DocumentContainerExistingAfter(t);
-        case StateName::DocumentContainerNewBefore:
-            return DocumentContainerNewBefore(t);
-        case StateName::DocumentContainerNewBeforeNotBlockQuote:
-            return DocumentContainerNewBeforeNotBlockQuote(t);
-        case StateName::DocumentContainerNewBeforeNotList:
-            return DocumentContainerNewBeforeNotList(t);
-        case StateName::DocumentContainerNewBeforeNotGfmFootnoteDefinition:
-            return DocumentContainerNewBeforeNotGfmFootnoteDefinition(t);
-        case StateName::DocumentContainerNewAfter:
-            return DocumentContainerNewAfter(t);
-        case StateName::DocumentContainersAfter:
-            return DocumentContainersAfter(t);
-        case StateName::DocumentFlowInside:
-            return DocumentFlowInside(t);
-        case StateName::DocumentFlowEnd:
-            return DocumentFlowEnd(t);
-        case StateName::FlowStart:
-            return FlowStart(t);
-        case StateName::FlowBeforeGfmTable:
-            return FlowBeforeGfmTable(t);
-        case StateName::FlowBeforeCodeIndented:
-            return FlowBeforeCodeIndented(t);
-        case StateName::FlowBeforeRaw:
-            return FlowBeforeRaw(t);
-        case StateName::FlowBeforeHtml:
-            return FlowBeforeHtml(t);
-        case StateName::FlowBeforeHeadingAtx:
-            return FlowBeforeHeadingAtx(t);
-        case StateName::FlowBeforeHeadingSetext:
-            return FlowBeforeHeadingSetext(t);
-        case StateName::FlowBeforeThematicBreak:
-            return FlowBeforeThematicBreak(t);
-        case StateName::FlowAfter:
-            return FlowAfter(t);
-        case StateName::FlowBlankLineBefore:
-            return FlowBlankLineBefore(t);
-        case StateName::FlowBlankLineAfter:
-            return FlowBlankLineAfter(t);
-        case StateName::FlowBeforeContent:
-            return FlowBeforeContent(t);
-        case StateName::FrontmatterStart:
-            return FrontmatterStart(t);
-        case StateName::FrontmatterOpenSequence:
-            return FrontmatterOpenSequence(t);
-        case StateName::FrontmatterOpenAfter:
-            return FrontmatterOpenAfter(t);
-        case StateName::FrontmatterAfter:
-            return FrontmatterAfter(t);
-        case StateName::FrontmatterContentStart:
-            return FrontmatterContentStart(t);
-        case StateName::FrontmatterContentInside:
-            return FrontmatterContentInside(t);
-        case StateName::FrontmatterContentEnd:
-            return FrontmatterContentEnd(t);
-        case StateName::FrontmatterCloseStart:
-            return FrontmatterCloseStart(t);
-        case StateName::FrontmatterCloseSequence:
-            return FrontmatterCloseSequence(t);
-        case StateName::FrontmatterCloseAfter:
-            return FrontmatterCloseAfter(t);
-        case StateName::GfmAutolinkLiteralProtocolStart:
-            return GfmAutolinkLiteralProtocolStart(t);
-        case StateName::GfmAutolinkLiteralProtocolAfter:
-            return GfmAutolinkLiteralProtocolAfter(t);
-        case StateName::GfmAutolinkLiteralProtocolPrefixInside:
-            return GfmAutolinkLiteralProtocolPrefixInside(t);
-        case StateName::GfmAutolinkLiteralProtocolSlashesInside:
-            return GfmAutolinkLiteralProtocolSlashesInside(t);
-        case StateName::GfmAutolinkLiteralWwwStart:
-            return GfmAutolinkLiteralWwwStart(t);
-        case StateName::GfmAutolinkLiteralWwwAfter:
-            return GfmAutolinkLiteralWwwAfter(t);
-        case StateName::GfmAutolinkLiteralWwwPrefixInside:
-            return GfmAutolinkLiteralWwwPrefixInside(t);
-        case StateName::GfmAutolinkLiteralWwwPrefixAfter:
-            return GfmAutolinkLiteralWwwPrefixAfter(t);
-        case StateName::GfmAutolinkLiteralDomainInside:
-            return GfmAutolinkLiteralDomainInside(t);
-        case StateName::GfmAutolinkLiteralDomainAtPunctuation:
-            return GfmAutolinkLiteralDomainAtPunctuation(t);
-        case StateName::GfmAutolinkLiteralDomainAfter:
-            return GfmAutolinkLiteralDomainAfter(t);
-        case StateName::GfmAutolinkLiteralPathInside:
-            return GfmAutolinkLiteralPathInside(t);
-        case StateName::GfmAutolinkLiteralPathAtPunctuation:
-            return GfmAutolinkLiteralPathAtPunctuation(t);
-        case StateName::GfmAutolinkLiteralPathAfter:
-            return GfmAutolinkLiteralPathAfter(t);
-        case StateName::GfmAutolinkLiteralTrail:
-            return GfmAutolinkLiteralTrail(t);
-        case StateName::GfmAutolinkLiteralTrailCharRefInside:
-            return GfmAutolinkLiteralTrailCharRefInside(t);
-        case StateName::GfmAutolinkLiteralTrailCharRefStart:
-            return GfmAutolinkLiteralTrailCharRefStart(t);
-        case StateName::GfmAutolinkLiteralTrailBracketAfter:
-            return GfmAutolinkLiteralTrailBracketAfter(t);
-        case StateName::GfmFootnoteDefinitionStart:
-            return GfmFootnoteDefinitionStart(t);
-        case StateName::GfmFootnoteDefinitionLabelBefore:
-            return GfmFootnoteDefinitionLabelBefore(t);
-        case StateName::GfmFootnoteDefinitionLabelAtMarker:
-            return GfmFootnoteDefinitionLabelAtMarker(t);
-        case StateName::GfmFootnoteDefinitionLabelInside:
-            return GfmFootnoteDefinitionLabelInside(t);
-        case StateName::GfmFootnoteDefinitionLabelEscape:
-            return GfmFootnoteDefinitionLabelEscape(t);
-        case StateName::GfmFootnoteDefinitionLabelAfter:
-            return GfmFootnoteDefinitionLabelAfter(t);
-        case StateName::GfmFootnoteDefinitionWhitespaceAfter:
-            return GfmFootnoteDefinitionWhitespaceAfter(t);
-        case StateName::GfmFootnoteDefinitionContStart:
-            return GfmFootnoteDefinitionContStart(t);
-        case StateName::GfmFootnoteDefinitionContBlank:
-            return GfmFootnoteDefinitionContBlank(t);
-        case StateName::GfmFootnoteDefinitionContFilled:
-            return GfmFootnoteDefinitionContFilled(t);
-        case StateName::GfmLabelStartFootnoteStart:
-            return GfmLabelStartFootnoteStart(t);
-        case StateName::GfmLabelStartFootnoteOpen:
-            return GfmLabelStartFootnoteOpen(t);
-        case StateName::GfmTaskListItemCheckStart:
-            return GfmTaskListItemCheckStart(t);
-        case StateName::GfmTaskListItemCheckInside:
-            return GfmTaskListItemCheckInside(t);
-        case StateName::GfmTaskListItemCheckClose:
-            return GfmTaskListItemCheckClose(t);
-        case StateName::GfmTaskListItemCheckAfter:
-            return GfmTaskListItemCheckAfter(t);
-        case StateName::GfmTaskListItemCheckAfterSpaceOrTab:
-            return GfmTaskListItemCheckAfterSpaceOrTab(t);
-        case StateName::GfmTableStart:
-            return GfmTableStart(t);
-        case StateName::GfmTableHeadRowBefore:
-            return GfmTableHeadRowBefore(t);
-        case StateName::GfmTableHeadRowStart:
-            return GfmTableHeadRowStart(t);
-        case StateName::GfmTableHeadRowBreak:
-            return GfmTableHeadRowBreak(t);
-        case StateName::GfmTableHeadRowData:
-            return GfmTableHeadRowData(t);
-        case StateName::GfmTableHeadRowEscape:
-            return GfmTableHeadRowEscape(t);
-        case StateName::GfmTableHeadDelimiterStart:
-            return GfmTableHeadDelimiterStart(t);
-        case StateName::GfmTableHeadDelimiterBefore:
-            return GfmTableHeadDelimiterBefore(t);
-        case StateName::GfmTableHeadDelimiterCellBefore:
-            return GfmTableHeadDelimiterCellBefore(t);
-        case StateName::GfmTableHeadDelimiterValueBefore:
-            return GfmTableHeadDelimiterValueBefore(t);
-        case StateName::GfmTableHeadDelimiterLeftAlignmentAfter:
-            return GfmTableHeadDelimiterLeftAlignmentAfter(t);
-        case StateName::GfmTableHeadDelimiterFiller:
-            return GfmTableHeadDelimiterFiller(t);
-        case StateName::GfmTableHeadDelimiterRightAlignmentAfter:
-            return GfmTableHeadDelimiterRightAlignmentAfter(t);
-        case StateName::GfmTableHeadDelimiterCellAfter:
-            return GfmTableHeadDelimiterCellAfter(t);
-        case StateName::GfmTableHeadDelimiterNok:
-            return GfmTableHeadDelimiterNok(t);
-        case StateName::GfmTableBodyRowStart:
-            return GfmTableBodyRowStart(t);
-        case StateName::GfmTableBodyRowBreak:
-            return GfmTableBodyRowBreak(t);
-        case StateName::GfmTableBodyRowData:
-            return GfmTableBodyRowData(t);
-        case StateName::GfmTableBodyRowEscape:
-            return GfmTableBodyRowEscape(t);
-        case StateName::HardBreakEscapeStart:
-            return HardBreakEscapeStart(t);
-        case StateName::HardBreakEscapeAfter:
-            return HardBreakEscapeAfter(t);
-        case StateName::HeadingAtxStart:
-            return HeadingAtxStart(t);
-        case StateName::HeadingAtxBefore:
-            return HeadingAtxBefore(t);
-        case StateName::HeadingAtxSequenceOpen:
-            return HeadingAtxSequenceOpen(t);
-        case StateName::HeadingAtxAtBreak:
-            return HeadingAtxAtBreak(t);
-        case StateName::HeadingAtxSequenceFurther:
-            return HeadingAtxSequenceFurther(t);
-        case StateName::HeadingAtxData:
-            return HeadingAtxData(t);
-        case StateName::HeadingSetextStart:
-            return HeadingSetextStart(t);
-        case StateName::HeadingSetextBefore:
-            return HeadingSetextBefore(t);
-        case StateName::HeadingSetextInside:
-            return HeadingSetextInside(t);
-        case StateName::HeadingSetextAfter:
-            return HeadingSetextAfter(t);
-        case StateName::HtmlFlowStart:
-            return HtmlFlowStart(t);
-        case StateName::HtmlFlowBefore:
-            return HtmlFlowBefore(t);
-        case StateName::HtmlFlowOpen:
-            return HtmlFlowOpen(t);
-        case StateName::HtmlFlowDeclarationOpen:
-            return HtmlFlowDeclarationOpen(t);
-        case StateName::HtmlFlowCommentOpenInside:
-            return HtmlFlowCommentOpenInside(t);
-        case StateName::HtmlFlowCdataOpenInside:
-            return HtmlFlowCdataOpenInside(t);
-        case StateName::HtmlFlowTagCloseStart:
-            return HtmlFlowTagCloseStart(t);
-        case StateName::HtmlFlowTagName:
-            return HtmlFlowTagName(t);
-        case StateName::HtmlFlowBasicSelfClosing:
-            return HtmlFlowBasicSelfClosing(t);
-        case StateName::HtmlFlowCompleteClosingTagAfter:
-            return HtmlFlowCompleteClosingTagAfter(t);
-        case StateName::HtmlFlowCompleteEnd:
-            return HtmlFlowCompleteEnd(t);
-        case StateName::HtmlFlowCompleteAttributeNameBefore:
-            return HtmlFlowCompleteAttributeNameBefore(t);
-        case StateName::HtmlFlowCompleteAttributeName:
-            return HtmlFlowCompleteAttributeName(t);
-        case StateName::HtmlFlowCompleteAttributeNameAfter:
-            return HtmlFlowCompleteAttributeNameAfter(t);
-        case StateName::HtmlFlowCompleteAttributeValueBefore:
-            return HtmlFlowCompleteAttributeValueBefore(t);
-        case StateName::HtmlFlowCompleteAttributeValueQuoted:
-            return HtmlFlowCompleteAttributeValueQuoted(t);
-        case StateName::HtmlFlowCompleteAttributeValueQuotedAfter:
-            return HtmlFlowCompleteAttributeValueQuotedAfter(t);
-        case StateName::HtmlFlowCompleteAttributeValueUnquoted:
-            return HtmlFlowCompleteAttributeValueUnquoted(t);
-        case StateName::HtmlFlowCompleteAfter:
-            return HtmlFlowCompleteAfter(t);
-        case StateName::HtmlFlowBlankLineBefore:
-            return HtmlFlowBlankLineBefore(t);
-        case StateName::HtmlFlowContinuation:
-            return HtmlFlowContinuation(t);
-        case StateName::HtmlFlowContinuationDeclarationInside:
-            return HtmlFlowContinuationDeclarationInside(t);
-        case StateName::HtmlFlowContinuationAfter:
-            return HtmlFlowContinuationAfter(t);
-        case StateName::HtmlFlowContinuationStart:
-            return HtmlFlowContinuationStart(t);
-        case StateName::HtmlFlowContinuationBefore:
-            return HtmlFlowContinuationBefore(t);
-        case StateName::HtmlFlowContinuationCommentInside:
-            return HtmlFlowContinuationCommentInside(t);
-        case StateName::HtmlFlowContinuationRawTagOpen:
-            return HtmlFlowContinuationRawTagOpen(t);
-        case StateName::HtmlFlowContinuationRawEndTag:
-            return HtmlFlowContinuationRawEndTag(t);
-        case StateName::HtmlFlowContinuationClose:
-            return HtmlFlowContinuationClose(t);
-        case StateName::HtmlFlowContinuationCdataInside:
-            return HtmlFlowContinuationCdataInside(t);
-        case StateName::HtmlFlowContinuationStartNonLazy:
-            return HtmlFlowContinuationStartNonLazy(t);
-        case StateName::HtmlTextStart:
-            return HtmlTextStart(t);
-        case StateName::HtmlTextOpen:
-            return HtmlTextOpen(t);
-        case StateName::HtmlTextDeclarationOpen:
-            return HtmlTextDeclarationOpen(t);
-        case StateName::HtmlTextTagCloseStart:
-            return HtmlTextTagCloseStart(t);
-        case StateName::HtmlTextTagClose:
-            return HtmlTextTagClose(t);
-        case StateName::HtmlTextTagCloseBetween:
-            return HtmlTextTagCloseBetween(t);
-        case StateName::HtmlTextTagOpen:
-            return HtmlTextTagOpen(t);
-        case StateName::HtmlTextTagOpenBetween:
-            return HtmlTextTagOpenBetween(t);
-        case StateName::HtmlTextTagOpenAttributeName:
-            return HtmlTextTagOpenAttributeName(t);
-        case StateName::HtmlTextTagOpenAttributeNameAfter:
-            return HtmlTextTagOpenAttributeNameAfter(t);
-        case StateName::HtmlTextTagOpenAttributeValueBefore:
-            return HtmlTextTagOpenAttributeValueBefore(t);
-        case StateName::HtmlTextTagOpenAttributeValueQuoted:
-            return HtmlTextTagOpenAttributeValueQuoted(t);
-        case StateName::HtmlTextTagOpenAttributeValueQuotedAfter:
-            return HtmlTextTagOpenAttributeValueQuotedAfter(t);
-        case StateName::HtmlTextTagOpenAttributeValueUnquoted:
-            return HtmlTextTagOpenAttributeValueUnquoted(t);
-        case StateName::HtmlTextCdata:
-            return HtmlTextCdata(t);
-        case StateName::HtmlTextCdataOpenInside:
-            return HtmlTextCdataOpenInside(t);
-        case StateName::HtmlTextCdataClose:
-            return HtmlTextCdataClose(t);
-        case StateName::HtmlTextCdataEnd:
-            return HtmlTextCdataEnd(t);
-        case StateName::HtmlTextCommentOpenInside:
-            return HtmlTextCommentOpenInside(t);
-        case StateName::HtmlTextComment:
-            return HtmlTextComment(t);
-        case StateName::HtmlTextCommentClose:
-            return HtmlTextCommentClose(t);
-        case StateName::HtmlTextCommentEnd:
-            return HtmlTextCommentEnd(t);
-        case StateName::HtmlTextDeclaration:
-            return HtmlTextDeclaration(t);
-        case StateName::HtmlTextEnd:
-            return HtmlTextEnd(t);
-        case StateName::HtmlTextInstruction:
-            return HtmlTextInstruction(t);
-        case StateName::HtmlTextInstructionClose:
-            return HtmlTextInstructionClose(t);
-        case StateName::HtmlTextLineEndingBefore:
-            return HtmlTextLineEndingBefore(t);
-        case StateName::HtmlTextLineEndingAfter:
-            return HtmlTextLineEndingAfter(t);
-        case StateName::HtmlTextLineEndingAfterPrefix:
-            return HtmlTextLineEndingAfterPrefix(t);
-        case StateName::LabelStart:
-            return LabelStart(t);
-        case StateName::LabelAtBreak:
-            return LabelAtBreak(t);
-        case StateName::LabelEolAfter:
-            return LabelEolAfter(t);
-        case StateName::LabelEscape:
-            return LabelEscape(t);
-        case StateName::LabelInside:
-            return LabelInside(t);
-        case StateName::LabelNok:
-            return LabelNok(t);
-        case StateName::LabelEndStart:
-            return LabelEndStart(t);
-        case StateName::LabelEndAfter:
-            return LabelEndAfter(t);
-        case StateName::LabelEndResourceStart:
-            return LabelEndResourceStart(t);
-        case StateName::LabelEndResourceBefore:
-            return LabelEndResourceBefore(t);
-        case StateName::LabelEndResourceOpen:
-            return LabelEndResourceOpen(t);
-        case StateName::LabelEndResourceDestinationAfter:
-            return LabelEndResourceDestinationAfter(t);
-        case StateName::LabelEndResourceDestinationMissing:
-            return LabelEndResourceDestinationMissing(t);
-        case StateName::LabelEndResourceBetween:
-            return LabelEndResourceBetween(t);
-        case StateName::LabelEndResourceTitleAfter:
-            return LabelEndResourceTitleAfter(t);
-        case StateName::LabelEndResourceEnd:
-            return LabelEndResourceEnd(t);
-        case StateName::LabelEndOk:
-            return LabelEndOk(t);
-        case StateName::LabelEndNok:
-            return LabelEndNok(t);
-        case StateName::LabelEndReferenceFull:
-            return LabelEndReferenceFull(t);
-        case StateName::LabelEndReferenceFullAfter:
-            return LabelEndReferenceFullAfter(t);
-        case StateName::LabelEndReferenceFullMissing:
-            return LabelEndReferenceFullMissing(t);
-        case StateName::LabelEndReferenceNotFull:
-            return LabelEndReferenceNotFull(t);
-        case StateName::LabelEndReferenceCollapsed:
-            return LabelEndReferenceCollapsed(t);
-        case StateName::LabelEndReferenceCollapsedOpen:
-            return LabelEndReferenceCollapsedOpen(t);
-        case StateName::LabelStartImageStart:
-            return LabelStartImageStart(t);
-        case StateName::LabelStartImageOpen:
-            return LabelStartImageOpen(t);
-        case StateName::LabelStartImageAfter:
-            return LabelStartImageAfter(t);
-        case StateName::LabelStartLinkStart:
-            return LabelStartLinkStart(t);
-        case StateName::ListItemStart:
-            return ListItemStart(t);
-        case StateName::ListItemBefore:
-            return ListItemBefore(t);
-        case StateName::ListItemBeforeOrdered:
-            return ListItemBeforeOrdered(t);
-        case StateName::ListItemBeforeUnordered:
-            return ListItemBeforeUnordered(t);
-        case StateName::ListItemValue:
-            return ListItemValue(t);
-        case StateName::ListItemMarker:
-            return ListItemMarker(t);
-        case StateName::ListItemMarkerAfter:
-            return ListItemMarkerAfter(t);
-        case StateName::ListItemAfter:
-            return ListItemAfter(t);
-        case StateName::ListItemMarkerAfterFilled:
-            return ListItemMarkerAfterFilled(t);
-        case StateName::ListItemWhitespace:
-            return ListItemWhitespace(t);
-        case StateName::ListItemPrefixOther:
-            return ListItemPrefixOther(t);
-        case StateName::ListItemWhitespaceAfter:
-            return ListItemWhitespaceAfter(t);
-        case StateName::ListItemContStart:
-            return ListItemContStart(t);
-        case StateName::ListItemContBlank:
-            return ListItemContBlank(t);
-        case StateName::ListItemContFilled:
-            return ListItemContFilled(t);
-        case StateName::NonLazyContinuationStart:
-            return NonLazyContinuationStart(t);
-        case StateName::NonLazyContinuationAfter:
-            return NonLazyContinuationAfter(t);
-        case StateName::ParagraphStart:
-            return ParagraphStart(t);
-        case StateName::ParagraphLineStart:
-            return ParagraphLineStart(t);
-        case StateName::ParagraphInside:
-            return ParagraphInside(t);
-        case StateName::RawFlowStart:
-            return RawFlowStart(t);
-        case StateName::RawFlowBeforeSequenceOpen:
-            return RawFlowBeforeSequenceOpen(t);
-        case StateName::RawFlowSequenceOpen:
-            return RawFlowSequenceOpen(t);
-        case StateName::RawFlowInfoBefore:
-            return RawFlowInfoBefore(t);
-        case StateName::RawFlowInfo:
-            return RawFlowInfo(t);
-        case StateName::RawFlowMetaBefore:
-            return RawFlowMetaBefore(t);
-        case StateName::RawFlowMeta:
-            return RawFlowMeta(t);
-        case StateName::RawFlowAtNonLazyBreak:
-            return RawFlowAtNonLazyBreak(t);
-        case StateName::RawFlowCloseStart:
-            return RawFlowCloseStart(t);
-        case StateName::RawFlowBeforeSequenceClose:
-            return RawFlowBeforeSequenceClose(t);
-        case StateName::RawFlowSequenceClose:
-            return RawFlowSequenceClose(t);
-        case StateName::RawFlowAfterSequenceClose:
-            return RawFlowAfterSequenceClose(t);
-        case StateName::RawFlowContentBefore:
-            return RawFlowContentBefore(t);
-        case StateName::RawFlowContentStart:
-            return RawFlowContentStart(t);
-        case StateName::RawFlowBeforeContentChunk:
-            return RawFlowBeforeContentChunk(t);
-        case StateName::RawFlowContentChunk:
-            return RawFlowContentChunk(t);
-        case StateName::RawFlowAfter:
-            return RawFlowAfter(t);
-        case StateName::RawTextStart:
-            return RawTextStart(t);
-        case StateName::RawTextSequenceOpen:
-            return RawTextSequenceOpen(t);
-        case StateName::RawTextBetween:
-            return RawTextBetween(t);
-        case StateName::RawTextData:
-            return RawTextData(t);
-        case StateName::RawTextSequenceClose:
-            return RawTextSequenceClose(t);
-        case StateName::SpaceOrTabStart:
-            return SpaceOrTabStart(t);
-        case StateName::SpaceOrTabInside:
-            return SpaceOrTabInside(t);
-        case StateName::SpaceOrTabAfter:
-            return SpaceOrTabAfter(t);
-        case StateName::SpaceOrTabEolStart:
-            return SpaceOrTabEolStart(t);
-        case StateName::SpaceOrTabEolAfterFirst:
-            return SpaceOrTabEolAfterFirst(t);
-        case StateName::SpaceOrTabEolAfterEol:
-            return SpaceOrTabEolAfterEol(t);
-        case StateName::SpaceOrTabEolAtEol:
-            return SpaceOrTabEolAtEol(t);
-        case StateName::SpaceOrTabEolAfterMore:
-            return SpaceOrTabEolAfterMore(t);
-        case StateName::StringStart:
-            return StringStart(t);
-        case StateName::StringBefore:
-            return StringBefore(t);
-        case StateName::StringBeforeData:
-            return StringBeforeData(t);
-        case StateName::TextStart:
-            return TextStart(t);
-        case StateName::TextBefore:
-            return TextBefore(t);
-        case StateName::TextBeforeHtml:
-            return TextBeforeHtml(t);
-        case StateName::TextBeforeHardBreakEscape:
-            return TextBeforeHardBreakEscape(t);
-        case StateName::TextBeforeLabelStartLink:
-            return TextBeforeLabelStartLink(t);
-        case StateName::TextBeforeData:
-            return TextBeforeData(t);
-        case StateName::ThematicBreakStart:
-            return ThematicBreakStart(t);
-        case StateName::ThematicBreakBefore:
-            return ThematicBreakBefore(t);
-        case StateName::ThematicBreakSequence:
-            return ThematicBreakSequence(t);
-        case StateName::ThematicBreakAtBreak:
-            return ThematicBreakAtBreak(t);
-        case StateName::TitleStart:
-            return TitleStart(t);
-        case StateName::TitleBegin:
-            return TitleBegin(t);
-        case StateName::TitleAfterEol:
-            return TitleAfterEol(t);
-        case StateName::TitleAtBreak:
-            return TitleAtBreak(t);
-        case StateName::TitleEscape:
-            return TitleEscape(t);
-        case StateName::TitleInside:
-            return TitleInside(t);
-        case StateName::TitleNok:
-            return TitleNok(t);
-    }
+using StateFn = State (*)(Tokenizer*);
 
-    return StateNok();
+static StateFn const kStateFns[] = {
+    AttentionStart,
+    AttentionInside,
+    AutolinkStart,
+    AutolinkOpen,
+    AutolinkSchemeOrEmailAtext,
+    AutolinkSchemeInsideOrEmailAtext,
+    AutolinkUrlInside,
+    AutolinkEmailAtSignOrDot,
+    AutolinkEmailAtext,
+    AutolinkEmailValue,
+    AutolinkEmailLabel,
+    BlankLineStart,
+    BlankLineAfter,
+    BlockQuoteStart,
+    BlockQuoteContStart,
+    BlockQuoteContBefore,
+    BlockQuoteContAfter,
+    BomStart,
+    BomInside,
+    CharacterEscapeStart,
+    CharacterEscapeInside,
+    CharacterReferenceStart,
+    CharacterReferenceOpen,
+    CharacterReferenceNumeric,
+    CharacterReferenceValue,
+    CodeIndentedStart,
+    CodeIndentedAtBreak,
+    CodeIndentedAfter,
+    CodeIndentedFurtherStart,
+    CodeIndentedInside,
+    CodeIndentedFurtherBegin,
+    CodeIndentedFurtherAfter,
+    ContentChunkStart,
+    ContentChunkInside,
+    ContentDefinitionBefore,
+    ContentDefinitionAfter,
+    DataStart,
+    DataInside,
+    DataAtBreak,
+    DefinitionStart,
+    DefinitionBefore,
+    DefinitionLabelAfter,
+    DefinitionLabelNok,
+    DefinitionMarkerAfter,
+    DefinitionDestinationBefore,
+    DefinitionDestinationAfter,
+    DefinitionDestinationMissing,
+    DefinitionTitleBefore,
+    DefinitionAfter,
+    DefinitionAfterWhitespace,
+    DefinitionTitleBeforeMarker,
+    DefinitionTitleAfter,
+    DefinitionTitleAfterOptionalWhitespace,
+    DestinationStart,
+    DestinationEnclosedBefore,
+    DestinationEnclosed,
+    DestinationEnclosedEscape,
+    DestinationRaw,
+    DestinationRawEscape,
+    DocumentStart,
+    DocumentBeforeFrontmatter,
+    DocumentContainerExistingBefore,
+    DocumentContainerExistingAfter,
+    DocumentContainerNewBefore,
+    DocumentContainerNewBeforeNotBlockQuote,
+    DocumentContainerNewBeforeNotList,
+    DocumentContainerNewBeforeNotGfmFootnoteDefinition,
+    DocumentContainerNewAfter,
+    DocumentContainersAfter,
+    DocumentFlowInside,
+    DocumentFlowEnd,
+    FlowStart,
+    FlowBeforeGfmTable,
+    FlowBeforeCodeIndented,
+    FlowBeforeRaw,
+    FlowBeforeHtml,
+    FlowBeforeHeadingAtx,
+    FlowBeforeHeadingSetext,
+    FlowBeforeThematicBreak,
+    FlowAfter,
+    FlowBlankLineBefore,
+    FlowBlankLineAfter,
+    FlowBeforeContent,
+    FrontmatterStart,
+    FrontmatterOpenSequence,
+    FrontmatterOpenAfter,
+    FrontmatterAfter,
+    FrontmatterContentStart,
+    FrontmatterContentInside,
+    FrontmatterContentEnd,
+    FrontmatterCloseStart,
+    FrontmatterCloseSequence,
+    FrontmatterCloseAfter,
+    GfmAutolinkLiteralProtocolStart,
+    GfmAutolinkLiteralProtocolAfter,
+    GfmAutolinkLiteralProtocolPrefixInside,
+    GfmAutolinkLiteralProtocolSlashesInside,
+    GfmAutolinkLiteralWwwStart,
+    GfmAutolinkLiteralWwwAfter,
+    GfmAutolinkLiteralWwwPrefixInside,
+    GfmAutolinkLiteralWwwPrefixAfter,
+    GfmAutolinkLiteralDomainInside,
+    GfmAutolinkLiteralDomainAtPunctuation,
+    GfmAutolinkLiteralDomainAfter,
+    GfmAutolinkLiteralPathInside,
+    GfmAutolinkLiteralPathAtPunctuation,
+    GfmAutolinkLiteralPathAfter,
+    GfmAutolinkLiteralTrail,
+    GfmAutolinkLiteralTrailCharRefInside,
+    GfmAutolinkLiteralTrailCharRefStart,
+    GfmAutolinkLiteralTrailBracketAfter,
+    GfmFootnoteDefinitionStart,
+    GfmFootnoteDefinitionLabelBefore,
+    GfmFootnoteDefinitionLabelAtMarker,
+    GfmFootnoteDefinitionLabelInside,
+    GfmFootnoteDefinitionLabelEscape,
+    GfmFootnoteDefinitionLabelAfter,
+    GfmFootnoteDefinitionWhitespaceAfter,
+    GfmFootnoteDefinitionContStart,
+    GfmFootnoteDefinitionContBlank,
+    GfmFootnoteDefinitionContFilled,
+    GfmLabelStartFootnoteStart,
+    GfmLabelStartFootnoteOpen,
+    GfmTaskListItemCheckStart,
+    GfmTaskListItemCheckInside,
+    GfmTaskListItemCheckClose,
+    GfmTaskListItemCheckAfter,
+    GfmTaskListItemCheckAfterSpaceOrTab,
+    GfmTableStart,
+    GfmTableHeadRowBefore,
+    GfmTableHeadRowStart,
+    GfmTableHeadRowBreak,
+    GfmTableHeadRowData,
+    GfmTableHeadRowEscape,
+    GfmTableHeadDelimiterStart,
+    GfmTableHeadDelimiterBefore,
+    GfmTableHeadDelimiterCellBefore,
+    GfmTableHeadDelimiterValueBefore,
+    GfmTableHeadDelimiterLeftAlignmentAfter,
+    GfmTableHeadDelimiterFiller,
+    GfmTableHeadDelimiterRightAlignmentAfter,
+    GfmTableHeadDelimiterCellAfter,
+    GfmTableHeadDelimiterNok,
+    GfmTableBodyRowStart,
+    GfmTableBodyRowBreak,
+    GfmTableBodyRowData,
+    GfmTableBodyRowEscape,
+    HardBreakEscapeStart,
+    HardBreakEscapeAfter,
+    HeadingAtxStart,
+    HeadingAtxBefore,
+    HeadingAtxSequenceOpen,
+    HeadingAtxAtBreak,
+    HeadingAtxSequenceFurther,
+    HeadingAtxData,
+    HeadingSetextStart,
+    HeadingSetextBefore,
+    HeadingSetextInside,
+    HeadingSetextAfter,
+    HtmlFlowStart,
+    HtmlFlowBefore,
+    HtmlFlowOpen,
+    HtmlFlowDeclarationOpen,
+    HtmlFlowCommentOpenInside,
+    HtmlFlowCdataOpenInside,
+    HtmlFlowTagCloseStart,
+    HtmlFlowTagName,
+    HtmlFlowBasicSelfClosing,
+    HtmlFlowCompleteClosingTagAfter,
+    HtmlFlowCompleteEnd,
+    HtmlFlowCompleteAttributeNameBefore,
+    HtmlFlowCompleteAttributeName,
+    HtmlFlowCompleteAttributeNameAfter,
+    HtmlFlowCompleteAttributeValueBefore,
+    HtmlFlowCompleteAttributeValueQuoted,
+    HtmlFlowCompleteAttributeValueQuotedAfter,
+    HtmlFlowCompleteAttributeValueUnquoted,
+    HtmlFlowCompleteAfter,
+    HtmlFlowBlankLineBefore,
+    HtmlFlowContinuation,
+    HtmlFlowContinuationDeclarationInside,
+    HtmlFlowContinuationAfter,
+    HtmlFlowContinuationStart,
+    HtmlFlowContinuationBefore,
+    HtmlFlowContinuationCommentInside,
+    HtmlFlowContinuationRawTagOpen,
+    HtmlFlowContinuationRawEndTag,
+    HtmlFlowContinuationClose,
+    HtmlFlowContinuationCdataInside,
+    HtmlFlowContinuationStartNonLazy,
+    HtmlTextStart,
+    HtmlTextOpen,
+    HtmlTextDeclarationOpen,
+    HtmlTextTagCloseStart,
+    HtmlTextTagClose,
+    HtmlTextTagCloseBetween,
+    HtmlTextTagOpen,
+    HtmlTextTagOpenBetween,
+    HtmlTextTagOpenAttributeName,
+    HtmlTextTagOpenAttributeNameAfter,
+    HtmlTextTagOpenAttributeValueBefore,
+    HtmlTextTagOpenAttributeValueQuoted,
+    HtmlTextTagOpenAttributeValueQuotedAfter,
+    HtmlTextTagOpenAttributeValueUnquoted,
+    HtmlTextCdata,
+    HtmlTextCdataOpenInside,
+    HtmlTextCdataClose,
+    HtmlTextCdataEnd,
+    HtmlTextCommentOpenInside,
+    HtmlTextComment,
+    HtmlTextCommentClose,
+    HtmlTextCommentEnd,
+    HtmlTextDeclaration,
+    HtmlTextEnd,
+    HtmlTextInstruction,
+    HtmlTextInstructionClose,
+    HtmlTextLineEndingBefore,
+    HtmlTextLineEndingAfter,
+    HtmlTextLineEndingAfterPrefix,
+    LabelStart,
+    LabelAtBreak,
+    LabelEolAfter,
+    LabelEscape,
+    LabelInside,
+    LabelNok,
+    LabelEndStart,
+    LabelEndAfter,
+    LabelEndResourceStart,
+    LabelEndResourceBefore,
+    LabelEndResourceOpen,
+    LabelEndResourceDestinationAfter,
+    LabelEndResourceDestinationMissing,
+    LabelEndResourceBetween,
+    LabelEndResourceTitleAfter,
+    LabelEndResourceEnd,
+    LabelEndOk,
+    LabelEndNok,
+    LabelEndReferenceFull,
+    LabelEndReferenceFullAfter,
+    LabelEndReferenceFullMissing,
+    LabelEndReferenceNotFull,
+    LabelEndReferenceCollapsed,
+    LabelEndReferenceCollapsedOpen,
+    LabelStartImageStart,
+    LabelStartImageOpen,
+    LabelStartImageAfter,
+    LabelStartLinkStart,
+    ListItemStart,
+    ListItemBefore,
+    ListItemBeforeOrdered,
+    ListItemBeforeUnordered,
+    ListItemValue,
+    ListItemMarker,
+    ListItemMarkerAfter,
+    ListItemAfter,
+    ListItemMarkerAfterFilled,
+    ListItemWhitespace,
+    ListItemPrefixOther,
+    ListItemWhitespaceAfter,
+    ListItemContStart,
+    ListItemContBlank,
+    ListItemContFilled,
+    NonLazyContinuationStart,
+    NonLazyContinuationAfter,
+    ParagraphStart,
+    ParagraphLineStart,
+    ParagraphInside,
+    RawFlowStart,
+    RawFlowBeforeSequenceOpen,
+    RawFlowSequenceOpen,
+    RawFlowInfoBefore,
+    RawFlowInfo,
+    RawFlowMetaBefore,
+    RawFlowMeta,
+    RawFlowAtNonLazyBreak,
+    RawFlowCloseStart,
+    RawFlowBeforeSequenceClose,
+    RawFlowSequenceClose,
+    RawFlowAfterSequenceClose,
+    RawFlowContentBefore,
+    RawFlowContentStart,
+    RawFlowBeforeContentChunk,
+    RawFlowContentChunk,
+    RawFlowAfter,
+    RawTextStart,
+    RawTextSequenceOpen,
+    RawTextBetween,
+    RawTextData,
+    RawTextSequenceClose,
+    SpaceOrTabStart,
+    SpaceOrTabInside,
+    SpaceOrTabAfter,
+    SpaceOrTabEolStart,
+    SpaceOrTabEolAfterFirst,
+    SpaceOrTabEolAfterEol,
+    SpaceOrTabEolAtEol,
+    SpaceOrTabEolAfterMore,
+    StringStart,
+    StringBefore,
+    StringBeforeData,
+    TextStart,
+    TextBefore,
+    TextBeforeHtml,
+    TextBeforeHardBreakEscape,
+    TextBeforeLabelStartLink,
+    TextBeforeData,
+    ThematicBreakStart,
+    ThematicBreakBefore,
+    ThematicBreakSequence,
+    ThematicBreakAtBreak,
+    TitleStart,
+    TitleBegin,
+    TitleAfterEol,
+    TitleAtBreak,
+    TitleEscape,
+    TitleInside,
+    TitleNok,
+};
+static_assert(sizeof(kStateFns) / sizeof(kStateFns[0]) ==
+              (uint16_t)StateName::Count);
+
+State Call(Tokenizer* t, StateName name) {
+    return kStateFns[(uint16_t)name](t);
 }
 
 }
@@ -15259,8 +14978,8 @@ struct Reference {
 struct TreeFrame {
     Node* tree = nullptr;
 
-    ArenaVec<Node*> stack {};
-    ArenaVec<int32_t> eventStack {};
+    ArenaVec<Node*> stack{};
+    ArenaVec<int32_t> eventStack{};
 };
 
 struct CompileContext {
@@ -15399,8 +15118,7 @@ static void OnEnterGfmAutolinkLiteral(CompileContext* c) {
 
 static void OnEnterList(CompileContext* c) {
     Node* node = NodeNew(c->a, NodeKind::List);
-    node->Set(NodeOrdered,
-              (*c->events)[c->index].name == Name::ListOrdered);
+    node->Set(NodeOrdered, (*c->events)[c->index].name == Name::ListOrdered);
     node->Set(NodeSpread, ListLoose(*c->events, c->index, false));
     TailPush(c, node);
 }
@@ -15477,9 +15195,9 @@ static void Enter(CompileContext* c) {
             break;
         case Name::Frontmatter: {
             int32_t index = (*c->events)[c->index].point.index;
-            TailPush(c, NodeNew(c->a, c->bytes.s[index] == '+'
-                                          ? NodeKind::Toml
-                                          : NodeKind::Yaml));
+            TailPush(c,
+                     NodeNew(c->a, c->bytes.s[index] == '+' ? NodeKind::Toml
+                                                            : NodeKind::Yaml));
             Buffer(c);
             break;
         }
@@ -15547,14 +15265,14 @@ static void Enter(CompileContext* c) {
             TailPush(c, NodeNew(c->a, NodeKind::Paragraph));
             break;
         case Name::Reference:
-            c->mediaReferenceStack[c->mediaReferenceStack.len - 1].kind =
-                ReferenceKind::Collapsed;
-            c->mediaReferenceStack[c->mediaReferenceStack.len - 1].kindSome =
-                true;
+            c->mediaReferenceStack[c->mediaReferenceStack.len - 1]
+                .kind = ReferenceKind::Collapsed;
+            c->mediaReferenceStack[c->mediaReferenceStack.len - 1]
+                .kindSome = true;
             break;
         case Name::Resource:
-            c->mediaReferenceStack[c->mediaReferenceStack.len - 1].kindSome =
-                false;
+            c->mediaReferenceStack[c->mediaReferenceStack.len - 1]
+                .kindSome = false;
             break;
         case Name::Strong:
             TailPush(c, NodeNew(c->a, NodeKind::Strong));
@@ -15600,9 +15318,8 @@ static void OnExitAutolinkEmail(CompileContext* c) {
 
 static void OnExitCharacterReferenceValue(CompileContext* c) {
 
-    char buf[4];
-    Str value = CharacterReferenceDecodeInto(buf, ExitSlice(c).bytes,
-                                             c->characterReferenceMarker);
+    base::TempStr value = CharacterReferenceDecodeTemp(
+        ExitSlice(c).bytes, c->characterReferenceMarker);
     Node* node = TailMut(c);
     Grow(c, node, NodeStrKind::Value, value);
     c->characterReferenceMarker = 0;
@@ -15694,8 +15411,8 @@ static void OnExitGfmAutolinkLiteral(CompileContext* c) {
 }
 
 static void OnExitGfmTaskListItemValue(CompileContext* c) {
-    bool checked =
-        (*c->events)[c->index].name == Name::GfmTaskListItemValueChecked;
+    bool checked = (*c->events)[c->index]
+                       .name == Name::GfmTaskListItemValueChecked;
     Node* ancestor = TailPenultimateMut(c);
     ancestor->Set(NodeChecked, checked);
     ancestor->Set(NodeHasChecked, true);
@@ -15761,8 +15478,7 @@ static void OnExitHtml(CompileContext* c) {
 }
 
 static void OnExitMedia(CompileContext* c) {
-    Reference reference =
-        c->mediaReferenceStack[--c->mediaReferenceStack.len];
+    Reference reference = c->mediaReferenceStack[--c->mediaReferenceStack.len];
     OnExit(c);
     if (!reference.kindSome) {
         return;
@@ -15796,8 +15512,7 @@ static void OnExitListItem(CompileContext* c) {
         first->kind == NodeKind::Paragraph) {
         Node* paragraph = first;
         Node* firstInParagraph = NodeFirstChild(c->a, paragraph);
-        if (firstInParagraph &&
-            firstInParagraph->kind == NodeKind::Text) {
+        if (firstInParagraph && firstInParagraph->kind == NodeKind::Text) {
             Node* text = firstInParagraph;
             Str value = Get(c, text, NodeStrKind::Value);
             int32_t start = 0;
@@ -15901,21 +15616,17 @@ static void Exit(CompileContext* c) {
         case Name::CharacterReferenceValue:
             OnExitCharacterReferenceValue(c);
             break;
-        case Name::CodeFencedFenceInfo:
-            {
+        case Name::CodeFencedFenceInfo: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Lang, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Lang, s);
+        } break;
         case Name::CodeFencedFenceMeta:
-        case Name::MathFlowFenceMeta:
-            {
+        case Name::MathFlowFenceMeta: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Meta, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Meta, s);
+        } break;
         case Name::CodeFencedFence:
         case Name::MathFlowFence:
             OnExitRawFlowFence(c);
@@ -15931,24 +15642,20 @@ static void Exit(CompileContext* c) {
         case Name::MathText:
             OnExitRawText(c);
             break;
-        case Name::DefinitionDestinationString:
-            {
+        case Name::DefinitionDestinationString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Url, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Url, s);
+        } break;
         case Name::DefinitionLabelString:
         case Name::GfmFootnoteDefinitionLabelString:
             OnExitDefinitionId(c);
             break;
-        case Name::DefinitionTitleString:
-            {
+        case Name::DefinitionTitleString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Title, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Title, s);
+        } break;
         case Name::Frontmatter: {
 
             Str s = TrimEol(NodeToString(c->a, Resume(c)), true, true);
@@ -16013,20 +15720,16 @@ static void Exit(CompileContext* c) {
         case Name::ReferenceString:
             OnExitReferenceString(c);
             break;
-        case Name::ResourceDestinationString:
-            {
+        case Name::ResourceDestinationString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Url, s);
-            }
-            break;
-        case Name::ResourceTitleString:
-            {
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Url, s);
+        } break;
+        case Name::ResourceTitleString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Title, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Title, s);
+        } break;
         default:
             break;
     }
@@ -16872,7 +16575,7 @@ static void AddImpl(EditMap& map, int32_t at, int32_t remove, const Event* add,
         EditMap::Entry& e = map.map[map.buckets[bucket] - 1];
         e.remove += remove;
         if (before) {
-            ArenaVec<Event> merged {};
+            ArenaVec<Event> merged{};
             merged.Reserve(map.a, addLen + e.add.len);
             merged.AppendMany(map.a, add, addLen);
             for (const Event& ev : e.add) {
@@ -17014,8 +16717,8 @@ static int32_t SkipOptImpl(const Vec<Event>& events, int32_t index,
     Kind open = forward ? Kind::Enter : Kind::Exit;
     while (index < events.len) {
         Name current = events[index].name;
-        if (!NamesContain(names, namesLen, current) ||
-            events[index].kind != open) {
+        if (!NamesContain(names, namesLen, current) || events[index]
+                                                               .kind != open) {
             break;
         }
         index = forward ? index + 1 : index - 1;
@@ -17166,8 +16869,8 @@ bool ListItemLoose(const Vec<Event>& events, int32_t index) {
     return false;
 }
 
-static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index,
-                              Arena* a, ArenaAlign out) {
+static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index, Arena* a,
+                              ArenaAlign out) {
     bool inDelimiterRow = false;
     int32_t count = 0;
     while (index < events.len) {
@@ -17176,10 +16879,10 @@ static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index,
             if (event.kind == Kind::Enter) {
                 if (event.name == Name::GfmTableDelimiterCellValue) {
 
-                    AlignKind kind = events[index + 1].name ==
-                                             Name::GfmTableDelimiterMarker
-                                         ? AlignKind::Left
-                                         : AlignKind::None;
+                    AlignKind kind =
+                        events[index + 1].name == Name::GfmTableDelimiterMarker
+                            ? AlignKind::Left
+                            : AlignKind::None;
                     if (out != kArenaAlignNone) {
                         ArenaAlignSet(a, out, count, kind);
                     }
@@ -17187,8 +16890,8 @@ static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index,
                 }
             } else if (event.name == Name::GfmTableDelimiterCellValue) {
 
-                if (count > 0 && events[index - 1].name ==
-                                     Name::GfmTableDelimiterMarker) {
+                if (count > 0 &&
+                    events[index - 1].name == Name::GfmTableDelimiterMarker) {
                     if (out != kArenaAlignNone) {
                         AlignKind was = ArenaAlignAt(a, out, count - 1);
                         ArenaAlignSet(a, out, count - 1,
@@ -17247,19 +16950,14 @@ static const char* NamedValue(Str name) {
         int32_t mid = (lo + hi) / 2;
         const char* candidate =
             kCharacterReferenceNames + kCharacterReferences[mid].nameOff;
-        int32_t n = (int32_t)strlen(candidate);
-        int32_t common = n < name.len ? n : name.len;
-        int cmp = common == 0 ? 0 : memcmp(candidate, name.s, (size_t)common);
-        if (cmp == 0) {
-            cmp = n < name.len ? -1 : (n > name.len ? 1 : 0);
-        }
+        int cmp = StrCmp(Str(candidate), name);
         if (cmp < 0) {
             lo = mid + 1;
         } else if (cmp > 0) {
             hi = mid - 1;
         } else {
-            return kCharacterReferenceValues +
-                   kCharacterReferences[mid].valueOff;
+            return kCharacterReferenceValues + kCharacterReferences[mid]
+                                                   .valueOff;
         }
     }
     return nullptr;
@@ -17297,15 +16995,17 @@ static uint32_t DecodeNumericCp(Str value, int radix) {
 }
 
 Str DecodeNumeric(Arena* a, Str value, int radix) {
-    char buf[4];
-    int32_t n = Utf8Encode(buf, DecodeNumericCp(value, radix));
-    return StrOwn(a, buf, n);
+    char* out = (char*)a->Push(4, 1, false);
+    int32_t n = Utf8Encode(out, DecodeNumericCp(value, radix));
+    return Str(out, n);
 }
 
-Str CharacterReferenceDecodeInto(char buf[4], Str value, uint8_t marker) {
+base::TempStr CharacterReferenceDecodeTemp(Str value, uint8_t marker) {
     if (marker == '#' || marker == 'x') {
+        base::TempStr out = base::AllocStrTemp(4);
         uint32_t cp = DecodeNumericCp(value, marker == '#' ? 10 : 16);
-        return Str(buf, Utf8Encode(buf, cp));
+        out.len = Utf8Encode(out.s, cp);
+        return out;
     }
     const char* found = NamedValue(value);
     return found ? Str((char*)found, (int32_t)strlen(found)) : Str{};
@@ -17618,16 +17318,15 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
     int n = 0;
     struct dirent* ent = nullptr;
     while (n < max && (ent = readdir(d)) != nullptr) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+        Str name = Str(ent->d_name);
+        if (StrEq(name, StrL(".")) || StrEq(name, StrL(".."))) {
             continue;
         }
         DirEntry& e = out[n];
         StrCopyZ(e.name, (int)sizeof(e.name), ent->d_name);
-        char full[kMaxPath];
-        int fullLen = snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
+        TempStr full = fmt("%s/%s", Str(dir), name);
         struct stat st = {};
-        if (fullLen <= 0 || fullLen >= (int)sizeof(full) ||
-            lstat(full, &st) != 0) {
+        if (full.len >= kMaxPath || lstat(full.s, &st) != 0) {
             continue;
         }
         e.isSymlink = S_ISLNK(st.st_mode);
@@ -17995,10 +17694,9 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
     if (!dir || !out || max <= 0) {
         return 0;
     }
-    char pattern[kMaxPath];
-    _snprintf_s(pattern, kMaxPath, _TRUNCATE, "%s\\*", dir);
+    TempStr pattern = fmt("%s\\*", Str(dir));
     WIN32_FIND_DATAW fd = {};
-    HANDLE h = FindFirstFileW(ToCWstrTemp(Str(pattern)), &fd);
+    HANDLE h = FindFirstFileW(ToCWstrTemp(pattern), &fd);
     if (h == INVALID_HANDLE_VALUE) {
         return 0;
     }

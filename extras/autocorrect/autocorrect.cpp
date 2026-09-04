@@ -50,10 +50,9 @@ static Str TrimStart(Str s, int* leadingBytes) {
 
 static Str TrimEnd(Str s) {
     int end = s.len;
-    while (end > 0 &&
-           (s.s[end - 1] == ' ' || s.s[end - 1] == '\t' ||
-            s.s[end - 1] == '\r' || s.s[end - 1] == '\n' ||
-            s.s[end - 1] == '\f')) {
+    while (end > 0 && (s.s[end - 1] == ' ' || s.s[end - 1] == '\t' ||
+                       s.s[end - 1] == '\r' || s.s[end - 1] == '\n' ||
+                       s.s[end - 1] == '\f')) {
         end--;
     }
     return Str(s.s, end);
@@ -64,11 +63,11 @@ static Str Trim(Str s) {
     return TrimEnd(TrimStart(s, &leading));
 }
 
-void EmitText(Results* res, const char* rule, Str part) {
+void EmitText(Results* res, Str rule, Str part) {
     int line0 = res->line;
     int col0 = res->col;
 
-    if (strcmp(rule, "comment") == 0 || strcmp(rule, "COMMENT") == 0) {
+    if (StrEq(rule, StrL("comment")) || StrEq(rule, StrL("COMMENT"))) {
         Toggle t = ToggleParse(part);
         if (t.kind != ToggleKind::None) {
             res->toggle = t;
@@ -175,7 +174,7 @@ static void EmitSub(Results* res, Str part, Str lang, Str code,
 
         int at = 0;
         while (at + code.len <= part.len) {
-            if (memcmp(part.s + at, code.s, (size_t)code.len) == 0) {
+            if (StrEq(Str(part.s + at, code.len), code)) {
                 res->out.Append(sub.out);
                 at += code.len;
                 continue;
@@ -192,8 +191,8 @@ void EmitCodeblock(Results* res, Str part, Str lang, Str code) {
     EmitSub(res, part, lang, code, true);
 }
 
-void EmitInlineScript(Results* res, const char* rule, Str part) {
-    Str lang = strcmp(rule, "inline_style") == 0 ? StrL("css") : StrL("js");
+void EmitInlineScript(Results* res, Str rule, Str part) {
+    Str lang = StrEq(rule, StrL("inline_style")) ? StrL("css") : StrL("js");
     EmitSub(res, part, lang, part, false);
 }
 
@@ -231,18 +230,18 @@ static bool ScanForType(Str type, Results* res, Str raw) {
         void (*scan)(Results*, Str);
     };
     static const Entry kTable[] = {
-        {"html", ScanHtml},         {"yaml", ScanYaml},
-        {"sql", ScanSql},           {"rust", ScanRust},
-        {"ruby", ScanRuby},         {"elixir", ScanElixir},
-        {"go", ScanGo},             {"javascript", ScanJavascript},
-        {"css", ScanCss},           {"json", ScanJson},
-        {"python", ScanPython},     {"objective_c", ScanObjectiveC},
-        {"csharp", ScanCsharp},     {"swift", ScanSwift},
-        {"java", ScanJava},         {"scala", ScanScala},
-        {"kotlin", ScanKotlin},     {"php", ScanPhp},
-        {"dart", ScanDart},         {"markdown", ScanMarkdown},
-        {"conf", ScanConf},         {"c", ScanC},
-        {"zig", ScanRust},          {"text", ScanMarkdown},
+        {"html", ScanHtml},     {"yaml", ScanYaml},
+        {"sql", ScanSql},       {"rust", ScanRust},
+        {"ruby", ScanRuby},     {"elixir", ScanElixir},
+        {"go", ScanGo},         {"javascript", ScanJavascript},
+        {"css", ScanCss},       {"json", ScanJson},
+        {"python", ScanPython}, {"objective_c", ScanObjectiveC},
+        {"csharp", ScanCsharp}, {"swift", ScanSwift},
+        {"java", ScanJava},     {"scala", ScanScala},
+        {"kotlin", ScanKotlin}, {"php", ScanPhp},
+        {"dart", ScanDart},     {"markdown", ScanMarkdown},
+        {"conf", ScanConf},     {"c", ScanC},
+        {"zig", ScanRust},      {"text", ScanMarkdown},
     };
     for (const Entry& e : kTable) {
         if (base::StrEq(type, Str(e.type))) {
@@ -703,28 +702,27 @@ static bool IsWhitespaceCp(uint32_t cp) {
 
 static void AppendCp(StrBuilder* out, uint32_t cp) {
     char buf[4];
+    int n;
     if (cp < 0x80) {
-        out->AppendChar((char)cp);
-        return;
-    }
-    if (cp < 0x800) {
+        buf[0] = (char)cp;
+        n = 1;
+    } else if (cp < 0x800) {
         buf[0] = (char)(0xC0 | (cp >> 6));
         buf[1] = (char)(0x80 | (cp & 0x3F));
-        out->Append(Str(buf, 2));
-        return;
-    }
-    if (cp < 0x10000) {
+        n = 2;
+    } else if (cp < 0x10000) {
         buf[0] = (char)(0xE0 | (cp >> 12));
         buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
         buf[2] = (char)(0x80 | (cp & 0x3F));
-        out->Append(Str(buf, 3));
-        return;
+        n = 3;
+    } else {
+        buf[0] = (char)(0xF0 | (cp >> 18));
+        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = (char)(0x80 | (cp & 0x3F));
+        n = 4;
     }
-    buf[0] = (char)(0xF0 | (cp >> 18));
-    buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-    buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-    buf[3] = (char)(0x80 | (cp & 0x3F));
-    out->Append(Str(buf, 4));
+    out->Append(Str(buf, n));
 }
 
 bool FormatHalfwidthWord(Arena* a, Str in, Str* out) {
@@ -776,8 +774,16 @@ bool FormatHalfwidthWord(Arena* a, Str in, Str* out) {
     return true;
 }
 
-enum class ReplaceMode : uint8_t { Replace, PrefixSpace, SuffixSpace };
-enum class CharType : uint8_t { LeftQuote, RightQuote, Other };
+enum class ReplaceMode : uint8_t {
+    Replace,
+    PrefixSpace,
+    SuffixSpace
+};
+enum class CharType : uint8_t {
+    LeftQuote,
+    RightQuote,
+    Other
+};
 
 struct ReplaceRule {
     uint32_t from;
@@ -1170,7 +1176,7 @@ void ScanHtml(Results* res, Str raw) {
                 i++;
             }
             flush(start);
-            EmitText(res, "text", Str(raw.s + start, i - start));
+            EmitText(res, StrL("text"), Str(raw.s + start, i - start));
             ignoreStart = i;
             continue;
         }
@@ -1186,7 +1192,7 @@ void ScanHtml(Results* res, Str raw) {
             }
             if (end > 0) {
                 flush(i);
-                EmitText(res, "comment", Str(raw.s + i, end - i));
+                EmitText(res, StrL("comment"), Str(raw.s + i, end - i));
                 ignoreStart = end;
                 i = end;
                 continue;
@@ -1246,7 +1252,7 @@ void ScanHtml(Results* res, Str raw) {
             }
             if (el.rule) {
                 flush(i + tag);
-                EmitInlineScript(res, el.rule,
+                EmitInlineScript(res, Str(el.rule),
                                  Str(raw.s + i + tag, close - (i + tag)));
                 ignoreStart = close;
             }
@@ -1424,19 +1430,17 @@ static int MatchedOrParents(const Ignorer* ig, Str path, bool isDir) {
 }
 
 static void AddPatternsFromFile(base::Vec<IgnorePattern>& out, Str workDir,
-                                const char* name) {
-    char path[1024];
+                                Str name) {
     int dirLen = workDir.len;
-    while (dirLen > 0 && (workDir.s[dirLen - 1] == '/' ||
-                          workDir.s[dirLen - 1] == '\\')) {
+    while (dirLen > 0 &&
+           (workDir.s[dirLen - 1] == '/' || workDir.s[dirLen - 1] == '\\')) {
         dirLen--;
     }
-    int wrote = snprintf(path, sizeof(path), "%.*s/%s", dirLen, workDir.s,
-                         name);
-    if (wrote <= 0 || wrote >= (int)sizeof(path)) {
+    base::TempStr path = base::fmt("%s/%s", Str(workDir.s, dirLen), name);
+    if (path.len >= 1024) {
         return;
     }
-    FILE* f = fopen(path, "rb");
+    FILE* f = fopen(path.s, "rb");
     if (!f) {
         return;
     }
@@ -1506,8 +1510,8 @@ void IgnorerInit(Ignorer* ig, Str workDir) {
     ig->nPatterns = 0;
     base::Vec<IgnorePattern> patterns;
 
-    AddPatternsFromFile(patterns, workDir, ".autocorrectignore");
-    AddPatternsFromFile(patterns, workDir, ".gitignore");
+    AddPatternsFromFile(patterns, workDir, StrL(".autocorrectignore"));
+    AddPatternsFromFile(patterns, workDir, StrL(".gitignore"));
     if (patterns.len == 0) {
         return;
     }
@@ -1529,18 +1533,18 @@ bool IgnorerIsIgnored(const Ignorer* ig, Str relativePath) {
         return false;
     }
 
-    char buf[1024];
+    base::TempStr buf = base::AllocStrTemp(std::min(relativePath.len, 1024));
     int n = 0;
     int start = 0;
     if (relativePath.len >= 2 && relativePath.s[0] == '.' &&
         (relativePath.s[1] == '/' || relativePath.s[1] == '\\')) {
         start = 2;
     }
-    for (int i = start; i < relativePath.len && n < (int)sizeof(buf); i++) {
+    for (int i = start; i < relativePath.len && n < buf.len; i++) {
         char c = relativePath.s[i];
-        buf[n++] = c == '\\' ? '/' : c;
+        buf.s[n++] = c == '\\' ? '/' : c;
     }
-    Str path(buf, n);
+    Str path(buf.s, n);
 
     return MatchedOrParents(ig, path, false) == 1 ||
            MatchedOrParents(ig, path, true) == 1;
@@ -1636,9 +1640,8 @@ int MatchNewline(Str s, int i) {
 }
 
 bool IsIdentifierCh(char c) {
-    return c == '_' || c == '-' || c == '.' ||
-           (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9');
+    return c == '_' || c == '-' || c == '.' || (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
 }
 
 bool MdIsAsciiAlnumCh(char c) {
@@ -1650,8 +1653,7 @@ MdNode* ParseInline(MdParser* p, int* pos);
 
 bool InlineStartsAt(MdParser* p, int i) {
     char c = i < p->s.len ? p->s.s[i] : 0;
-    if (c != '[' && c != '!' && c != '`' && c != '*' && c != '~' &&
-        c != '"') {
+    if (c != '[' && c != '!' && c != '`' && c != '*' && c != '~' && c != '"') {
         return false;
     }
     int at = i;
@@ -1703,8 +1705,7 @@ int MatchParen(Str s, int i) {
     }
     auto inner = [&s](int from) {
         int j = from;
-        while (j < s.len && s.s[j] != '\n' && s.s[j] != '(' &&
-               s.s[j] != ')' &&
+        while (j < s.len && s.s[j] != '\n' && s.s[j] != '(' && s.s[j] != ')' &&
                !(s.s[j] == '\r' && j + 1 < s.len && s.s[j + 1] == '\n')) {
             j++;
         }
@@ -1821,8 +1822,8 @@ MdNode* ParseMark(MdParser* p, int* pos) {
             int stringStart = at;
             while (at < s.len && !AtLit(s, at, open)) {
                 char c = s.s[at];
-                if ((c == '[' || c == '!' || c == '`' || c == '*' ||
-                     c == '~' || c == '"')) {
+                if ((c == '[' || c == '!' || c == '`' || c == '*' || c == '~' ||
+                     c == '"')) {
                     p->depth++;
                     bool isInline = InlineStartsAt(p, at);
                     p->depth--;
@@ -2498,22 +2499,22 @@ void WalkNode(Results* res, Str raw, const MdNode* n) {
     Str span(raw.s + n->start, n->end - n->start);
     switch (n->rule) {
         case MdRule::Text:
-            EmitText(res, "text", span);
+            EmitText(res, StrL("text"), span);
             return;
         case MdRule::String:
-            EmitText(res, "string", span);
+            EmitText(res, StrL("string"), span);
             return;
         case MdRule::LinkString:
-            EmitText(res, "link_string", span);
+            EmitText(res, StrL("link_string"), span);
             return;
         case MdRule::MarkString:
-            EmitText(res, "mark_string", span);
+            EmitText(res, StrL("mark_string"), span);
             return;
         case MdRule::InnerText:
-            EmitText(res, "inner_text", span);
+            EmitText(res, StrL("inner_text"), span);
             return;
         case MdRule::Comment:
-            EmitText(res, "comment", span);
+            EmitText(res, StrL("comment"), span);
             return;
         case MdRule::Codeblock: {
             Str lang(raw.s + n->langStart, n->langEnd - n->langStart);
@@ -2786,11 +2787,11 @@ Str Format(Arena* a, Str text) {
 namespace autocorrect {
 
 static int LitLen(Str s, int i, const char* lit) {
-    int n = (int)strlen(lit);
-    if (i + n > s.len || memcmp(s.s + i, lit, (size_t)n) != 0) {
+    Str literal = Str(lit);
+    if (i + literal.len > s.len || !StrEq(Str(s.s + i, literal.len), literal)) {
         return -1;
     }
-    return n;
+    return literal.len;
 }
 
 static int MatchLineComment(Str s, int i, const char* prefix) {
@@ -2810,9 +2811,10 @@ static int MatchBlock(Str s, int i, const char* open, const char* close) {
     if (n < 0) {
         return -1;
     }
-    int closeLen = (int)strlen(close);
+    Str closing = Str(close);
+    int closeLen = closing.len;
     for (int at = i + n; at + closeLen <= s.len; at++) {
-        if (memcmp(s.s + at, close, (size_t)closeLen) == 0) {
+        if (StrEq(Str(s.s + at, closeLen), closing)) {
             return at + closeLen - i;
         }
     }
@@ -2895,7 +2897,7 @@ static void ScanAlts(Results* res, Str raw, const Alt* alts, int nAlts) {
             if (i > ignoreStart) {
                 EmitIgnore(res, Str(raw.s + ignoreStart, i - ignoreStart));
             }
-            EmitText(res, hit->rule, Str(raw.s + i, matched));
+            EmitText(res, Str(hit->rule), Str(raw.s + i, matched));
             ignoreStart = i + matched;
         }
 
@@ -3202,10 +3204,8 @@ static int GoTimeParse(Str s, int i) {
 
 void ScanGo(Results* res, Str raw) {
     static const Alt kAlts[] = {
-        {CppLineComment, "COMMENT"},
-        {CppBlockComment, "COMMENT"},
-        {GoRegexp, nullptr},
-        {GoTimeParse, nullptr},
+        {CppLineComment, "COMMENT"}, {CppBlockComment, "COMMENT"},
+        {GoRegexp, nullptr},         {GoTimeParse, nullptr},
         {GoString, "string"},
     };
     ScanAlts(res, raw, kAlts, 5);
@@ -3388,10 +3388,8 @@ static int ScalaRegexp(Str s, int i) {
 
 void ScanScala(Results* res, Str raw) {
     static const Alt kAlts[] = {
-        {CppLineComment, "COMMENT"},
-        {CppBlockComment, "COMMENT"},
-        {ScalaRegexp, nullptr},
-        {ScalaStringLiteral, nullptr},
+        {CppLineComment, "COMMENT"}, {CppBlockComment, "COMMENT"},
+        {ScalaRegexp, nullptr},      {ScalaStringLiteral, nullptr},
         {ScalaString, "string"},
     };
     ScanAlts(res, raw, kAlts, 5);
@@ -3585,7 +3583,7 @@ void ScanJavascript(Results* res, Str raw) {
         }
         if (n > 0) {
             flush(i);
-            EmitText(res, "COMMENT", Str(raw.s + i, n));
+            EmitText(res, StrL("COMMENT"), Str(raw.s + i, n));
             ignoreStart = i + n;
             i += n;
             continue;
@@ -3605,14 +3603,14 @@ void ScanJavascript(Results* res, Str raw) {
                 int vn = JsString(raw, at);
                 if (vn > 0) {
                     flush(at);
-                    EmitText(res, "string", Str(raw.s + at, vn));
+                    EmitText(res, StrL("string"), Str(raw.s + at, vn));
                     ignoreStart = at + vn;
                     i = at + vn;
                     continue;
                 }
             }
             flush(i);
-            EmitText(res, "string", Str(raw.s + i, n));
+            EmitText(res, StrL("string"), Str(raw.s + i, n));
             ignoreStart = i + n;
             i += n;
             continue;
@@ -3639,7 +3637,7 @@ void ScanJavascript(Results* res, Str raw) {
                         textEnd++;
                     }
                     flush(at);
-                    EmitText(res, "text", Str(raw.s + at, textEnd - at));
+                    EmitText(res, StrL("text"), Str(raw.s + at, textEnd - at));
                     ignoreStart = textEnd;
                     at = textEnd;
                 }
@@ -3675,10 +3673,8 @@ void ScanPhp(Results* res, Str raw) {
     int i = 0;
     bool inPhp = false;
     static const Alt kAlts[] = {
-        {CppLineComment, "COMMENT"},
-        {HashLineComment, "COMMENT"},
-        {CppBlockComment, "COMMENT"},
-        {PhpRegexp, nullptr},
+        {CppLineComment, "COMMENT"},  {HashLineComment, "COMMENT"},
+        {CppBlockComment, "COMMENT"}, {PhpRegexp, nullptr},
         {PhpString, "string"},
     };
     while (i < raw.len) {
@@ -3697,7 +3693,7 @@ void ScanPhp(Results* res, Str raw) {
                 if (i > ignoreStart) {
                     EmitIgnore(res, Str(raw.s + ignoreStart, i - ignoreStart));
                 }
-                EmitText(res, hit->rule, Str(raw.s + i, matched));
+                EmitText(res, Str(hit->rule), Str(raw.s + i, matched));
                 ignoreStart = i + matched;
                 i += matched;
                 continue;
@@ -3732,7 +3728,7 @@ void ScanPhp(Results* res, Str raw) {
             if (i > ignoreStart) {
                 EmitIgnore(res, Str(raw.s + ignoreStart, i - ignoreStart));
             }
-            EmitText(res, hit->rule, Str(raw.s + i, matched));
+            EmitText(res, Str(hit->rule), Str(raw.s + i, matched));
             ignoreStart = i + matched;
         }
         i += matched;
@@ -3773,7 +3769,7 @@ void ScanJson(Results* res, Str raw) {
             if (i > ignoreStart) {
                 EmitIgnore(res, Str(raw.s + ignoreStart, i - ignoreStart));
             }
-            EmitText(res, "COMMENT", Str(raw.s + i, n));
+            EmitText(res, StrL("COMMENT"), Str(raw.s + i, n));
             ignoreStart = i + n;
             i += n;
             continue;
@@ -3790,7 +3786,7 @@ void ScanJson(Results* res, Str raw) {
                 if (i > ignoreStart) {
                     EmitIgnore(res, Str(raw.s + ignoreStart, i - ignoreStart));
                 }
-                EmitText(res, "string", Str(raw.s + i, n));
+                EmitText(res, StrL("string"), Str(raw.s + i, n));
                 ignoreStart = i + n;
             }
             i += n;
@@ -3819,7 +3815,7 @@ void ScanYaml(Results* res, Str raw) {
             if (at > ignoreStart) {
                 EmitIgnore(res, Str(raw.s + ignoreStart, at - ignoreStart));
             }
-            EmitText(res, "comment", Str(raw.s + at, end - at));
+            EmitText(res, StrL("comment"), Str(raw.s + at, end - at));
             ignoreStart = end;
             i = end < raw.len ? end + 1 : end;
             continue;
@@ -3868,7 +3864,8 @@ void ScanYaml(Results* res, Str raw) {
         if (valueStart > ignoreStart) {
             EmitIgnore(res, Str(raw.s + ignoreStart, valueStart - ignoreStart));
         }
-        EmitText(res, "string", Str(raw.s + valueStart, valueEnd - valueStart));
+        EmitText(res, StrL("string"),
+                 Str(raw.s + valueStart, valueEnd - valueStart));
         ignoreStart = valueEnd;
         i = valueEnd;
         while (i < raw.len && raw.s[i] != '\n') {

@@ -98,7 +98,9 @@ using TempStr = Str;
 
 #define StrL(lit) ::base::Str{(char*)(lit), (int)dimof(lit) - 1}
 
-Str AllocStrTemp(int size);
+TempStr AllocStrTemp(int size);
+TempStr StrDupTemp(Str s);
+TempStr ReadBoundedFileTemp(Str path, int limit);
 
 #if GPUI_OS_WINDOWS
 
@@ -1180,6 +1182,7 @@ inline bool StrEq(Str s1, Str s2) {
     return StrEqRest(s1, s2);
 }
 bool StrEq(Str s1, const char* s2);
+int StrCmp(Str s1, Str s2);
 GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2);
 inline bool StrEqI(Str s1, Str s2) {
     if (s1.len != s2.len) {
@@ -1220,6 +1223,8 @@ bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut = nullptr);
 
 int SeqStrIndex(SeqStrings strs, Str toFind);
 int SeqStrIndexIS(SeqStrings strs, Str toFind);
+
+bool SeqStrContainsI(SeqStrings strs, Str toFind);
 
 Str SeqStrByIndex(SeqStrings strs, int idx);
 

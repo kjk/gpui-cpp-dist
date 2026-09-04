@@ -25,18 +25,8 @@ float StrToFloatUnchecked(Str s) {
     if (!s.s || s.len <= 0) {
         return 0;
     }
-    char local[128];
-    char* buf = local;
-    if (s.len >= (int)sizeof(local)) {
-        Str temp = AllocStrTemp(s.len);
-        if (!temp.s) {
-            return 0;
-        }
-        buf = temp.s;
-    }
-    memcpy(buf, s.s, (size_t)s.len);
-    buf[s.len] = 0;
-    return strtof(buf, nullptr);
+    TempStr text = StrDupTemp(s);
+    return text.s ? strtof(text.s, nullptr) : 0;
 }
 
 int StrToIntUnchecked(Str s) {
@@ -604,7 +594,7 @@ void DestroyTempArena() {
     gTempArena = nullptr;
 }
 
-Str AllocStrTemp(int size) {
+TempStr AllocStrTemp(int size) {
     if (size == 0) {
         return {};
     }
@@ -612,6 +602,31 @@ Str AllocStrTemp(int size) {
     char* res = (char*)arena->Push((uint64_t)size + 1, 1, false);
     res[size] = 0;
     return Str(res, size);
+}
+
+TempStr StrDupTemp(Str s) {
+    return StrDup(GetTempArena(), s);
+}
+
+TempStr ReadBoundedFileTemp(Str path, int limit) {
+    if (!path || limit <= 0) {
+        return {};
+    }
+    TempStr pathZ = StrDupTemp(path);
+    FILE* file = fopen(pathZ.s, "rb");
+    if (!file) {
+        return {};
+    }
+    TempStr result = AllocStrTemp(limit);
+    size_t n = fread(result.s, 1, (size_t)limit + 1, file);
+    bool ok = !ferror(file) && n <= (size_t)limit;
+    fclose(file);
+    if (!ok) {
+        return {};
+    }
+    result.s[n] = 0;
+    result.len = (int)n;
+    return result;
 }
 
 GPUI_NOINLINE void* ArenaVecAlloc(Arena* a, int count, int elSize, int align,
@@ -1052,6 +1067,15 @@ bool StrEq(Str s1, const char* s2) {
     return StrEq(s1, Str(s2));
 }
 
+int StrCmp(Str s1, Str s2) {
+    int common = std::min(s1.len, s2.len);
+    int cmp = common > 0 ? memcmp(s1.s, s2.s, (size_t)common) : 0;
+    if (cmp != 0) {
+        return cmp;
+    }
+    return s1.len < s2.len ? -1 : s1.len > s2.len ? 1 : 0;
+}
+
 GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2) {
     if (s1.s == s2.s || s1.len == 0) {
         return true;
@@ -1238,20 +1262,24 @@ bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut) {
 }
 
 static int SeqStrIndexCmp(SeqStrings strs, Str toFind, bool ignoreCase) {
-    if (!strs || !toFind) {
-        return -1;
-    }
-    int off = 0;
+    if (!strs || !toFind) return -1;
+    const char* candidate = strs;
     int idx = 0;
-    while (strs[off]) {
-        Str at = SeqStrAt(strs, off);
-        bool same = ignoreCase ? StrEqI(at, toFind) : StrEq(at, toFind);
-        if (same) {
-            return idx;
+    while (*candidate) {
+        int i = 0;
+        while (i < toFind.len && candidate[i]) {
+            char a = candidate[i];
+            char b = toFind.s[i];
+            if (ignoreCase) {
+                if (a >= 'A' && a <= 'Z') a = (char)(a + ('a' - 'A'));
+                if (b >= 'A' && b <= 'Z') b = (char)(b + ('a' - 'A'));
+            }
+            if (a != b) break;
+            i++;
         }
-        if (!SeqStrAdvance(strs, off)) {
-            break;
-        }
+        if (i == toFind.len && !candidate[i]) return idx;
+        while (*candidate) candidate++;
+        candidate++;
         idx++;
     }
     return -1;
@@ -1263,6 +1291,10 @@ int SeqStrIndex(SeqStrings strs, Str toFind) {
 
 int SeqStrIndexIS(SeqStrings strs, Str toFind) {
     return SeqStrIndexCmp(strs, toFind, true);
+}
+
+bool SeqStrContainsI(SeqStrings strs, Str toFind) {
+    return SeqStrIndexCmp(strs, toFind, true) >= 0;
 }
 
 Str SeqStrByIndex(SeqStrings strs, int idx) {
@@ -1291,7 +1323,7 @@ int SeqStrCount(SeqStrings strs) {
     return n;
 }
 
-static bool IsDigit(char c) {
+static bool base_IsDigit(char c) {
     return ('0' <= c) && (c <= '9');
 }
 
@@ -1467,7 +1499,7 @@ static int parseArgDefBrace(Fmt& fmt, int off) {
     bool positional = false;
 
     while (off < fmt.format.len && fmt.format.s[off] != '}') {
-        if (!IsDigit(fmt.format.s[off])) {
+        if (!base_IsDigit(fmt.format.s[off])) {
             fmt.isOk = false;
             return off;
         }
@@ -1550,7 +1582,7 @@ static int parseArgDefPerc(Fmt& fmt, int off) {
     }
 
     int width = 0;
-    while (off < f.len && IsDigit(f.s[off])) {
+    while (off < f.len && base_IsDigit(f.s[off])) {
         width = (width * 10) + (f.s[off] - '0');
         off++;
     }
@@ -1559,7 +1591,7 @@ static int parseArgDefPerc(Fmt& fmt, int off) {
     if (off < f.len && f.s[off] == '.') {
         off++;
         prec = 0;
-        while (off < f.len && IsDigit(f.s[off])) {
+        while (off < f.len && base_IsDigit(f.s[off])) {
             prec = (prec * 10) + (f.s[off] - '0');
             off++;
         }
@@ -4123,101 +4155,82 @@ void AssetsAddRoot(Str dir) {
     if (!dir.s || dir.len <= 0) {
         return;
     }
-    char buf[kMaxPath];
     int n = dir.len < kMaxPath - 1 ? dir.len : kMaxPath - 1;
-    memcpy(buf, dir.s, (size_t)n);
-    buf[n] = 0;
-    AddRootRaw(buf);
+    TempStr path = StrDupTemp(Str(dir.s, n));
+    AddRootRaw(path.s);
 }
 
-static void gpui_assets_JoinPath(char* dst, int dstN, const char* a, const char* b) {
-    if (!a || !a[0]) {
-        StrCopyZ(dst, dstN, b ? b : "");
-        return;
-    }
-    if (!b || !b[0]) {
-        StrCopyZ(dst, dstN, a);
-        return;
-    }
-
-    StrCopyZ(dst, dstN, a);
-    int n = (int)strlen(dst);
-    if (n + 1 < dstN) {
-        dst[n++] = gpui_assets_kSep;
-        dst[n] = 0;
-        StrCopyZ(dst + n, dstN - n, b);
-    }
+static TempStr gpui_assets_JoinPathTemp(Str a, Str b) {
+    if (!a) return StrDupTemp(b);
+    if (!b) return StrDupTemp(a);
+    return fmt("%s%c%s", a, gpui_assets_kSep, b);
 }
 
-static void ParentDir(char* path) {
-    int n = (int)strlen(path);
-    while (n > 0 && (path[n - 1] == '\\' || path[n - 1] == '/')) {
-        path[--n] = 0;
+static void ParentDir(Str* path) {
+    while (path->len > 0 &&
+           (path->s[path->len - 1] == '\\' || path->s[path->len - 1] == '/')) {
+        path->s[--path->len] = 0;
     }
-    while (n > 0 && path[n - 1] != '\\' && path[n - 1] != '/') {
-        path[--n] = 0;
+    while (path->len > 0 && path->s[path->len - 1] != '\\' &&
+           path->s[path->len - 1] != '/') {
+        path->s[--path->len] = 0;
     }
-    while (n > 0 && (path[n - 1] == '\\' || path[n - 1] == '/')) {
-        path[--n] = 0;
+    while (path->len > 0 &&
+           (path->s[path->len - 1] == '\\' || path->s[path->len - 1] == '/')) {
+        path->s[--path->len] = 0;
     }
 }
 
-static void ToNativeSep(char* s) {
-    for (; *s; s++) {
-        if (*s == '/' || *s == '\\') {
-            *s = gpui_assets_kSep;
+static void ToNativeSep(Str s) {
+    for (int i = 0; i < s.len; i++) {
+        if (s.s[i] == '/' || s.s[i] == '\\') {
+            s.s[i] = gpui_assets_kSep;
         }
     }
 }
 
 void AssetsAddDefaultRoots(Str exampleName) {
-    char cwd[kMaxPath] = {};
-    PlatGetCwd(cwd, kMaxPath);
+    TempStr cwd = AllocStrTemp(kMaxPath - 1);
+    cwd.s[0] = 0;
+    PlatGetCwd(cwd.s, cwd.len + 1);
+    cwd.len = (int)strlen(cwd.s);
 
-    char exe[kMaxPath] = {};
-    PlatGetExeDir(exe, kMaxPath);
+    TempStr exe = AllocStrTemp(kMaxPath - 1);
+    exe.s[0] = 0;
+    PlatGetExeDir(exe.s, exe.len + 1);
+    exe.len = (int)strlen(exe.s);
 
-    char sub[kMaxPath];
-    if (exampleName.s && exampleName.len > 0) {
-        snprintf(sub, kMaxPath, "assets%c%s", gpui_assets_kSep, exampleName.s);
-    } else {
-        StrCopyZ(sub, kMaxPath, "assets");
-    }
+    TempStr sub = exampleName ? fmt("assets%c%s", gpui_assets_kSep, exampleName)
+                              : StrDupTemp(StrL("assets"));
 
-    char p[kMaxPath];
-    gpui_assets_JoinPath(p, kMaxPath, cwd, sub);
-    AddRootRaw(p);
-    gpui_assets_JoinPath(p, kMaxPath, exe, sub);
-    AddRootRaw(p);
+    TempStr path = gpui_assets_JoinPathTemp(cwd, sub);
+    AddRootRaw(path.s);
+    path = gpui_assets_JoinPathTemp(exe, sub);
+    AddRootRaw(path.s);
 
-    char walk[kMaxPath];
-    char work[kMaxPath];
     for (int src = 0; src < 2; src++) {
-        StrCopyZ(walk, kMaxPath, src == 0 ? cwd : exe);
+        TempStr walk = StrDupTemp(src == 0 ? cwd : exe);
         for (int up = 0; up < 6; up++) {
-            gpui_assets_JoinPath(p, kMaxPath, walk, sub);
-            AddRootRaw(p);
+            path = gpui_assets_JoinPathTemp(walk, sub);
+            AddRootRaw(path.s);
             if (exampleName.s) {
 
-                char rust[kMaxPath];
-                snprintf(rust, kMaxPath, "examples%c%s%cassets", gpui_assets_kSep,
-                         exampleName.s, gpui_assets_kSep);
-                gpui_assets_JoinPath(p, kMaxPath, walk, rust);
-                AddRootRaw(p);
-                snprintf(rust, kMaxPath,
-                         ".work%cgpui-component%cexamples%c%s%cassets", gpui_assets_kSep,
-                         gpui_assets_kSep, gpui_assets_kSep, exampleName.s, gpui_assets_kSep);
-                gpui_assets_JoinPath(p, kMaxPath, walk, rust);
-                AddRootRaw(p);
+                TempStr rust =
+                    fmt("examples%c%s%cassets", gpui_assets_kSep, exampleName, gpui_assets_kSep);
+                path = gpui_assets_JoinPathTemp(walk, rust);
+                AddRootRaw(path.s);
+                rust = fmt(".work%cgpui-component%cexamples%c%s%cassets", gpui_assets_kSep,
+                           gpui_assets_kSep, gpui_assets_kSep, exampleName, gpui_assets_kSep);
+                path = gpui_assets_JoinPathTemp(walk, rust);
+                AddRootRaw(path.s);
             }
 
-            snprintf(work, kMaxPath, ".work%cgpui-component", gpui_assets_kSep);
-            gpui_assets_JoinPath(p, kMaxPath, walk, work);
-            AddRootRaw(p);
-            char prev[kMaxPath];
-            StrCopyZ(prev, kMaxPath, walk);
-            ParentDir(walk);
-            if (!walk[0] || base::StrEqI(Str(prev), walk)) {
+            TempStr work = fmt(".work%cgpui-component", gpui_assets_kSep);
+            path = gpui_assets_JoinPathTemp(walk, work);
+            AddRootRaw(path.s);
+            TempStr prev = StrDupTemp(walk);
+            ParentDir(&walk);
+            if (!walk || base::StrEqI(prev, walk)) {
                 break;
             }
         }
@@ -4266,17 +4279,14 @@ bool AssetsFindDir(Str relDir, char* out, int cap) {
     if (!relDir.s || relDir.len <= 0 || !out || cap <= 0) {
         return false;
     }
-    char rel[kMaxPath];
     int n = relDir.len < kMaxPath - 1 ? relDir.len : kMaxPath - 1;
-    memcpy(rel, relDir.s, (size_t)n);
-    rel[n] = 0;
+    TempStr rel = StrDupTemp(Str(relDir.s, n));
     ToNativeSep(rel);
 
     for (int i = 0; i < gRootN; i++) {
-        char full[kMaxPath];
-        gpui_assets_JoinPath(full, kMaxPath, gRoots[i], rel);
-        if (PlatDirExists(full)) {
-            StrCopyZ(out, cap, full);
+        TempStr full = gpui_assets_JoinPathTemp(Str(gRoots[i]), rel);
+        if (PlatDirExists(full.s)) {
+            StrCopyZ(out, cap, full.s);
             return true;
         }
     }
@@ -4290,16 +4300,13 @@ bool AssetsLoad(Str relPath, Vec<uint8_t>* out) {
     for (int i = gSourceN - 1; i >= 0; i--)
         if (gSources[i].load(gSources[i].user, relPath, out)) return true;
 
-    char rel[kMaxPath];
     int n = relPath.len < kMaxPath - 1 ? relPath.len : kMaxPath - 1;
-    memcpy(rel, relPath.s, (size_t)n);
-    rel[n] = 0;
+    TempStr rel = StrDupTemp(Str(relPath.s, n));
     ToNativeSep(rel);
 
     for (int i = 0; i < gRootN; i++) {
-        char full[kMaxPath];
-        gpui_assets_JoinPath(full, kMaxPath, gRoots[i], rel);
-        if (ReadFileAll(full, out)) {
+        TempStr full = gpui_assets_JoinPathTemp(Str(gRoots[i]), rel);
+        if (ReadFileAll(full.s, out)) {
             return true;
         }
     }
@@ -4328,16 +4335,13 @@ bool AssetsExists(Str relPath) {
         if (gSources[i].exists && gSources[i].exists(gSources[i].user, relPath))
             return true;
 
-    char rel[kMaxPath];
     int n = relPath.len < kMaxPath - 1 ? relPath.len : kMaxPath - 1;
-    memcpy(rel, relPath.s, (size_t)n);
-    rel[n] = 0;
+    TempStr rel = StrDupTemp(Str(relPath.s, n));
     ToNativeSep(rel);
 
     for (int i = 0; i < gRootN; i++) {
-        char full[kMaxPath];
-        gpui_assets_JoinPath(full, kMaxPath, gRoots[i], rel);
-        if (PlatFileExists(full)) {
+        TempStr full = gpui_assets_JoinPathTemp(Str(gRoots[i]), rel);
+        if (PlatFileExists(full.s)) {
             return true;
         }
     }
@@ -5045,12 +5049,21 @@ El* EntityRender(App* app, Window* win, Arena* a, EntityId id) {
     return s.render(s.ptr, &cx);
 }
 
+static void InvalidateForNotify(Window* win) {
+    if (win && !win->active && win->animFrame) {
+
+        win->invalidations++;
+        return;
+    }
+    AppInvalidate(win);
+}
+
 void NotifyApp(App* app) {
     if (!app) {
         return;
     }
     for (int i = 0; i < app->windows.len; i++) {
-        AppInvalidate(app->windows[i]);
+        InvalidateForNotify(app->windows[i]);
     }
 }
 
@@ -5089,7 +5102,7 @@ void NotifyEntity(App* app, EntityId id, Window* from) {
             Window* w = app->windows[i];
             for (int j = 0; j < w->rendered.len; j++) {
                 if (w->rendered[j] == id) {
-                    AppInvalidate(w);
+                    InvalidateForNotify(w);
                     any = true;
                     break;
                 }
@@ -5101,7 +5114,7 @@ void NotifyEntity(App* app, EntityId id, Window* from) {
     }
 
     if (from) {
-        AppInvalidate(from);
+        InvalidateForNotify(from);
         return;
     }
     NotifyApp(app);
@@ -5115,7 +5128,7 @@ void Notify(Ctx* cx) {
 }
 
 void ListenerCall(App* app, Window* win, const Listener& l, const void* ev) {
-    if (!l.fn) {
+    if (!l.IsValid()) {
         return;
     }
     void* self = EntityGet(app, l.view);
@@ -5128,10 +5141,10 @@ void ListenerCall(App* app, Window* win, const Listener& l, const void* ev) {
     cx.win = win;
     cx.a = win ? win->frameArena : nullptr;
     cx.self = l.view;
-    if (l.hasArg) {
-        ((ListenerArgFn)l.fn)(self, &cx, ev, l.arg);
+    if (l.HasArg()) {
+        ((ListenerArgFn)l.Fn())(self, &cx, ev, l.arg);
     } else {
-        ((ListenerFn)l.fn)(self, &cx, ev);
+        ((ListenerFn)l.Fn())(self, &cx, ev);
     }
 }
 
@@ -5181,7 +5194,6 @@ void WindowSetActive(Window* win, bool active) {
         win->eatChar = false;
         win->keyPressPending = false;
     }
-    win->pendingInvalidate = false;
     win->lastDrawTime = 0;
     AppInvalidate(win);
 }
@@ -5995,12 +6007,14 @@ El* ProgressEl(Arena* a, float value01to100, float barW, float barH) {
 El* ChartEl(Arena* a, const float* ys, int n, Rgba stroke, Rgba fillTop,
             Rgba fillBot, int tickMargin) {
     El* e = NewEl(a, ElKind::Chart);
-    e->chart.ys = ys;
-    e->chart.n = n;
-    e->chart.stroke = stroke;
-    e->chart.fillTop = fillTop;
-    e->chart.fillBot = fillBot;
-    e->chart.tickMargin = tickMargin > 0 ? tickMargin : 15;
+    ChartSeries* chart = ArenaNew<ChartSeries>(a);
+    e->chart = ArenaPtrOf(a, chart);
+    chart->ys = ys;
+    chart->n = n;
+    chart->stroke = stroke;
+    chart->fillTop = fillTop;
+    chart->fillBot = fillBot;
+    chart->tickMargin = tickMargin > 0 ? tickMargin : 15;
     e->style.flexGrow = 1;
     e->style.height = kFill;
     e->style.minH = 80;
@@ -7048,34 +7062,58 @@ El* El::OnDrop(Str acceptKind, Listener l) {
     onDrop = l;
     return this;
 }
+ElStyleStates* El::StyleStates() {
+    return ArenaPtrGet(arena, styleStates);
+}
+const ElStyleStates* El::StyleStates() const {
+    return ArenaPtrGet(arena, styleStates);
+}
+ElStyleStates* El::EnsureStyleStates() {
+    ElStyleStates* states = StyleStates();
+    if (!states) {
+        states = ArenaNew<ElStyleStates>(arena);
+        styleStates = ArenaPtrOf(arena, states);
+    }
+    return states;
+}
+ChartSeries* El::Chart() {
+    return ArenaPtrGet(arena, chart);
+}
+const ChartSeries* El::Chart() const {
+    return ArenaPtrGet(arena, chart);
+}
 El* El::Hover(const StateStyle& s) {
     if (s.set) {
-        StyleApplyFields(&hoverStyle, s.style, s.set);
-        hoverSet |= s.set;
+        ElStyleStates* states = EnsureStyleStates();
+        StyleApplyFields(&states->hover, s.style, s.set);
+        states->hoverSet |= s.set;
     }
     return this;
 }
 
 El* El::Active(const StateStyle& s) {
     if (s.set) {
-        StyleApplyFields(&activeStyle, s.style, s.set);
-        activeSet |= s.set;
+        ElStyleStates* states = EnsureStyleStates();
+        StyleApplyFields(&states->active, s.style, s.set);
+        states->activeSet |= s.set;
     }
     return this;
 }
 
 El* El::Focus(const StateStyle& s) {
     if (s.set) {
-        StyleApplyFields(&focusStyle, s.style, s.set);
-        focusSet |= s.set;
+        ElStyleStates* states = EnsureStyleStates();
+        StyleApplyFields(&states->focus, s.style, s.set);
+        states->focusSet |= s.set;
     }
     return this;
 }
 El* El::DragOver(Str dragKind, const StateStyle& s) {
     if (s.set) {
-        dragOverKind = dragKind;
-        StyleApplyFields(&dragOverStyle, s.style, s.set);
-        dragOverSet |= s.set;
+        ElStyleStates* states = EnsureStyleStates();
+        states->dragOverKind = ArenaStrDup(arena, dragKind);
+        StyleApplyFields(&states->dragOver, s.style, s.set);
+        states->dragOverSet |= s.set;
     }
     return this;
 }
@@ -7084,8 +7122,9 @@ El* El::Refine(const Style& s, uint32_t fields) {
         return this;
     }
 
-    StyleApplyFields(&refine, s, fields);
-    refineSet |= fields;
+    ElStyleStates* states = EnsureStyleStates();
+    StyleApplyFields(&states->refine, s, fields);
+    states->refineSet |= fields;
     return this;
 }
 
@@ -7871,7 +7910,8 @@ void TextMeasEndFrame(PaintCtx* ctx) {
         if (!slots[i].occupied || !slots[i].layout) {
             continue;
         }
-        if (frame > kLayoutKeepFrames && slots[i].lastUsed + kLayoutKeepFrames < frame) {
+        if (frame > kLayoutKeepFrames &&
+            slots[i].lastUsed + kLayoutKeepFrames < frame) {
             TextLayoutRelease(slots[i].layout);
             slots[i].layout = nullptr;
         } else {
@@ -7880,7 +7920,8 @@ void TextMeasEndFrame(PaintCtx* ctx) {
     }
     if (liveLayouts > kMaxLiveLayouts) {
         for (int i = 0; i < cap && liveLayouts > kMaxLiveLayouts; i++) {
-            if (slots[i].occupied && slots[i].layout && slots[i].lastUsed < frame) {
+            if (slots[i].occupied && slots[i].layout &&
+                slots[i].lastUsed < frame) {
                 TextLayoutRelease(slots[i].layout);
                 slots[i].layout = nullptr;
                 liveLayouts--;
@@ -8542,24 +8583,29 @@ static void ResolveImageStyle(PaintCtx* ctx, El* e) {
 
 static void PrepareEl(PaintCtx* ctx, El* e, float inheritFont, Rgba inheritFg) {
 
-    if (e->refineSet) {
-        StyleApplyFields(&e->style, e->refine, e->refineSet);
-        e->refineSet = 0;
+    ElStyleStates* states = e->StyleStates();
+    if (states && states->refineSet) {
+        StyleApplyFields(&e->style, states->refine, states->refineSet);
+        states->refineSet = 0;
     }
 
-    if (e->hoverSet && e->clickId && ctx && e->clickId == ctx->hoverId) {
-        StyleApplyFields(&e->style, e->hoverStyle, e->hoverSet);
+    if (states && states->hoverSet && e->clickId && ctx &&
+        e->clickId == ctx->hoverId) {
+        StyleApplyFields(&e->style, states->hover, states->hoverSet);
     }
-    if (e->activeSet && e->clickId && ctx && e->clickId == ctx->activeId) {
-        StyleApplyFields(&e->style, e->activeStyle, e->activeSet);
+    if (states && states->activeSet && e->clickId && ctx &&
+        e->clickId == ctx->activeId) {
+        StyleApplyFields(&e->style, states->active, states->activeSet);
     }
-    if (e->focusSet && e->style.focusId && ctx &&
+    if (states && states->focusSet && e->style.focusId && ctx &&
         e->style.focusId == ctx->focusId) {
-        StyleApplyFields(&e->style, e->focusStyle, e->focusSet);
+        StyleApplyFields(&e->style, states->focus, states->focusSet);
     }
-    if (e->dragOverSet && e->clickId && ctx && e->clickId == ctx->dragOverId &&
-        base::StrEq(e->dragOverKind, ctx->dragKind)) {
-        StyleApplyFields(&e->style, e->dragOverStyle, e->dragOverSet);
+    if (states && states->dragOverSet && e->clickId && ctx &&
+        e->clickId == ctx->dragOverId &&
+        base::StrEq(ArenaStrGet(e->arena, states->dragOverKind),
+                    ctx->dragKind)) {
+        StyleApplyFields(&e->style, states->dragOver, states->dragOverSet);
     }
     StyleOverrideApply(e);
 
@@ -8630,10 +8676,10 @@ bool LayoutReuseTakeArg(Str arg) {
         return false;
     }
     Str value(arg.s + k.len, arg.len - k.len);
-    if (base::StrEqI(value, "off") || base::StrEq(value, "0")) {
+    if (base::StrEqI(value, "off") || base::StrEq(value, StrL("0"))) {
         gLayoutReuse = 0;
         logf("layout: reuse off (__layout_reuse=off), rebuilding every frame");
-    } else if (base::StrEqI(value, "on") || base::StrEq(value, "1")) {
+    } else if (base::StrEqI(value, "on") || base::StrEq(value, StrL("1"))) {
         gLayoutReuse = 1;
     }
     return true;
@@ -9825,7 +9871,11 @@ static void DrawChart(PaintCtx* ctx, El* e) {
     if (plotH < 8 || w < 8) {
         return;
     }
-    const ChartSeries& c = e->chart;
+    const ChartSeries* chart = e->Chart();
+    if (!chart) {
+        return;
+    }
+    const ChartSeries& c = *chart;
 
     const float kValueAxisGap = 32.f;
     bool valueAxis = c.kind == ChartKind::Bar && c.valueAxis;
@@ -12644,11 +12694,11 @@ uint32_t ActionOf(Str name) {
     return HashName(name);
 }
 
-static bool IsSpace(char c) {
+static bool gpui_keymap_IsSpace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-static bool IsNameChar(char c) {
+static bool gpui_keymap_IsNameChar(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
 }
@@ -12845,11 +12895,11 @@ int KeyChordsParse(Str spec, KeyChord* out, int maxChords) {
     int n = 0;
     int i = 0;
     while (i < spec.len) {
-        while (i < spec.len && IsSpace(spec.s[i])) {
+        while (i < spec.len && gpui_keymap_IsSpace(spec.s[i])) {
             i++;
         }
         int start = i;
-        while (i < spec.len && !IsSpace(spec.s[i])) {
+        while (i < spec.len && !gpui_keymap_IsSpace(spec.s[i])) {
             i++;
         }
         if (i == start) {
@@ -12886,11 +12936,11 @@ static int gNContexts = 0;
 static void ParseContextInto(Str spec, ParsedContext* c) {
     int i = 0;
     while (i < spec.len) {
-        while (i < spec.len && IsSpace(spec.s[i])) {
+        while (i < spec.len && gpui_keymap_IsSpace(spec.s[i])) {
             i++;
         }
         int s0 = i;
-        while (i < spec.len && IsNameChar(spec.s[i])) {
+        while (i < spec.len && gpui_keymap_IsNameChar(spec.s[i])) {
             i++;
         }
         if (i == s0) {
@@ -12900,16 +12950,16 @@ static void ParseContextInto(Str spec, ParsedContext* c) {
         }
         uint32_t name = HashName(Str(spec.s + s0, i - s0));
         int j = i;
-        while (j < spec.len && IsSpace(spec.s[j])) {
+        while (j < spec.len && gpui_keymap_IsSpace(spec.s[j])) {
             j++;
         }
         if (j < spec.len && spec.s[j] == '=') {
             j++;
-            while (j < spec.len && IsSpace(spec.s[j])) {
+            while (j < spec.len && gpui_keymap_IsSpace(spec.s[j])) {
                 j++;
             }
             int v0 = j;
-            while (j < spec.len && IsNameChar(spec.s[j])) {
+            while (j < spec.len && gpui_keymap_IsNameChar(spec.s[j])) {
                 j++;
             }
             if (j > v0 && c->nPairs < kMaxPairs) {
@@ -13014,7 +13064,7 @@ struct PredParser {
 };
 
 static void PredSkipWs(PredParser* p) {
-    while (p->i < p->s.len && IsSpace(p->s.s[p->i])) {
+    while (p->i < p->s.len && gpui_keymap_IsSpace(p->s.s[p->i])) {
         p->i++;
     }
 }
@@ -13064,7 +13114,7 @@ static int ParsePredPrimary(PredParser* p) {
         return e;
     }
     int s0 = p->i;
-    while (p->i < p->s.len && IsNameChar(p->s.s[p->i])) {
+    while (p->i < p->s.len && gpui_keymap_IsNameChar(p->s.s[p->i])) {
         p->i++;
     }
     if (p->i == s0) {
@@ -14243,7 +14293,7 @@ static Path* BuildPath(PaintCtx* ctx, const PathRec& pr, bool relative) {
     return p;
 }
 
-static Path* gpui_scene_PathFor(PaintCtx* ctx, const Prim& prim, bool* owned, float* dx,
+static Path* PathFor(PaintCtx* ctx, const Prim& prim, bool* owned, float* dx,
                      float* dy) {
     *owned = true;
     *dx = 0;
@@ -14538,7 +14588,7 @@ void Replay(PaintCtx* ctx, const Bounds* damage) {
             case kPPathStroke: {
                 bool owned = false;
                 float dx = 0, dy = 0;
-                Path* path = gpui_scene_PathFor(ctx, p, &owned, &dx, &dy);
+                Path* path = PathFor(ctx, p, &owned, &dx, &dy);
                 if (!path) {
                     break;
                 }
@@ -15092,7 +15142,7 @@ static bool IsIdentChar(char c) {
            (c >= '0' && c <= '9') || c == '-' || c == '_';
 }
 
-static bool GetAttrStr(Str tag, const char* name, Str* out) {
+static TempStr GetAttrTemp(Str tag, const char* name) {
     int nlen = (int)strlen(name);
     const char* p = tag.s;
     const char* end = tag.s + tag.len;
@@ -15109,32 +15159,19 @@ static bool GetAttrStr(Str tag, const char* name, Str* out) {
             while (p < end && *p != q && *p != '>') {
                 p++;
             }
-            *out = Str(vs, (int)(p - vs));
-            return out->len > 0;
+            return StrDupTemp(Str(vs, (int)(p - vs)));
         }
         p++;
     }
-    return false;
-}
-
-static bool GetAttr(Str tag, const char* name, char* out, int outN) {
-    Str v;
-    if (!GetAttrStr(tag, name, &v)) {
-        out[0] = 0;
-        return false;
-    }
-    int n = v.len < outN - 1 ? v.len : outN - 1;
-    memcpy(out, v.s, (size_t)n);
-    out[n] = 0;
-    return n > 0;
+    return {};
 }
 
 static float AttrF(Str tag, const char* name, float def) {
-    char buf[64];
-    if (!GetAttr(tag, name, buf, 64)) {
+    TempStr value = GetAttrTemp(tag, name);
+    if (!value) {
         return def;
     }
-    return StrToFloatUnchecked(Str(buf));
+    return StrToFloatUnchecked(value);
 }
 
 static bool ParseSvgColor(Str s, Rgba* out) {
@@ -15299,9 +15336,9 @@ static void EndShape(SvgIcon* ic, int start, Str tag, const SvgMatrix& m) {
         return;
     }
 
-    Str own;
+    TempStr own = GetAttrTemp(tag, "transform");
     SvgMatrix full = m;
-    if (GetAttrStr(tag, "transform", &own)) {
+    if (own) {
         full = MatMul(m, ParseTransform(own));
     }
     if (!full.IsIdentity()) {
@@ -15320,15 +15357,13 @@ static void EndShape(SvgIcon* ic, int start, Str tag, const SvgMatrix& m) {
     SvgShape sh;
     sh.start = start;
     sh.count = ic->ops.len - start;
-    char fill[64];
-    if (GetAttr(tag, "fill", fill, 64) &&
-        ParseSvgPaint(ic, Str(fill), &sh.fill)) {
+    TempStr fill = GetAttrTemp(tag, "fill");
+    if (fill && ParseSvgPaint(ic, fill, &sh.fill)) {
         sh.hasFill = true;
         ic->hasOwnColors = true;
     }
-    char stroke[64];
-    if (GetAttr(tag, "stroke", stroke, 64) &&
-        ParseSvgPaint(ic, Str(stroke), &sh.stroke)) {
+    TempStr stroke = GetAttrTemp(tag, "stroke");
+    if (stroke && ParseSvgPaint(ic, stroke, &sh.stroke)) {
         sh.hasStroke = true;
         ic->hasOwnColors = true;
     }
@@ -15388,36 +15423,38 @@ struct SvgCtx {
 
 static SvgCtx RefineCtx(const SvgIcon* ic, const SvgCtx& outer, Str tag) {
     SvgCtx cur = outer;
-    Str tr;
-    if (GetAttrStr(tag, "transform", &tr)) {
+    TempStr tr = GetAttrTemp(tag, "transform");
+    if (tr) {
         cur.m = MatMul(cur.m, ParseTransform(tr));
     }
-    char buf[64];
-    if (GetAttr(tag, "font-size", buf, 64)) {
-        float v = StrToFloatUnchecked(Str(buf));
+    TempStr value = GetAttrTemp(tag, "font-size");
+    if (value) {
+        float v = StrToFloatUnchecked(value);
         if (v > 0) {
             cur.fontSize = v;
         }
     }
-    if (GetAttr(tag, "font-weight", buf, 64)) {
-        cur.bold =
-            StrEqI(Str(buf), "bold") || StrToIntUnchecked(Str(buf)) >= 600;
+    value = GetAttrTemp(tag, "font-weight");
+    if (value) {
+        cur.bold = StrEqI(value, "bold") || StrToIntUnchecked(value) >= 600;
     }
-    if (GetAttr(tag, "text-anchor", buf, 64)) {
-        Str v(buf);
-        cur.anchor = StrEqI(v, "middle") ? kTextAnchorMiddle
-                     : StrEqI(v, "end")  ? kTextAnchorEnd
-                                         : kTextAnchorStart;
+    value = GetAttrTemp(tag, "text-anchor");
+    if (value) {
+        cur.anchor = StrEqI(value, "middle") ? kTextAnchorMiddle
+                     : StrEqI(value, "end")  ? kTextAnchorEnd
+                                             : kTextAnchorStart;
     }
-    if (GetAttr(tag, "fill", buf, 64)) {
+    value = GetAttrTemp(tag, "fill");
+    if (value) {
         Rgba c;
-        if (ParseSvgPaint(ic, Str(buf), &c)) {
+        if (ParseSvgPaint(ic, value, &c)) {
             cur.hasFill = true;
             cur.fill = c;
         }
     }
-    if (GetAttr(tag, "fill-opacity", buf, 64)) {
-        float o = StrToFloatUnchecked(Str(buf));
+    value = GetAttrTemp(tag, "fill-opacity");
+    if (value) {
+        float o = StrToFloatUnchecked(value);
         if (o < 0) {
             o = 0;
         }
@@ -15427,18 +15464,22 @@ static SvgCtx RefineCtx(const SvgIcon* ic, const SvgCtx& outer, Str tag) {
         cur.fill.a = (uint8_t)lroundf(o * 255.f);
         cur.hasFill = cur.hasFill || o < 1.f;
     }
-    if (GetAttrStr(tag, "filter", &tr)) {
+    tr = GetAttrTemp(tag, "filter");
+    if (tr) {
         cur.filtered = true;
     }
 
-    if (GetAttr(tag, "x", buf, 64)) {
-        cur.x = StrToFloatUnchecked(Str(buf));
+    value = GetAttrTemp(tag, "x");
+    if (value) {
+        cur.x = StrToFloatUnchecked(value);
     }
-    if (GetAttr(tag, "y", buf, 64)) {
-        cur.y = StrToFloatUnchecked(Str(buf));
+    value = GetAttrTemp(tag, "y");
+    if (value) {
+        cur.y = StrToFloatUnchecked(value);
     }
-    if (GetAttr(tag, "textLength", buf, 64)) {
-        cur.textLength = StrToFloatUnchecked(Str(buf));
+    value = GetAttrTemp(tag, "textLength");
+    if (value) {
+        cur.textLength = StrToFloatUnchecked(value);
     }
     return cur;
 }
@@ -15570,7 +15611,8 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
                     IsTagNamed(tagStart, tagStart + tag.len,
                                "radialGradient")) {
                     SvgGradient g;
-                    if (GetAttrStr(tag, "id", &g.id)) {
+                    g.id = GetAttrTemp(tag, "id");
+                    if (g.id) {
                         VecAppend(ic->gradients, g);
                         gradIx = ic->gradients.len - 1;
                     }
@@ -15584,13 +15626,13 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
             if (gradIx >= 0 && gradIx < ic->gradients.len &&
                 !ic->gradients[gradIx].hasColor &&
                 IsTagNamed(tagStart, tagStart + tag.len, "stop")) {
-                char sc[64];
+                TempStr stop = GetAttrTemp(tag, "stop-color");
                 Rgba c;
-                if (GetAttr(tag, "stop-color", sc, 64) &&
-                    ParseSvgColor(Str(sc), &c)) {
+                if (stop && ParseSvgColor(stop, &c)) {
 
-                    if (GetAttr(tag, "stop-opacity", sc, 64)) {
-                        float o = StrToFloatUnchecked(Str(sc));
+                    stop = GetAttrTemp(tag, "stop-opacity");
+                    if (stop) {
+                        float o = StrToFloatUnchecked(stop);
                         if (o < 0) {
                             o = 0;
                         }
@@ -15637,9 +15679,9 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
         const SvgMatrix& gm = outer.m;
 
         if (base::StrStartsWithI(tag, "svg")) {
-            char vb[64];
-            if (GetAttr(tag, "viewBox", vb, 64)) {
-                PathScan s{vb, vb + strlen(vb)};
+            TempStr viewBox = GetAttrTemp(tag, "viewBox");
+            if (viewBox) {
+                PathScan s{viewBox.s, viewBox.s + viewBox.len};
                 float a = 0, b = 0, c = 24, d = 24;
                 ParseNum(&s, &a);
                 ParseNum(&s, &b);
@@ -15662,20 +15704,20 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
             if (sw > 0) {
                 ic->strokeW = sw;
             }
-            char fill[64];
-            if (GetAttr(tag, "fill", fill, 64)) {
-                ic->filled = !StrEqI(Str(fill), "none");
+            TempStr fill = GetAttrTemp(tag, "fill");
+            if (fill) {
+                ic->filled = !StrEqI(fill, "none");
             }
-            char stroke[64];
-            if (GetAttr(tag, "stroke", stroke, 64)) {
-                ic->stroked = !StrEqI(Str(stroke), "none");
+            TempStr stroke = GetAttrTemp(tag, "stroke");
+            if (stroke) {
+                ic->stroked = !StrEqI(stroke, "none");
             }
             continue;
         }
         if (base::StrStartsWithI(tag, "path")) {
-            Str d;
+            TempStr d = GetAttrTemp(tag, "d");
             int start = ic->ops.len;
-            if (GetAttrStr(tag, "d", &d)) {
+            if (d) {
                 ParsePathD(ic, d);
             }
             EndShape(ic, start, tag, gm);
@@ -15693,18 +15735,18 @@ static void ParseSvg(Str xml, SvgIcon* ic) {
             continue;
         }
         if (base::StrStartsWithI(tag, "polyline")) {
-            Str pts;
+            TempStr pts = GetAttrTemp(tag, "points");
             int start = ic->ops.len;
-            if (GetAttrStr(tag, "points", &pts)) {
+            if (pts) {
                 ParsePolyline(ic, pts, false);
             }
             EndShape(ic, start, tag, gm);
             continue;
         }
         if (base::StrStartsWithI(tag, "polygon")) {
-            Str pts;
+            TempStr pts = GetAttrTemp(tag, "points");
             int start = ic->ops.len;
-            if (GetAttrStr(tag, "points", &pts)) {
+            if (pts) {
                 ParsePolyline(ic, pts, true);
             }
             EndShape(ic, start, tag, gm);
@@ -16251,10 +16293,13 @@ static void InteractionBenchRecord(Window* win, const FrameTiming& timing) {
         return;
     }
     const scene::SceneStats& sc = scene::Stats(&win->paint);
+    uint64_t privateBytes = 0;
+    SysSelfPrivateMemory(&privateBytes);
     logf(
         "interaction-bench frame=%llu draw=%.6f build=%.6f layout=%.6f "
         "paint=%.6f presented=%d invalidations=%llu prims=%d changed=%d "
-        "damage=%.6f pathHits=%d pathMisses=%d pathBuild=%.6f",
+        "damage=%.6f pathHits=%d pathMisses=%d pathBuild=%.6f arena=%llu "
+        "arenaAllocs=%llu private=%llu",
         (unsigned long long)win->frameSeq, timing.drawSecs * 1000.f,
         gFrameBuildSecs * 1000.0, gFrameLayoutSecs * 1000.0,
         gFramePaintSecs * 1000.0, timing.presentAt >= 0 ? 1 : 0,
@@ -16262,7 +16307,10 @@ static void InteractionBenchRecord(Window* win, const FrameTiming& timing) {
         SceneOn() ? sc.primsChanged : -1, SceneOn() ? sc.damageFraction : -1.f,
         SceneOn() ? sc.framePathCacheHits : -1,
         SceneOn() ? sc.framePathCacheMisses : -1,
-        SceneOn() ? sc.framePathBuildMs : -1.f);
+        SceneOn() ? sc.framePathBuildMs : -1.f,
+        (unsigned long long)ArenaUsed(win->frameArena),
+        (unsigned long long)win->frameArena->nAllocsSinceReset,
+        (unsigned long long)privateBytes);
 }
 
 static void FrameBenchTick(Window* win, float secs) {
@@ -16335,6 +16383,12 @@ static void FrameBenchTick(Window* win, float secs) {
     }
     logf("frame-bench phases build=%.3fms layout=%.3fms paint=%.3fms", sb / n,
          sl / n, sp / n);
+    uint64_t privateBytes = 0;
+    SysSelfPrivateMemory(&privateBytes);
+    logf("frame-bench memory arena=%llu arenaAllocs=%llu El=%llu private=%llu",
+         (unsigned long long)ArenaUsed(win->frameArena),
+         (unsigned long long)win->frameArena->nAllocsSinceReset,
+         (unsigned long long)sizeof(El), (unsigned long long)privateBytes);
 
     LayoutCacheStats ls = LayoutCacheLastStats(win->layout);
     logf(
@@ -16452,8 +16506,12 @@ static uint64_t AccessibilityHashStr(uint64_t hash, Str value) {
 static uint64_t AccessibilityTreeHash(const Vec<AccessibilityNode>& nodes) {
     uint64_t hash = 0xcbf29ce484222325ull;
     hash = AccessibilityHashBytes(hash, &nodes.len, (int)sizeof(nodes.len));
-#define GPUI_A11Y_HASH(value) \
-    hash = AccessibilityHashBytes(hash, &(value), (int)sizeof(value))
+#define GPUI_A11Y_HASH(value)                                                 \
+    do {                                                                      \
+        const auto hashValue = (value);                                       \
+        hash =                                                                \
+            AccessibilityHashBytes(hash, &hashValue, (int)sizeof(hashValue)); \
+    } while (false)
     for (int i = 0; i < nodes.len; i++) {
         const AccessibilityNode& node = nodes[i];
         const AccessibilityInfo& info = node.info;
@@ -16704,7 +16762,6 @@ void WindowDrawFrame(Window* win, void* native, int pxW, int pxH, float dipW,
     timing.presentAt = presented ? drawEnd : -1;
     win->frameTrace[win->frameSeq % (uint64_t)kFrameTraceCap] = timing;
     win->lastDrawTime = drawEnd;
-    win->pendingInvalidate = false;
     InteractionBenchRecord(win, timing);
     win->frameSeq++;
     FrameBenchTick(win, timing.drawSecs);
@@ -17471,8 +17528,8 @@ static void DispatchMouseMove(Window* win, const MouseMoveEvent& in) {
 
     for (int i = 0; i < win->paint.inputs.len; i++) {
         InputState* f = win->paint.inputs[i];
-        if (f->hoverDef.locations.len > 0 &&
-            f->hoverDef.bounds.Contains({x, y})) {
+        if (f->hoverDef.locations.len > 0 && f->hoverDef.bounds
+                                                 .Contains({x, y})) {
             if (win->cursor != CursorKind::Pointer) {
                 win->cursor = CursorKind::Pointer;
                 PlatSetCursor(win, CursorKind::Pointer);
@@ -18209,15 +18266,16 @@ void BlinkCursor::OnResume(BlinkCursor* self, Ctx* cx, const TickEvent*) {
     self->paused = false;
     self->visible = true;
     Listener flip;
-    flip.fn = (void*)&BlinkCursor::OnFlip;
+    flip.SetFn(&BlinkCursor::OnFlip);
     flip.view = cx->self;
     self->timer = WindowSetInterval(cx->win, kBlinkIntervalMs, flip);
     Notify(cx);
 }
 
-static Listener BlinkListener(EntityId handle, void* fn) {
+template <typename T, typename E>
+static Listener BlinkListener(EntityId handle, void (*fn)(T*, Ctx*, const E*)) {
     Listener l;
-    l.fn = fn;
+    l.SetFn(fn);
     l.view = handle;
     return l;
 }
@@ -18238,9 +18296,8 @@ void BlinkStart(App* app, Window* win, EntityId* handle) {
     b->paused = false;
 
     b->visible = true;
-    b->timer =
-        WindowSetInterval(win, kBlinkIntervalMs,
-                          BlinkListener(*handle, (void*)&BlinkCursor::OnFlip));
+    b->timer = WindowSetInterval(win, kBlinkIntervalMs,
+                                 BlinkListener(*handle, &BlinkCursor::OnFlip));
     AppInvalidate(win);
 }
 
@@ -18270,9 +18327,8 @@ void BlinkPause(App* app, Window* win, EntityId* handle) {
     WindowCancelTimer(win, b->timer);
     b->paused = true;
     b->visible = true;
-    b->timer =
-        WindowSetTimeout(win, kBlinkPauseMs,
-                         BlinkListener(*handle, (void*)&BlinkCursor::OnResume));
+    b->timer = WindowSetTimeout(win, kBlinkPauseMs,
+                                BlinkListener(*handle, &BlinkCursor::OnResume));
     AppInvalidate(win);
 }
 
@@ -18285,12 +18341,22 @@ bool BlinkVisible(App* app, EntityId handle) {
     return b->paused || b->visible;
 }
 
+static bool WindowAnimationDue(Window* win, double now) {
+    if (!win || !(win->anim || win->opts.anim || win->animFrame)) {
+        return false;
+    }
+    if (win->lastDrawTime <= 0) {
+        return true;
+    }
+    double interval = win->active ? 0.016 : kInactiveFrameInterval;
+    return now >= win->lastDrawTime + interval;
+}
+
 void WindowTimerTick(Window* win) {
     if (!win) {
         return;
     }
     double now = TimeNow();
-    bool repaint = false;
 
     int n = win->timers.len;
     for (int i = 0; i < n && i < win->timers.len; i++) {
@@ -18321,8 +18387,7 @@ void WindowTimerTick(Window* win) {
     }
     win->timers.len = keep;
 
-    if (win->anim || win->animFrame || win->pendingInvalidate || repaint) {
-        win->pendingInvalidate = false;
+    if (WindowAnimationDue(win, now)) {
         AppInvalidate(win);
     }
     PlatSetTimer(win, WindowTimerMs(win));
@@ -18347,10 +18412,11 @@ int WindowTimerMs(Window* win) {
 
     double now = TimeNow();
     double soonest = -1;
-    if (win->anim || win->opts.anim || win->animFrame || win->pendingInvalidate) {
+    if (win->anim || win->opts.anim || win->animFrame) {
 
         double interval = win->active ? 0.016 : kInactiveFrameInterval;
-        double target = (win->lastDrawTime > 0) ? (win->lastDrawTime + interval) : now;
+        double target =
+            (win->lastDrawTime > 0) ? (win->lastDrawTime + interval) : now;
         if (target < now) {
             target = now;
         }
@@ -18553,24 +18619,25 @@ void AppRequestAnim(Window* win, bool on) {
 static bool gGeomAsked = false;
 static int gGeom[4] = {0, 0, 0, 0};
 
-static bool ParseGeom(const char* s, int out[4]) {
+static bool ParseGeom(Str value, int out[4]) {
+    int at = 0;
     for (int i = 0; i < 4; i++) {
         if (i > 0) {
-            if (*s != ',') {
+            if (at >= value.len || value.s[at] != ',') {
                 return false;
             }
-            s++;
+            at++;
         }
         bool neg = false;
-        if (*s == '-') {
+        if (at < value.len && value.s[at] == '-') {
             neg = true;
-            s++;
+            at++;
         }
         int digits = 0;
         int v = 0;
-        while (*s >= '0' && *s <= '9') {
-            v = v * 10 + (*s - '0');
-            s++;
+        while (at < value.len && value.s[at] >= '0' && value.s[at] <= '9') {
+            v = v * 10 + (value.s[at] - '0');
+            at++;
             digits++;
             if (digits > 6) {
                 return false;
@@ -18581,7 +18648,7 @@ static bool ParseGeom(const char* s, int out[4]) {
         }
         out[i] = neg ? -v : v;
     }
-    return *s == 0 && out[2] > 0 && out[3] > 0;
+    return at == value.len && out[2] > 0 && out[3] > 0;
 }
 
 bool WindowGeomRequested(int* x, int* y, int* w, int* h) {
@@ -18598,26 +18665,27 @@ bool WindowGeomRequested(int* x, int* y, int* w, int* h) {
 static bool gInspectorAsked = false;
 
 int GpuiTakeRuntimeArgs(int argc, char** argv) {
-    const char* kGeom = "-gpui-window=";
+    Str geomPrefix = StrL("-gpui-window=");
     int keep = 0;
     for (int i = 0; i < argc; i++) {
-        const char* a = argv[i];
-        size_t kGeomLen = strlen(kGeom);
+        Str argument = Str(argv[i]);
 #if GPUI_OS_WINDOWS
-        if (i > 0 && a && WinPaintOptionsTakeArg(Str(a))) {
+        if (i > 0 && argument && WinPaintOptionsTakeArg(argument)) {
             continue;
         }
 #endif
-        if (i > 0 && a && LayoutReuseTakeArg(Str(a))) {
+        if (i > 0 && argument && LayoutReuseTakeArg(argument)) {
             continue;
         }
-        if (i > 0 && a && strcmp(a, "-gpui-inspector") == 0) {
+        if (i > 0 && StrEq(argument, StrL("-gpui-inspector"))) {
             gInspectorAsked = true;
             continue;
         }
-        if (i > 0 && a && strncmp(a, kGeom, kGeomLen) == 0) {
+        if (i > 0 && StrStartsWith(argument, geomPrefix)) {
             int g[4];
-            if (ParseGeom(a + kGeomLen, g)) {
+            if (ParseGeom(Str(argument.s + geomPrefix.len,
+                              argument.len - geomPrefix.len),
+                          g)) {
                 gGeomAsked = true;
                 for (int k = 0; k < 4; k++) {
                     gGeom[k] = g[k];
@@ -23667,7 +23735,7 @@ bool DockAreaStateParse(Arena* a, Str json, DockAreaState* out) {
     return out->center >= 0;
 }
 
-static void WriteNode(JsonWriter* w, const char* key, const DockAreaState* s,
+static void base_dock_state_WriteNode(JsonWriter* w, const char* key, const DockAreaState* s,
                       int ix) {
     if (ix < 0 || ix >= s->nodes.len) {
         w->Null(key);
@@ -23678,7 +23746,7 @@ static void WriteNode(JsonWriter* w, const char* key, const DockAreaState* s,
     w->String("panel_name", node.panelName);
     w->BeginArray("children");
     for (int i = 0; i < node.children.len; i++) {
-        WriteNode(w, nullptr, s, node.children[i]);
+        base_dock_state_WriteNode(w, nullptr, s, node.children[i]);
     }
     w->EndArray();
     w->BeginObject("info");
@@ -23732,7 +23800,7 @@ static void WriteDock(JsonWriter* w, const char* key, const DockAreaState* s,
         return;
     }
     w->BeginObject(key);
-    WriteNode(w, "panel", s, side.node);
+    base_dock_state_WriteNode(w, "panel", s, side.node);
     w->String("placement", Str(base_dock_state_PlacementName(side.placement)));
     w->Number("size", side.size);
     w->Bool("open", side.open);
@@ -23746,7 +23814,7 @@ void DockAreaStateWrite(const DockAreaState* s, StrBuilder* out) {
     if (s->hasVersion) {
         w.Number("version", s->version);
     }
-    WriteNode(&w, "center", s, s->center);
+    base_dock_state_WriteNode(&w, "center", s, s->center);
     WriteDock(&w, "left_dock", s, s->left);
     WriteDock(&w, "right_dock", s, s->right);
     WriteDock(&w, "bottom_dock", s, s->bottom);
@@ -32501,7 +32569,7 @@ struct JsonParser {
     bool bad = false;
 };
 
-static void SkipSpace(JsonParser* jp) {
+static void base_json_SkipSpace(JsonParser* jp) {
     while (jp->p < jp->end) {
         char c = *jp->p;
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
@@ -32513,7 +32581,7 @@ static void SkipSpace(JsonParser* jp) {
 }
 
 static bool Eat(JsonParser* jp, char c) {
-    SkipSpace(jp);
+    base_json_SkipSpace(jp);
     if (jp->p < jp->end && *jp->p == c) {
         jp->p++;
         return true;
@@ -32522,7 +32590,7 @@ static bool Eat(JsonParser* jp, char c) {
 }
 
 static bool Literal(JsonParser* jp, const char* word) {
-    SkipSpace(jp);
+    base_json_SkipSpace(jp);
     int n = (int)strlen(word);
     if (jp->end - jp->p < n || !StrEq(Str(jp->p, n), Str(word, n))) {
         return false;
@@ -32628,7 +32696,7 @@ static JsonValue* ParseObject(JsonParser* jp) {
     if (!obj) {
         return nullptr;
     }
-    SkipSpace(jp);
+    base_json_SkipSpace(jp);
     if (Eat(jp, '}')) {
         return obj;
     }
@@ -32671,7 +32739,7 @@ static JsonValue* ParseArray(JsonParser* jp) {
     if (!arr) {
         return nullptr;
     }
-    SkipSpace(jp);
+    base_json_SkipSpace(jp);
     if (Eat(jp, ']')) {
         return arr;
     }
@@ -32700,7 +32768,7 @@ static JsonValue* ParseArray(JsonParser* jp) {
 }
 
 static JsonValue* ParseValue(JsonParser* jp) {
-    SkipSpace(jp);
+    base_json_SkipSpace(jp);
     if (jp->p >= jp->end) {
         jp->bad = true;
         return nullptr;
@@ -34675,22 +34743,17 @@ static int FractionDigits(Str s) {
 }
 
 static int FractionDigitsOf(double v) {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%g", v);
-    return FractionDigits(Str(buf));
+    return FractionDigits(fmt("%g", v));
 }
 
 bool NumberParseValue(Str value, double* out) {
     if (!value.s || value.len <= 0) {
         return false;
     }
-    char buf[128];
-    int n = value.len < (int)sizeof(buf) - 1 ? value.len : (int)sizeof(buf) - 1;
-    memcpy(buf, value.s, (size_t)n);
-    buf[n] = 0;
+    TempStr buf = StrDupTemp(value.len < 127 ? value : Str(value.s, 127));
     char* end = nullptr;
-    double v = strtod(buf, &end);
-    if (end == buf) {
+    double v = strtod(buf.s, &end);
+    if (end == buf.s) {
         return false;
     }
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n' ||
@@ -34704,12 +34767,8 @@ bool NumberParseValue(Str value, double* out) {
     return true;
 }
 
-bool NumberStepValue(Str value, StepAction action, double step, bool hasMin,
-                     double min, bool hasMax, double max, char* out,
-                     int outCap) {
-    if (!out || outCap <= 0) {
-        return false;
-    }
+TempStr NumberStepValueTemp(Str value, StepAction action, double step,
+                            bool hasMin, double min, bool hasMax, double max) {
     double current = 0;
     bool haveCurrent = NumberParseValue(value, &current);
     double next = action == StepAction::Increment
@@ -34739,11 +34798,11 @@ bool NumberStepValue(Str value, StepAction action, double step, bool hasMin,
         bool moved =
             action == StepAction::Increment ? next > current : next < current;
         if (!moved) {
-            return false;
+            return {};
         }
     }
-    snprintf(out, (size_t)outCap, "%.*f", digits, next);
-    return true;
+    TempStr format = fmt("%%.%df", digits);
+    return fmt(format.s, next);
 }
 
 bool NumberStepForKey(int key, StepAction* out) {
@@ -34792,12 +34851,12 @@ bool NumberInputApplyStep(InputState* state, App* app, Window* win,
         double current = 0;
         NumberParseValue(value, &current);
         double amount = step->Value(current, action, app);
-        char next[128];
-        if (!NumberStepValue(value, action, amount, hasMin, min, hasMax, max,
-                             next, (int)sizeof(next))) {
+        TempStr next = NumberStepValueTemp(value, action, amount, hasMin, min,
+                                           hasMax, max);
+        if (!next) {
             return false;
         }
-        Str candidate(next);
+        Str candidate = next;
         if (NumberInputCandidateValid(state, candidate)) {
 
             InputSetValue(state, candidate);
@@ -38880,24 +38939,10 @@ void TextLineRangeAt(Str s, int off, int* outA, int* outB) {
 
 namespace gpui {
 
-enum class HtmlTok : uint8_t {
-    End,
-    Text,
-    Start,
-    Close
-};
+using namespace base;
 
-static bool HtmlIsSpace(char c) {
+static bool HtmlSpace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
-static bool HtmlIsAlpha(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-static bool HtmlIsNameChar(char c) {
-    return HtmlIsAlpha(c) || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-           c == ':';
 }
 
 Minifier& Minifier::OmitDoctype(bool value) {
@@ -38923,7 +38968,7 @@ Str Minifier::WriteCollapseWhitespace(Arena* a, Str source) {
     bool whitespace = precedingWhitespace;
     for (int i = 0; i < source.len; i++) {
         char c = source.s[i];
-        if (HtmlIsSpace(c)) {
+        if (HtmlSpace(c)) {
             if (!whitespace) out[n++] = ' ';
             whitespace = true;
         } else {
@@ -38945,7 +38990,7 @@ Str Minifier::Minify(Arena* a, Str source) {
     bool whitespace = precedingWhitespace;
     Str raw = {};
     while (at < source.len) {
-        if (base::StrStartsWithI(Str(source.s + at, source.len - at), "<!--")) {
+        if (StrStartsWithI(Str(source.s + at, source.len - at), "<!--")) {
             int end = at + 4;
             while (end + 2 < source.len &&
                    !(source.s[end] == '-' && source.s[end + 1] == '-' &&
@@ -38962,8 +39007,7 @@ Str Minifier::Minify(Arena* a, Str source) {
             continue;
         }
         if (omitDoctype &&
-            base::StrStartsWithI(Str(source.s + at, source.len - at),
-                                 "<!doctype")) {
+            StrStartsWithI(Str(source.s + at, source.len - at), "<!doctype")) {
             while (at < source.len && source.s[at] != '>') at++;
             if (at < source.len) at++;
             continue;
@@ -38987,15 +39031,16 @@ Str Minifier::Minify(Arena* a, Str source) {
             bool close = nameAt < source.len && source.s[nameAt] == '/';
             if (close) nameAt++;
             int nameEnd = nameAt;
-            while (nameEnd < source.len && HtmlIsNameChar(source.s[nameEnd])) {
+            while (nameEnd < source.len &&
+                   ((source.s[nameEnd] >= 'a' && source.s[nameEnd] <= 'z') ||
+                    (source.s[nameEnd] >= 'A' && source.s[nameEnd] <= 'Z'))) {
                 nameEnd++;
             }
             Str name(source.s + nameAt, nameEnd - nameAt);
-            if (!close &&
-                (base::StrEqI(name, "pre") || base::StrEqI(name, "textarea") ||
-                 base::StrEqI(name, "script") || base::StrEqI(name, "style"))) {
+            if (!close && (StrEqI(name, "pre") || StrEqI(name, "textarea") ||
+                           StrEqI(name, "script") || StrEqI(name, "style"))) {
                 raw = name;
-            } else if (close && raw.s && base::StrEqI(name, raw)) {
+            } else if (close && raw.s && StrEqI(name, raw)) {
                 raw = {};
             }
             memcpy(out + n, source.s + at, (size_t)(end - at));
@@ -39005,7 +39050,7 @@ Str Minifier::Minify(Arena* a, Str source) {
             continue;
         }
         char c = source.s[at++];
-        if (collapseWhitespace && !raw.s && HtmlIsSpace(c)) {
+        if (collapseWhitespace && !raw.s && HtmlSpace(c)) {
             if (!whitespace) out[n++] = ' ';
             whitespace = true;
         } else {
@@ -39024,760 +39069,421 @@ Str HtmlMinify(Arena* a, Str source) {
     return minifier.Minify(a, source);
 }
 
-struct HtmlLex {
-    Str src = {};
+static const html5ever::Node* FirstElement(Arena* a,
+                                           const html5ever::Node* node) {
+    for (const html5ever::Node* at = html5ever::NodeFirst(a, node); at;
+         at = html5ever::NodeNext(a, at)) {
+        if (at->kind == html5ever::NodeKind::Element) return at;
+        if (const html5ever::Node* child = FirstElement(a, at)) return child;
+    }
+    return nullptr;
+}
+
+Str HtmlAttrValue(Arena* a, Str attrs, const char* name) {
+    if (!a || !attrs.s || !name) return {};
+    StrBuilder source;
+    StrBuilderAppend(a, source, StrL("<x "));
+    StrBuilderAppend(a, source, attrs);
+    StrBuilderAppendChar(a, source, '>');
+    Str html = StrBuilderTakeStr(a, source);
+    html5ever::Node* doc = html5ever::ParseFragment(a, html);
+    return html5ever::AttrValue(a, FirstElement(a, doc), Str((char*)name));
+}
+
+static uint8_t InlineMark(Str name) {
+    static const char names[] =
+        "b\0strong\0i\0em\0cite\0var\0code\0kbd\0samp\0tt\0u\0ins\0s\0del\0"
+        "strike\0mark\0";
+    static const uint8_t marks[] = {
+        MdBold, MdBold, MdItalic, MdItalic,    MdItalic,    MdItalic,
+        MdCode, MdCode, MdCode,   MdCode,      MdUnderline, MdUnderline,
+        MdDel,  MdDel,  MdDel,    MdHighlight,
+    };
+    int ix = SeqStrIndexIS(names, name);
+    return ix < 0 ? 0 : marks[ix];
+}
+
+static float LengthValue(Str value) {
+    value = StrTrimAscii(value);
+    float result = 0;
+    bool any = false;
     int at = 0;
-    HtmlTok tok = HtmlTok::End;
-
-    Str text = {};
-
-    Str name = {};
-
-    Str attrs = {};
-    bool selfClose = false;
-};
-
-static void HtmlLexName(HtmlLex* l) {
-    int start = l->at;
-    while (l->at < l->src.len && HtmlIsNameChar(l->src.s[l->at])) {
-        l->at++;
+    while (at < value.len && value.s[at] >= '0' && value.s[at] <= '9') {
+        result = result * 10 + (float)(value.s[at++] - '0');
+        any = true;
     }
-    l->name = Str(l->src.s + start, l->at - start);
-}
-
-static void HtmlLexAttrs(HtmlLex* l) {
-    int start = l->at;
-    char quote = 0;
-    while (l->at < l->src.len) {
-        char c = l->src.s[l->at];
-        if (quote) {
-            if (c == quote) {
-                quote = 0;
-            }
-        } else if (c == '"' || c == '\'') {
-            quote = c;
-        } else if (c == '>') {
-            break;
-        }
-        l->at++;
-    }
-    int end = l->at;
-    if (l->at < l->src.len) {
-        l->at++;
-    }
-    while (end > start && HtmlIsSpace(l->src.s[end - 1])) {
-        end--;
-    }
-    l->selfClose = end > start && l->src.s[end - 1] == '/';
-    if (l->selfClose) {
-        end--;
-    }
-    l->attrs = Str(l->src.s + start, end - start);
-}
-
-static bool HtmlAtStartTag(const HtmlLex* l, int at) {
-    if (at + 1 >= l->src.len || l->src.s[at] != '<') {
-        return false;
-    }
-    char c = l->src.s[at + 1];
-    return HtmlIsAlpha(c) || c == '/' || c == '!';
-}
-
-static void HtmlLexNext(HtmlLex* l) {
-    l->selfClose = false;
-    l->attrs = {};
-    l->text = {};
-
-    while (l->at < l->src.len && HtmlAtStartTag(l, l->at) &&
-           l->src.s[l->at + 1] == '!') {
-
-        bool comment = l->at + 3 < l->src.len && l->src.s[l->at + 2] == '-' &&
-                       l->src.s[l->at + 3] == '-';
-        l->at += comment ? 4 : 2;
-        while (l->at < l->src.len) {
-            if (comment) {
-                if (l->at + 2 < l->src.len && l->src.s[l->at] == '-' &&
-                    l->src.s[l->at + 1] == '-' && l->src.s[l->at + 2] == '>') {
-                    l->at += 3;
-                    break;
-                }
-            } else if (l->src.s[l->at] == '>') {
-                l->at++;
-                break;
-            }
-            l->at++;
-        }
-    }
-    if (l->at >= l->src.len) {
-        l->tok = HtmlTok::End;
-        return;
-    }
-    if (HtmlAtStartTag(l, l->at)) {
-        char c = l->src.s[l->at + 1];
-        if (c == '/') {
-            l->at += 2;
-            HtmlLexName(l);
-            while (l->at < l->src.len && l->src.s[l->at] != '>') {
-                l->at++;
-            }
-            if (l->at < l->src.len) {
-                l->at++;
-            }
-            l->tok = HtmlTok::Close;
-            return;
-        }
-        l->at++;
-        HtmlLexName(l);
-        HtmlLexAttrs(l);
-        l->tok = HtmlTok::Start;
-        return;
-    }
-    int start = l->at;
-    l->at++;
-    while (l->at < l->src.len && !HtmlAtStartTag(l, l->at)) {
-        l->at++;
-    }
-    l->text = Str(l->src.s + start, l->at - start);
-    l->tok = HtmlTok::Text;
-}
-
-static void HtmlLexSkipRaw(HtmlLex* l, Str name) {
-    while (l->at < l->src.len) {
-        if (l->src.s[l->at] == '<' && l->at + 1 < l->src.len &&
-            l->src.s[l->at + 1] == '/') {
-            int save = l->at;
-            l->at += 2;
-            HtmlLexName(l);
-            if (base::StrEqI(l->name, name)) {
-                while (l->at < l->src.len && l->src.s[l->at] != '>') {
-                    l->at++;
-                }
-                if (l->at < l->src.len) {
-                    l->at++;
-                }
-                return;
-            }
-            l->at = save + 1;
-            continue;
-        }
-        l->at++;
-    }
-}
-
-static Str HtmlAttrRaw(Str attrs, const char* name) {
-    int nameLen = (int)strlen(name);
-    int at = 0;
-    while (at < attrs.len) {
-        while (at < attrs.len &&
-               (HtmlIsSpace(attrs.s[at]) || attrs.s[at] == '/')) {
-            at++;
-        }
-        int ns = at;
-        while (at < attrs.len && HtmlIsNameChar(attrs.s[at])) {
-            at++;
-        }
-        int nl = at - ns;
-        if (nl == 0) {
-            at++;
-            continue;
-        }
-        bool match = nl == nameLen && base::StrEqI(Str(attrs.s + ns, nl), name);
-        while (at < attrs.len && HtmlIsSpace(attrs.s[at])) {
-            at++;
-        }
-        if (at >= attrs.len || attrs.s[at] != '=') {
-            if (match) {
-                return Str(attrs.s + ns, 0);
-            }
-            continue;
-        }
+    if (at < value.len && value.s[at] == '.') {
         at++;
-        while (at < attrs.len && HtmlIsSpace(attrs.s[at])) {
-            at++;
+        float scale = 0.1f;
+        while (at < value.len && value.s[at] >= '0' && value.s[at] <= '9') {
+            result += (float)(value.s[at++] - '0') * scale;
+            scale *= 0.1f;
+            any = true;
         }
-        int vs = at;
-        int vl = 0;
-        if (at < attrs.len && (attrs.s[at] == '"' || attrs.s[at] == '\'')) {
-            char q = attrs.s[at++];
-            vs = at;
-            while (at < attrs.len && attrs.s[at] != q) {
-                at++;
-            }
-            vl = at - vs;
-            if (at < attrs.len) {
-                at++;
-            }
-        } else {
-            while (at < attrs.len && !HtmlIsSpace(attrs.s[at]) &&
-                   attrs.s[at] != '>') {
-                at++;
-            }
-            vl = at - vs;
-        }
-        if (match) {
-            return Str(attrs.s + vs, vl);
-        }
+    }
+    if (!any || (at < value.len && value.s[at] == '%')) return 0;
+    return result;
+}
+
+static Str StyleValue(Str style, const char* name) {
+    int nameLen = (int)strlen(name);
+    for (int i = 0; i + nameLen <= style.len; i++) {
+        if (!StrEqI(Str(style.s + i, nameLen), Str(name, nameLen))) continue;
+        int at = i + nameLen;
+        while (at < style.len && HtmlSpace(style.s[at])) at++;
+        if (at >= style.len || style.s[at++] != ':') continue;
+        while (at < style.len && HtmlSpace(style.s[at])) at++;
+        int end = at;
+        while (end < style.len && style.s[end] != ';') end++;
+        return StrTrimAscii(Str(style.s + at, end - at));
     }
     return {};
 }
 
-static Str HtmlDecodeText(Arena* a, Str s, bool raw) {
-    if (s.len <= 0) {
-        return {};
+static float ElementLength(Arena* a, const html5ever::Node* node,
+                           const char* name) {
+    Str value = html5ever::AttrValue(a, node, Str((char*)name));
+    if (!value.s) {
+        value = StyleValue(html5ever::AttrValue(a, node, StrL("style")), name);
     }
-    char* out = (char*)Alloc(a, s.len + 1);
-    if (!out) {
-        return {};
-    }
-    int n = 0;
-    for (int i = 0; i < s.len;) {
-        char c = s.s[i];
-        if (!raw && HtmlIsSpace(c)) {
-            if (n > 0 && out[n - 1] == ' ') {
-                i++;
-                continue;
-            }
-            out[n++] = ' ';
-            i++;
-            continue;
-        }
-        if (c == '&') {
-            int j = i + 1;
-            while (j < s.len && s.s[j] != ';' && !HtmlIsSpace(s.s[j])) {
-                j++;
-            }
-            if (j < s.len && s.s[j] == ';') {
-                Str dec = MdDecodeEntity(a, Str(s.s + i, j - i + 1));
-                if (dec.s != s.s + i) {
-                    memcpy(out + n, dec.s, (size_t)dec.len);
-                    n += dec.len;
-                    i = j + 1;
-                    continue;
-                }
-            }
-        }
-        out[n++] = c;
-        i++;
-    }
-    out[n] = 0;
-    return Str(out, n);
-}
-
-Str HtmlAttrValue(Arena* a, Str attrs, const char* name) {
-    Str raw = HtmlAttrRaw(attrs, name);
-    if (raw.len <= 0) {
-        return raw.s ? Str(raw.s, 0) : Str{};
-    }
-    return HtmlDecodeText(a, raw, true);
-}
-
-static bool HtmlBlockKind(Str n, MdKind* kind, uint8_t* level) {
-    *level = 0;
-    if (base::StrEqI(n, "p") || base::StrEqI(n, "dt") ||
-        base::StrEqI(n, "dd") || base::StrEqI(n, "summary") ||
-        base::StrEqI(n, "figcaption")) {
-        *kind = MdKind::Paragraph;
-    } else if (n.len == 2 && base::StrStartsWithI(n, "h") && n.s[1] >= '1' &&
-               n.s[1] <= '6') {
-        *kind = MdKind::Heading;
-        *level = (uint8_t)(n.s[1] - '0');
-    } else if (base::StrEqI(n, "blockquote")) {
-        *kind = MdKind::Quote;
-    } else if (base::StrEqI(n, "ul") || base::StrEqI(n, "ol")) {
-        *kind = MdKind::List;
-    } else if (base::StrEqI(n, "li")) {
-        *kind = MdKind::Item;
-    } else if (base::StrEqI(n, "pre")) {
-        *kind = MdKind::Code;
-    } else if (base::StrEqI(n, "table")) {
-        *kind = MdKind::Table;
-    } else if (base::StrEqI(n, "tr")) {
-        *kind = MdKind::Row;
-    } else if (base::StrEqI(n, "td") || base::StrEqI(n, "th")) {
-        *kind = MdKind::Cell;
-    } else if (base::StrEqI(n, "div") || base::StrEqI(n, "section") ||
-               base::StrEqI(n, "article") || base::StrEqI(n, "main") ||
-               base::StrEqI(n, "header") || base::StrEqI(n, "footer") ||
-               base::StrEqI(n, "aside") || base::StrEqI(n, "nav") ||
-               base::StrEqI(n, "figure") || base::StrEqI(n, "details") ||
-               base::StrEqI(n, "form") || base::StrEqI(n, "fieldset") ||
-               base::StrEqI(n, "address") || base::StrEqI(n, "dl") ||
-               base::StrEqI(n, "body") || base::StrEqI(n, "html") ||
-               base::StrEqI(n, "center")) {
-        *kind = MdKind::Group;
-    } else {
-        return false;
-    }
-    return true;
-}
-
-static uint8_t HtmlInlineMark(Str n) {
-    if (base::StrEqI(n, "b") || base::StrEqI(n, "strong")) {
-        return MdBold;
-    }
-    if (base::StrEqI(n, "i") || base::StrEqI(n, "em") ||
-        base::StrEqI(n, "cite") || base::StrEqI(n, "var")) {
-        return MdItalic;
-    }
-    if (base::StrEqI(n, "code") || base::StrEqI(n, "kbd") ||
-        base::StrEqI(n, "samp") || base::StrEqI(n, "tt")) {
-        return MdCode;
-    }
-    if (base::StrEqI(n, "u") || base::StrEqI(n, "ins")) {
-        return MdUnderline;
-    }
-    if (base::StrEqI(n, "s") || base::StrEqI(n, "del") ||
-        base::StrEqI(n, "strike")) {
-        return MdDel;
-    }
-    if (base::StrEqI(n, "mark")) {
-        return MdHighlight;
-    }
-    return 0;
-}
-
-static uint8_t HtmlAlignValue(Str v) {
-    if (v.len >= 6 && StrEq(Str(v.s, 6), StrL("center"))) {
-        return MdAlignCenter;
-    }
-    if (v.len >= 5 && StrEq(Str(v.s, 5), StrL("right"))) {
-        return MdAlignRight;
-    }
-    if (v.len >= 4 && StrEq(Str(v.s, 4), StrL("left"))) {
-        return MdAlignLeft;
-    }
-    return MdAlignDefault;
-}
-
-static uint8_t HtmlAlign(Arena* a, Str attrs) {
-    Str v = HtmlAttrRaw(attrs, "align");
-    if (v.len > 0) {
-        return HtmlAlignValue(v);
-    }
-    Str style = HtmlAttrValue(a, attrs, "style");
-    for (int i = 0; i + 10 <= style.len; i++) {
-        if (!StrEq(Str(style.s + i, 10), StrL("text-align"))) {
-            continue;
-        }
-        int at = i + 10;
-        while (at < style.len &&
-               (HtmlIsSpace(style.s[at]) || style.s[at] == ':')) {
-            at++;
-        }
-        return HtmlAlignValue(Str(style.s + at, style.len - at));
-    }
-    return MdAlignDefault;
-}
-
-static float HtmlLength(Arena* a, Str attrs, const char* name) {
-    Str v = HtmlAttrValue(a, attrs, name);
-    if (v.len <= 0) {
-        Str style = HtmlAttrValue(a, attrs, "style");
-        int nameLen = (int)strlen(name);
-        for (int i = 0; i + nameLen <= style.len; i++) {
-            if (!StrEq(Str(style.s + i, nameLen), Str(name, nameLen))) {
-                continue;
-            }
-            int at = i + nameLen;
-            while (at < style.len &&
-                   (HtmlIsSpace(style.s[at]) || style.s[at] == ':')) {
-                at++;
-            }
-            v = Str(style.s + at, style.len - at);
-            break;
-        }
-    }
-    float n = 0;
-    int i = 0;
-    bool any = false;
-    while (i < v.len && v.s[i] >= '0' && v.s[i] <= '9') {
-        n = n * 10 + (float)(v.s[i] - '0');
-        any = true;
-        i++;
-    }
-    if (i < v.len && v.s[i] == '.') {
-        i++;
-        float scale = 0.1f;
-        while (i < v.len && v.s[i] >= '0' && v.s[i] <= '9') {
-            n += (float)(v.s[i] - '0') * scale;
-            scale *= 0.1f;
-            any = true;
-            i++;
-        }
-    }
-    if (!any || (i < v.len && v.s[i] == '%')) {
-        return 0;
-    }
-    return n;
+    return LengthValue(value);
 }
 
 HtmlInlineTag HtmlParseInlineTag(Arena* a, Str tag) {
-    HtmlInlineTag t;
-    HtmlLex l;
-    l.src = tag;
-    HtmlLexNext(&l);
-    if (l.tok != HtmlTok::Start && l.tok != HtmlTok::Close) {
-        return t;
+    HtmlInlineTag result;
+    Str trimmed = StrTrimAscii(tag);
+    if (trimmed.len < 3 || trimmed.s[0] != '<') return result;
+    int at = 1;
+    if (trimmed.s[at] == '/') {
+        result.close = true;
+        at++;
     }
-    t.close = l.tok == HtmlTok::Close;
-    if (base::StrEqI(l.name, "br")) {
-        t.known = !t.close;
-        t.isBreak = t.known;
-        return t;
+    int start = at;
+    while (at < trimmed.len &&
+           ((trimmed.s[at] >= 'a' && trimmed.s[at] <= 'z') ||
+            (trimmed.s[at] >= 'A' && trimmed.s[at] <= 'Z') ||
+            (trimmed.s[at] >= '0' && trimmed.s[at] <= '9'))) {
+        at++;
     }
-    if (base::StrEqI(l.name, "img")) {
-        t.known = !t.close;
-        t.isImage = t.known;
-        if (t.known) {
-            t.alt = HtmlAttrValue(a, l.attrs, "alt");
-            t.src = HtmlAttrValue(a, l.attrs, "src");
-            t.width = HtmlLength(a, l.attrs, "width");
-            t.height = HtmlLength(a, l.attrs, "height");
-        }
-        return t;
+    Str name(trimmed.s + start, at - start);
+    if (StrEqI(name, "br")) {
+        result.known = !result.close;
+        result.isBreak = result.known;
+        return result;
     }
-    if (base::StrEqI(l.name, "a")) {
-        t.known = true;
-        t.mark = MdLink;
-        if (!t.close) {
-            t.href = HtmlAttrValue(a, l.attrs, "href");
-        }
-        return t;
+    if (StrEqI(name, "a")) {
+        result.known = true;
+        result.mark = MdLink;
+    } else if (StrEqI(name, "img")) {
+        result.known = !result.close;
+        result.isImage = result.known;
+    } else {
+        result.mark = InlineMark(name);
+        result.known = result.mark != 0;
     }
-    t.mark = HtmlInlineMark(l.name);
-    t.known = t.mark != 0;
-    return t;
+    if (result.close || !result.known) return result;
+    html5ever::Node* doc = html5ever::ParseFragment(a, tag);
+    const html5ever::Node* element = FirstElement(a, doc);
+    if (!element) return result;
+    if (result.isImage) {
+        result.alt = html5ever::AttrValue(a, element, StrL("alt"));
+        result.src = html5ever::AttrValue(a, element, StrL("src"));
+        result.width = ElementLength(a, element, "width");
+        result.height = ElementLength(a, element, "height");
+    } else if (result.mark == MdLink) {
+        result.href = html5ever::AttrValue(a, element, StrL("href"));
+    }
+    return result;
 }
 
-struct HtmlOpen {
-    MdNode* node = nullptr;
-    Str name = {};
-    uint8_t mark = 0;
-    bool hadHref = false;
-    Str prevHref = {};
-    bool head = false;
-    bool prevHead = false;
-    bool raw = false;
-    bool prevRaw = false;
+static const char kBlockNames[] =
+    "p\0dt\0dd\0summary\0figcaption\0blockquote\0ul\0ol\0li\0pre\0table\0"
+    "tr\0td\0th\0div\0section\0article\0main\0header\0footer\0aside\0nav\0"
+    "figure\0details\0form\0fieldset\0address\0dl\0body\0html\0center\0";
+static const MdKind kBlockKinds[] = {
+    MdKind::Paragraph, MdKind::Paragraph, MdKind::Paragraph, MdKind::Paragraph,
+    MdKind::Paragraph, MdKind::Quote,     MdKind::List,      MdKind::List,
+    MdKind::Item,      MdKind::Code,      MdKind::Table,     MdKind::Row,
+    MdKind::Cell,      MdKind::Cell,      MdKind::Group,     MdKind::Group,
+    MdKind::Group,     MdKind::Group,     MdKind::Group,     MdKind::Group,
+    MdKind::Group,     MdKind::Group,     MdKind::Group,     MdKind::Group,
+    MdKind::Group,     MdKind::Group,     MdKind::Group,     MdKind::Group,
+    MdKind::Group,     MdKind::Group,     MdKind::Group,
 };
 
-struct HtmlBuild {
+static bool BlockKind(Arena* a, const html5ever::Node* node, MdKind* kind,
+                      uint8_t* level) {
+    *level = 0;
+    Str name = html5ever::NodeName(a, node);
+    if (name.len == 2 && name.s[0] == 'h' && name.s[1] >= '1' &&
+        name.s[1] <= '6') {
+        *kind = MdKind::Heading;
+        *level = (uint8_t)(name.s[1] - '0');
+        return true;
+    }
+    int ix = SeqStrIndexIS(kBlockNames, name);
+    if (ix < 0) return false;
+    *kind = kBlockKinds[ix];
+    return true;
+}
+
+struct Project {
     Arena* a = nullptr;
-
     MdNode* cur = nullptr;
-
     MdNode* para = nullptr;
     uint8_t marks = 0;
     Str href = {};
-    bool inHead = false;
     bool raw = false;
-
-    ArenaVec<HtmlOpen> stack{};
+    bool tableHead = false;
 };
 
-static MdNode* HtmlNewNode(HtmlBuild* b, MdKind k) {
-    MdNode* n = ArenaNew<MdNode>(b->a);
-    n->kind = k;
-    n->parent = b->cur;
-    if (b->cur->last) {
-        b->cur->last->next = n;
-    } else {
-        b->cur->first = n;
-    }
-    b->cur->last = n;
-    return n;
+static MdNode* NewMd(Project* p, MdKind kind) {
+    MdNode* node = ArenaNew<MdNode>(p->a);
+    node->kind = kind;
+    node->parent = p->cur;
+    if (p->cur->last)
+        p->cur->last->next = node;
+    else
+        p->cur->first = node;
+    p->cur->last = node;
+    return node;
 }
 
-static void HtmlPush(HtmlBuild* b, MdNode* n, Str name) {
-    if (!b->stack.Append(b->a, HtmlOpen{})) {
+static MdNode* TextTarget(Project* p) {
+    MdKind kind = p->cur->kind;
+    if (kind == MdKind::Paragraph || kind == MdKind::Heading ||
+        kind == MdKind::Cell || kind == MdKind::Code || kind == MdKind::Item) {
+        return p->cur;
+    }
+    if (!p->para) p->para = NewMd(p, MdKind::Paragraph);
+    return p->para;
+}
+
+static bool TargetEmpty(Project* p) {
+    MdKind kind = p->cur->kind;
+    if (kind == MdKind::Paragraph || kind == MdKind::Heading ||
+        kind == MdKind::Cell || kind == MdKind::Code || kind == MdKind::Item) {
+        return p->cur->runFirst == nullptr;
+    }
+    return !p->para || !p->para->runFirst;
+}
+
+static void AddRun(Project* p, Str text) {
+    if (text.len <= 0) return;
+    MdNode* target = TextTarget(p);
+    MdRun* run = ArenaNew<MdRun>(p->a);
+    run->text = text;
+    run->marks = p->marks;
+    run->href = p->href;
+    if (target->runLast)
+        target->runLast->next = run;
+    else
+        target->runFirst = run;
+    target->runLast = run;
+}
+
+static void base_text_format_AddText(Project* p, Str text) {
+    if (text.len <= 0) return;
+    if (p->raw) {
+        if (!p->cur->runFirst && text.s[0] == '\n') {
+            text = Str(text.s + 1, text.len - 1);
+        }
+        AddRun(p, text);
         return;
     }
-    HtmlOpen& o = b->stack[b->stack.len - 1];
-    o.node = n;
-    o.name = name;
-    if (n) {
-        b->cur = n;
-        b->para = nullptr;
-    }
-}
-
-static MdNode* HtmlTextTarget(HtmlBuild* b) {
-    MdKind k = b->cur->kind;
-    if (k == MdKind::Paragraph || k == MdKind::Heading || k == MdKind::Cell ||
-        k == MdKind::Code || k == MdKind::Item) {
-        return b->cur;
-    }
-    if (!b->para) {
-        b->para = HtmlNewNode(b, MdKind::Paragraph);
-    }
-    return b->para;
-}
-
-static void HtmlAddRun(HtmlBuild* b, Str text) {
-    if (text.len <= 0) {
-        return;
-    }
-    MdNode* n = HtmlTextTarget(b);
-
-    MdRun* last = n->runLast;
-    if (last && last->marks == b->marks && last->href.s == b->href.s &&
-        last->text.s + last->text.len == text.s) {
-        last->text.len += text.len;
-        return;
-    }
-    MdRun* r = ArenaNew<MdRun>(b->a);
-    r->text = text;
-    r->marks = b->marks;
-    r->href = b->href;
-    if (n->runLast) {
-        n->runLast->next = r;
-    } else {
-        n->runFirst = r;
-    }
-    n->runLast = r;
-}
-
-static bool HtmlTargetEmpty(HtmlBuild* b) {
-    MdKind k = b->cur->kind;
-    if (k == MdKind::Paragraph || k == MdKind::Heading || k == MdKind::Cell ||
-        k == MdKind::Code || k == MdKind::Item) {
-        return b->cur->runFirst == nullptr;
-    }
-    return !b->para || b->para->runFirst == nullptr;
-}
-
-static void HtmlAddImage(HtmlBuild* b, Str src, Str alt, float w, float h) {
-    if (src.len <= 0) {
-
-        return;
-    }
-    MdNode* n = HtmlTextTarget(b);
-    MdRun* r = ArenaNew<MdRun>(b->a);
-    r->imgSrc = src;
-    r->text = alt;
-    r->imgW = w;
-    r->imgH = h;
-    r->marks = b->marks;
-    r->href = b->href;
-    if (n->runLast) {
-        n->runLast->next = r;
-    } else {
-        n->runFirst = r;
-    }
-    n->runLast = r;
-}
-
-static void HtmlText(HtmlBuild* b, Str raw) {
-    Str s = HtmlDecodeText(b->a, raw, b->raw);
-    if (s.len <= 0) {
-        return;
-    }
-    if (!b->raw) {
-
-        bool empty = HtmlTargetEmpty(b);
-        if (s.len == 1 && s.s[0] == ' ') {
-            if (empty) {
-                return;
-            }
-        } else if (s.s[0] == ' ' && empty) {
-            s = Str(s.s + 1, s.len - 1);
-        }
-    } else if (!b->cur->runFirst && s.s[0] == '\n') {
-
-        s = Str(s.s + 1, s.len - 1);
-    }
-    HtmlAddRun(b, s);
-}
-
-static void HtmlClose(HtmlBuild* b, Str name) {
-    int found = -1;
-    for (int i = b->stack.len - 1; i >= 0; i--) {
-        if (base::StrEqI(b->stack[i].name, name)) {
-            found = i;
-            break;
-        }
-    }
-    if (found < 0) {
-        return;
-    }
-    for (int i = b->stack.len - 1; i >= found; i--) {
-        HtmlOpen& o = b->stack[i];
-        if (o.node) {
-            b->cur = o.node->parent ? o.node->parent : b->cur;
-            b->para = nullptr;
-        }
-        if (o.mark) {
-            b->marks = (uint8_t)(b->marks & ~o.mark);
-        }
-        if (o.hadHref) {
-            b->href = o.prevHref;
-        }
-        if (o.head) {
-            b->inHead = o.prevHead;
-        }
-        if (o.raw) {
-            b->raw = o.prevRaw;
-        }
-    }
-    b->stack.Truncate(found);
-}
-
-static int HtmlListStart(Str v) {
-    if (v.len <= 0) {
-        return 1;
-    }
+    char* out = (char*)Alloc(p->a, text.len + 1);
     int n = 0;
-    for (int i = 0; i < v.len; i++) {
-        if (v.s[i] < '0' || v.s[i] > '9') {
-            return 1;
+    bool space = false;
+    for (int i = 0; i < text.len; i++) {
+        if (HtmlSpace(text.s[i])) {
+            if (!space) out[n++] = ' ';
+            space = true;
+        } else {
+            out[n++] = text.s[i];
+            space = false;
         }
-        n = n * 10 + (v.s[i] - '0');
     }
-    return n;
+    bool empty = TargetEmpty(p);
+    int start = empty && n > 0 && out[0] == ' ' ? 1 : 0;
+    if (n - start == 1 && out[start] == ' ' && empty) return;
+    out[n] = 0;
+    AddRun(p, Str(out + start, n - start));
 }
 
-static void HtmlStart(HtmlBuild* b, HtmlLex* l) {
-    Str name = StrDup(b->a, l->name);
+static void base_text_format_AddImage(Project* p, const html5ever::Node* node) {
+    Str src = html5ever::AttrValue(p->a, node, StrL("src"));
+    if (src.len <= 0) return;
+    MdNode* target = TextTarget(p);
+    MdRun* run = ArenaNew<MdRun>(p->a);
+    run->imgSrc = src;
+    run->text = html5ever::AttrValue(p->a, node, StrL("alt"));
+    run->imgW = ElementLength(p->a, node, "width");
+    run->imgH = ElementLength(p->a, node, "height");
+    run->marks = p->marks;
+    run->href = p->href;
+    if (target->runLast)
+        target->runLast->next = run;
+    else
+        target->runFirst = run;
+    target->runLast = run;
+}
+
+static uint8_t AlignValue(Str value) {
+    value = StrTrimAscii(value);
+    if (StrStartsWithI(value, "center")) return MdAlignCenter;
+    if (StrStartsWithI(value, "right")) return MdAlignRight;
+    if (StrStartsWithI(value, "left")) return MdAlignLeft;
+    return MdAlignDefault;
+}
+
+static uint8_t CellAlign(Arena* a, const html5ever::Node* node) {
+    Str value = html5ever::AttrValue(a, node, StrL("align"));
+    if (!value.s) {
+        value = StyleValue(html5ever::AttrValue(a, node, StrL("style")),
+                           "text-align");
+    }
+    return AlignValue(value);
+}
+
+static int ListStart(Arena* a, const html5ever::Node* node) {
+    Str value = html5ever::AttrValue(a, node, StrL("start"));
+    if (!value.s || value.len <= 0) return 1;
+    int result = 0;
+    for (int i = 0; i < value.len; i++) {
+        if (value.s[i] < '0' || value.s[i] > '9') return 1;
+        result = result * 10 + value.s[i] - '0';
+    }
+    return result;
+}
+
+static void ProjectNode(Project* p, const html5ever::Node* source);
+
+static void ProjectChildren(Project* p, const html5ever::Node* source) {
+    for (const html5ever::Node* child = html5ever::NodeFirst(p->a, source);
+         child; child = html5ever::NodeNext(p->a, child)) {
+        ProjectNode(p, child);
+    }
+}
+
+static void ProjectElement(Project* p, const html5ever::Node* source) {
+    Str name = html5ever::NodeName(p->a, source);
+    if (StrEqI(name, "head") || StrEqI(name, "title") ||
+        StrEqI(name, "script") || StrEqI(name, "style")) {
+        return;
+    }
+    if (source->implicit && (StrEqI(name, "html") || StrEqI(name, "body") ||
+                             StrEqI(name, "head") || StrEqI(name, "tbody"))) {
+        ProjectChildren(p, source);
+        return;
+    }
+    if (StrEqI(name, "br")) {
+        AddRun(p, StrL("\n"));
+        return;
+    }
+    if (StrEqI(name, "hr")) {
+        p->para = nullptr;
+        NewMd(p, MdKind::Rule);
+        return;
+    }
+    if (StrEqI(name, "img")) {
+        base_text_format_AddImage(p, source);
+        return;
+    }
+    if (StrEqI(name, "thead") || StrEqI(name, "tbody") ||
+        StrEqI(name, "tfoot")) {
+        bool oldHead = p->tableHead;
+        p->tableHead = StrEqI(name, "thead");
+        ProjectChildren(p, source);
+        p->tableHead = oldHead;
+        return;
+    }
     MdKind kind = MdKind::Group;
     uint8_t level = 0;
-
-    if (base::StrEqI(l->name, "br")) {
-        HtmlAddRun(b, StrL("\n"));
-        return;
-    }
-    if (base::StrEqI(l->name, "hr")) {
-        b->para = nullptr;
-        HtmlNewNode(b, MdKind::Rule);
-        return;
-    }
-    if (base::StrEqI(l->name, "img")) {
-        HtmlAddImage(b, HtmlAttrValue(b->a, l->attrs, "src"),
-                     HtmlAttrValue(b->a, l->attrs, "alt"),
-                     HtmlLength(b->a, l->attrs, "width"),
-                     HtmlLength(b->a, l->attrs, "height"));
-        return;
-    }
-    if (base::StrEqI(l->name, "thead") || base::StrEqI(l->name, "tbody") ||
-        base::StrEqI(l->name, "tfoot")) {
-
-        bool head = base::StrEqI(l->name, "thead");
-        HtmlPush(b, nullptr, name);
-        if (b->stack.len > 0) {
-            HtmlOpen& o = b->stack[b->stack.len - 1];
-            o.head = true;
-            o.prevHead = b->inHead;
-        }
-        b->inHead = head;
-        return;
-    }
-
-    if (HtmlBlockKind(l->name, &kind, &level)) {
-
-        if (b->cur->kind == MdKind::Paragraph) {
-            for (int i = b->stack.len - 1; i >= 0; i--) {
-                if (b->stack[i].node == b->cur) {
-                    HtmlClose(b, b->stack[i].name);
-                    break;
-                }
-            }
-        }
-        MdNode* n = HtmlNewNode(b, kind);
-        n->level = level;
+    if (BlockKind(p->a, source, &kind, &level)) {
+        p->para = nullptr;
+        MdNode* parent = p->cur;
+        MdNode* node = NewMd(p, kind);
+        node->level = level;
         if (kind == MdKind::List) {
-            n->ordered = base::StrEqI(l->name, "ol");
-            n->start = HtmlListStart(HtmlAttrValue(b->a, l->attrs, "start"));
+            node->ordered = StrEqI(name, "ol");
+            node->start = ListStart(p->a, source);
         } else if (kind == MdKind::Row) {
-            n->head = b->inHead;
+            const html5ever::Node* sourceParent =
+                html5ever::NodeParent(p->a, source);
+            node->head =
+                p->tableHead ||
+                (sourceParent &&
+                 StrEqI(html5ever::NodeName(p->a, sourceParent), "thead"));
         } else if (kind == MdKind::Cell) {
-            n->align = HtmlAlign(b->a, l->attrs);
-            if (base::StrEqI(l->name, "th") && n->parent) {
-                n->parent->head = true;
+            node->align = CellAlign(p->a, source);
+            if (StrEqI(name, "th") && node->parent) node->parent->head = true;
+        }
+        bool oldRaw = p->raw;
+        p->raw = kind == MdKind::Code;
+        p->cur = node;
+        const html5ever::Node* first = html5ever::NodeFirst(p->a, source);
+        if (kind == MdKind::Code && first &&
+            first->kind == html5ever::NodeKind::Element &&
+            StrEqI(html5ever::NodeName(p->a, first), "code")) {
+            Str cls = html5ever::AttrValue(p->a, first, StrL("class"));
+            if (StrStartsWith(cls, "language-")) {
+                node->lang = Str(cls.s + 9, cls.len - 9);
             }
         }
-        HtmlPush(b, n, name);
-        if (kind == MdKind::Code && b->stack.len > 0) {
-            HtmlOpen& o = b->stack[b->stack.len - 1];
-            o.raw = true;
-            o.prevRaw = b->raw;
-            b->raw = true;
-        }
-        if (l->selfClose) {
-            HtmlClose(b, name);
-        }
+        ProjectChildren(p, source);
+        p->cur = parent;
+        p->para = nullptr;
+        p->raw = oldRaw;
         return;
     }
+    uint8_t oldMarks = p->marks;
+    Str oldHref = p->href;
+    uint8_t mark = InlineMark(name);
+    if (StrEqI(name, "a")) {
+        p->marks = (uint8_t)(p->marks | MdLink);
+        p->href = html5ever::AttrValue(p->a, source, StrL("href"));
+    } else {
+        p->marks = (uint8_t)(p->marks | mark);
+    }
+    ProjectChildren(p, source);
+    p->marks = oldMarks;
+    p->href = oldHref;
+}
 
-    if (b->cur->kind == MdKind::Code && base::StrEqI(l->name, "code")) {
-        Str cls = HtmlAttrValue(b->a, l->attrs, "class");
-        if (cls.len > 9 && StrEq(Str(cls.s, 9), StrL("language-"))) {
-            b->cur->lang = Str(cls.s + 9, cls.len - 9);
-        }
-        HtmlPush(b, nullptr, name);
-        return;
-    }
-
-    uint8_t mark = HtmlInlineMark(l->name);
-    bool link = base::StrEqI(l->name, "a");
-    HtmlPush(b, nullptr, name);
-    if (b->stack.len <= 0) {
-        return;
-    }
-    HtmlOpen& o = b->stack[b->stack.len - 1];
-    if (link) {
-        o.mark = MdLink;
-        o.hadHref = true;
-        o.prevHref = b->href;
-        b->href = HtmlAttrValue(b->a, l->attrs, "href");
-        b->marks = (uint8_t)(b->marks | MdLink);
-    } else if (mark) {
-        o.mark = mark;
-        b->marks = (uint8_t)(b->marks | mark);
-    }
-    if (l->selfClose) {
-        HtmlClose(b, name);
+static void ProjectNode(Project* p, const html5ever::Node* source) {
+    if (!source) return;
+    if (source->kind == html5ever::NodeKind::Text) {
+        base_text_format_AddText(p, html5ever::NodeData(p->a, source));
+    } else if (source->kind == html5ever::NodeKind::Element) {
+        ProjectElement(p, source);
+    } else if (source->kind == html5ever::NodeKind::Document) {
+        ProjectChildren(p, source);
     }
 }
 
 void HtmlParseInto(Arena* a, MdNode* parent, Str source) {
-    if (!parent || !source.s || source.len <= 0) {
-        return;
-    }
-    HtmlBuild b;
-    b.a = a;
-    b.cur = parent;
-
-    HtmlLex l;
-    l.src = source;
-    for (;;) {
-        HtmlLexNext(&l);
-        if (l.tok == HtmlTok::End) {
-            break;
-        }
-        if (l.tok == HtmlTok::Text) {
-            HtmlText(&b, l.text);
-            continue;
-        }
-        if (l.tok == HtmlTok::Close) {
-            HtmlClose(&b, l.name);
-            continue;
-        }
-
-        if (base::StrEqI(l.name, "head") || base::StrEqI(l.name, "title") ||
-            base::StrEqI(l.name, "script") || base::StrEqI(l.name, "style")) {
-            Str name = StrDup(a, l.name);
-            if (!l.selfClose) {
-                HtmlLexSkipRaw(&l, name);
-            }
-            continue;
-        }
-        HtmlStart(&b, &l);
-    }
+    if (!a || !parent || !source.s || source.len <= 0) return;
+    html5ever::ParseOptions options;
+    options.dropDoctype = true;
+    html5ever::Node* dom =
+        html5ever::ParseFragment(a, source, StrL("body"), options);
+    Project project;
+    project.a = a;
+    project.cur = parent;
+    ProjectNode(&project, dom);
 }
 
 MdNode* HtmlParse(Arena* a, Str source) {
     MdNode* doc = ArenaNew<MdNode>(a);
     doc->kind = MdKind::Doc;
-    HtmlParseInto(a, doc, source);
+    if (!source.s || source.len <= 0) return doc;
+    html5ever::ParseOptions options;
+    options.dropDoctype = true;
+    html5ever::Node* dom = html5ever::ParseDocument(a, source, options);
+    Project project;
+    project.a = a;
+    project.cur = doc;
+    ProjectNode(&project, dom);
     return doc;
 }
 
@@ -41565,7 +41271,7 @@ static void base_text_Pop(MdBuild* b) {
     }
 }
 
-static void AddText(MdBuild* b, Str s) {
+static void base_text_AddText(MdBuild* b, Str s) {
     if (s.len <= 0) {
         return;
     }
@@ -41588,7 +41294,7 @@ static void AddText(MdBuild* b, Str s) {
     n->runLast = r;
 }
 
-static void AddImage(MdBuild* b, Str src, Str alt, float w, float h) {
+static void base_text_AddImage(MdBuild* b, Str src, Str alt, float w, float h) {
     if (src.len <= 0) {
         return;
     }
@@ -41631,7 +41337,7 @@ Str MdDecodeEntity(Arena* a, Str e) {
 static void MdInlineHtml(MdBuild* b, Str tag) {
     if (b->cur->kind == MdKind::Html) {
 
-        AddText(b, tag);
+        base_text_AddText(b, tag);
         return;
     }
     HtmlInlineTag t = HtmlParseInlineTag(b->a, tag);
@@ -41640,11 +41346,11 @@ static void MdInlineHtml(MdBuild* b, Str tag) {
         return;
     }
     if (t.isBreak) {
-        AddText(b, StrL("\n"));
+        base_text_AddText(b, StrL("\n"));
         return;
     }
     if (t.isImage) {
-        AddImage(b, t.src, t.alt, t.width, t.height);
+        base_text_AddImage(b, t.src, t.alt, t.width, t.height);
         return;
     }
     if (t.close) {
@@ -41687,7 +41393,7 @@ static Str MdDefUrl(MdBuild* b, Str identifier) {
 static void MdInlineNode(MdBuild* b, const md::Node* n) {
     switch (n->kind) {
         case md::NodeKind::Text:
-            AddText(b, V(b, n, md::NodeStrKind::Value));
+            base_text_AddText(b, V(b, n, md::NodeStrKind::Value));
             break;
         case md::NodeKind::Emphasis:
             MdMarked(b, n, MdItalic);
@@ -41702,13 +41408,13 @@ static void MdInlineNode(MdBuild* b, const md::Node* n) {
         case md::NodeKind::InlineMath: {
             uint8_t saved = b->marks;
             b->marks = (uint8_t)(b->marks | MdCode);
-            AddText(b, V(b, n, md::NodeStrKind::Value));
+            base_text_AddText(b, V(b, n, md::NodeStrKind::Value));
             b->marks = saved;
             break;
         }
         case md::NodeKind::Break:
 
-            AddText(b, StrL("\n"));
+            base_text_AddText(b, StrL("\n"));
             break;
         case md::NodeKind::Link:
         case md::NodeKind::LinkReference: {
@@ -41721,20 +41427,20 @@ static void MdInlineNode(MdBuild* b, const md::Node* n) {
             break;
         }
         case md::NodeKind::Image:
-            AddImage(b, V(b, n, md::NodeStrKind::Url),
+            base_text_AddImage(b, V(b, n, md::NodeStrKind::Url),
                      V(b, n, md::NodeStrKind::Alt), 0, 0);
             break;
         case md::NodeKind::ImageReference:
-            AddImage(b, MdDefUrl(b, V(b, n, md::NodeStrKind::Identifier)),
+            base_text_AddImage(b, MdDefUrl(b, V(b, n, md::NodeStrKind::Identifier)),
                      V(b, n, md::NodeStrKind::Alt), 0, 0);
             break;
         case md::NodeKind::FootnoteReference: {
 
             uint8_t saved = b->marks;
             b->marks = (uint8_t)(b->marks | MdItalic);
-            AddText(b, StrL("["));
-            AddText(b, V(b, n, md::NodeStrKind::Identifier));
-            AddText(b, StrL("]"));
+            base_text_AddText(b, StrL("["));
+            base_text_AddText(b, V(b, n, md::NodeStrKind::Identifier));
+            base_text_AddText(b, StrL("]"));
             b->marks = saved;
             break;
         }
@@ -41762,7 +41468,7 @@ static void MdBlockChildren(MdBuild* b, const md::Node* n) {
 static void MdCodeBlock(MdBuild* b, Str value, Str lang) {
     MdNode* n = base_text_Push(b, MdKind::Code);
     n->lang = lang;
-    AddText(b, value);
+    base_text_AddText(b, value);
     base_text_Pop(b);
 }
 
@@ -41892,13 +41598,13 @@ static void MdBlockNode(MdBuild* b, const md::Node* n) {
             base_text_Push(b, MdKind::Html);
             Str raw = V(b, n, md::NodeStrKind::Value);
             b->cur->raw = raw;
-            AddText(b, raw);
+            base_text_AddText(b, raw);
             base_text_Pop(b);
             break;
         }
         case md::NodeKind::Break:
             base_text_Push(b, MdKind::Paragraph);
-            AddText(b, StrL("\n"));
+            base_text_AddText(b, StrL("\n"));
             base_text_Pop(b);
             break;
         case md::NodeKind::FootnoteDefinition: {
@@ -41906,16 +41612,16 @@ static void MdBlockNode(MdBuild* b, const md::Node* n) {
             base_text_Push(b, MdKind::Paragraph);
             uint8_t saved = b->marks;
             b->marks = (uint8_t)(b->marks | MdItalic);
-            AddText(b, StrL("["));
-            AddText(b, V(b, n, md::NodeStrKind::Identifier));
-            AddText(b, StrL("]: "));
+            base_text_AddText(b, StrL("["));
+            base_text_AddText(b, V(b, n, md::NodeStrKind::Identifier));
+            base_text_AddText(b, StrL("]: "));
             b->marks = saved;
             for (const md::Node* c : md::NodeKids(b->a, n)) {
 
                 if (md::NodeHasChildren(c->kind)) {
                     MdInline(b, c);
                 } else {
-                    AddText(b, V(b, c, md::NodeStrKind::Value));
+                    base_text_AddText(b, V(b, c, md::NodeStrKind::Value));
                 }
             }
             base_text_Pop(b);
@@ -42132,15 +41838,12 @@ static Str Bullet(int depth) {
 }
 
 static Str OrderedMarker(Arena* a, int n, int depth) {
-    char buf[24];
     if (depth == 0) {
-        snprintf(buf, sizeof(buf), "%d. ", n);
-        return StrDup(a, Str(buf));
+        return StrDup(a, fmt("%d. ", n));
     }
 
     int ix = n > 0 ? (n - 1) % 26 : 0;
-    snprintf(buf, sizeof(buf), "%c. ", (depth == 1 ? 'A' : 'a') + ix);
-    return StrDup(a, Str(buf));
+    return StrDup(a, fmt("%c. ", (depth == 1 ? 'A' : 'a') + ix));
 }
 
 static Str SrcCat(Arena* a, Str p0, Str p1 = {}, Str p2 = {}, Str p3 = {},
@@ -42183,13 +41886,8 @@ static Str SrcIndent(Arena* a, Str s) {
 }
 
 static Str SrcMarkPre(Arena* a, uint8_t marks) {
-    char buf[24];
-    int n = 0;
-    auto put = [&](const char* t) {
-        for (const char* p = t; *p && n < (int)sizeof(buf); p++) {
-            buf[n++] = *p;
-        }
-    };
+    StrBuilder out;
+    auto put = [&](const char* text) { StrBuilderAppend(a, out, Str(text)); };
     if (marks & MdLink) {
         put("[");
     }
@@ -42211,17 +41909,12 @@ static Str SrcMarkPre(Arena* a, uint8_t marks) {
     if (marks & MdCode) {
         put("`");
     }
-    return n > 0 ? StrDup(a, Str(buf, n)) : Str{};
+    return StrBuilderTakeStr(a, out);
 }
 
 static Str SrcMarkPost(Arena* a, uint8_t marks, Str href) {
-    char buf[24];
-    int n = 0;
-    auto put = [&](const char* t) {
-        for (const char* p = t; *p && n < (int)sizeof(buf); p++) {
-            buf[n++] = *p;
-        }
-    };
+    StrBuilder out;
+    auto put = [&](const char* text) { StrBuilderAppend(a, out, Str(text)); };
     if (marks & MdCode) {
         put("`");
     }
@@ -42240,7 +41933,7 @@ static Str SrcMarkPost(Arena* a, uint8_t marks, Str href) {
     if (marks & MdHighlight) {
         put("==");
     }
-    Str tail = n > 0 ? StrDup(a, Str(buf, n)) : Str{};
+    Str tail = StrBuilderTakeStr(a, out);
     if (marks & MdLink) {
 
         return SrcCat(a, tail, StrL("]("), href, StrL(")"));
@@ -44984,9 +44677,10 @@ uint64_t TooltipOverlay::NextEpoch() {
     return ++epoch;
 }
 
-static Listener TooltipTimerListener(Ctx* cx, void* fn) {
+template <typename T, typename E>
+static Listener TooltipTimerListener(Ctx* cx, void (*fn)(T*, Ctx*, const E*)) {
     Listener out;
-    out.fn = fn;
+    out.SetFn(fn);
     out.view = cx->self;
     return out;
 }
@@ -45031,9 +44725,9 @@ void TooltipOverlay::RequestShow(const TooltipRequest& request, Window* window,
     hasPreviousBounds = false;
     isSwitching = false;
     NextEpoch();
-    showTask = WindowSetTimeout(
-        window, kTooltipShowDelayMs,
-        TooltipTimerListener(cx, (void*)&TooltipOverlay::OnShow));
+    showTask =
+        WindowSetTimeout(window, kTooltipShowDelayMs,
+                         TooltipTimerListener(cx, &TooltipOverlay::OnShow));
 }
 
 void TooltipOverlay::RequestHide(Window* window, Ctx* cx) {
@@ -45047,9 +44741,9 @@ void TooltipOverlay::RequestHide(Window* window, Ctx* cx) {
     }
     NextEpoch();
     hadRecentTooltip = true;
-    hideTask = WindowSetTimeout(
-        window, kTooltipGracePeriodMs,
-        TooltipTimerListener(cx, (void*)&TooltipOverlay::OnHide));
+    hideTask =
+        WindowSetTimeout(window, kTooltipGracePeriodMs,
+                         TooltipTimerListener(cx, &TooltipOverlay::OnHide));
 }
 
 void TooltipOverlay::Hide(Ctx* cx) {
@@ -47071,7 +46765,8 @@ Avatar* Avatar::New(Ctx* cx) {
     return v;
 }
 
-Str AvatarInitials(char* out, int cap, Str name) {
+TempStr AvatarInitialsTemp(Str name) {
+    TempStr out = AllocStrTemp(2);
 
     int n = 0;
     bool atWord = true;
@@ -47082,7 +46777,7 @@ Str AvatarInitials(char* out, int cap, Str name) {
             continue;
         }
         if (atWord) {
-            out[n++] = c;
+            out.s[n++] = c;
             atWord = false;
         }
     }
@@ -47090,25 +46785,21 @@ Str AvatarInitials(char* out, int cap, Str name) {
     if (n == 1) {
         n = 0;
         for (int i = 0; i < name.len && n < 2; i++) {
-            out[n++] = name.s[i];
+            out.s[n++] = name.s[i];
         }
-    }
-    if (n > cap - 1) {
-        n = cap - 1;
     }
     for (int i = 0; i < n; i++) {
-        if (out[i] >= 'a' && out[i] <= 'z') {
-            out[i] = (char)(out[i] - 'a' + 'A');
+        if (out.s[i] >= 'a' && out.s[i] <= 'z') {
+            out.s[i] = (char)(out.s[i] - 'a' + 'A');
         }
     }
-    out[n] = 0;
-    return Str{out, n};
+    out.s[n] = 0;
+    out.len = n;
+    return out;
 }
 
 Avatar* Avatar::Name(Str s) {
-    char buf[8];
-    Str sh = AvatarInitials(buf, (int)sizeof(buf), s);
-    initials = StrDup(a, sh);
+    initials = StrDup(a, AvatarInitialsTemp(s));
     return this;
 }
 
@@ -49261,14 +48952,15 @@ AreaChart* AreaChart::StepAfter() {
 }
 El* AreaChart::IntoEl() {
     El* e = ChartEl(a, ys, n, stroke, fill, fillBottom, tickMargin);
-    e->chart.labels = labels;
-    e->chart.strokeStyle = strokeStyle;
-    e->chart.overlay = overlay;
-    e->chart.tooltip = tooltip;
-    e->chart.name = tooltipName;
+    ChartSeries* chart = e->Chart();
+    chart->labels = labels;
+    chart->strokeStyle = strokeStyle;
+    chart->overlay = overlay;
+    chart->tooltip = tooltip;
+    chart->name = tooltipName;
 
-    e->chart.more = more.Flatten(a);
-    e->chart.nMore = more.len;
+    chart->more = more.Flatten(a);
+    chart->nMore = more.len;
     return e;
 }
 
@@ -49319,14 +49011,15 @@ LineChart* LineChart::Dot(bool v) {
 El* LineChart::IntoEl() {
     Rgba none = {0, 0, 0, 0};
     El* e = ChartEl(a, ys, n, stroke, none, none, tickMargin);
-    e->chart.kind = ChartKind::Line;
-    e->chart.labels = labels;
-    e->chart.strokeStyle = strokeStyle;
-    e->chart.dot = dot;
-    e->chart.domainMin = domainMin;
-    e->chart.domainMax = domainMax;
-    e->chart.tooltip = tooltip;
-    e->chart.name = tooltipName;
+    ChartSeries* chart = e->Chart();
+    chart->kind = ChartKind::Line;
+    chart->labels = labels;
+    chart->strokeStyle = strokeStyle;
+    chart->dot = dot;
+    chart->domainMin = domainMin;
+    chart->domainMax = domainMax;
+    chart->tooltip = tooltip;
+    chart->name = tooltipName;
     return e;
 }
 
@@ -49407,26 +49100,27 @@ BarChart* BarChart::FillGradientDiagonal(Rgba from, Rgba to) {
 El* BarChart::IntoEl() {
     Rgba none = {0, 0, 0, 0};
     El* e = ChartEl(a, ys, n, fill, none, none, tickMargin);
-    e->chart.kind = ChartKind::Bar;
-    e->chart.labels = labels;
-    e->chart.barAlign = align;
-    e->chart.bases = bases;
-    e->chart.overlay = overlay;
-    e->chart.barLabels = labelValues;
-    e->chart.valueAxis = valueAxis;
-    e->chart.valueTickCount = valueTickCount;
-    e->chart.barFills = fills;
-    e->chart.barGradient = gradient;
-    e->chart.barGradientPerBar = gradientPerBar;
-    e->chart.barGradientDiagonal = gradientDiagonal;
-    e->chart.barFillFrom = gradientFrom;
-    e->chart.barFillTo = gradientTo;
-    e->chart.bandPadding = padding;
-    e->chart.barRadius = radius;
-    e->chart.domainMin = domainMin;
-    e->chart.domainMax = domainMax;
-    e->chart.tooltip = tooltip;
-    e->chart.name = tooltipName;
+    ChartSeries* chart = e->Chart();
+    chart->kind = ChartKind::Bar;
+    chart->labels = labels;
+    chart->barAlign = align;
+    chart->bases = bases;
+    chart->overlay = overlay;
+    chart->barLabels = labelValues;
+    chart->valueAxis = valueAxis;
+    chart->valueTickCount = valueTickCount;
+    chart->barFills = fills;
+    chart->barGradient = gradient;
+    chart->barGradientPerBar = gradientPerBar;
+    chart->barGradientDiagonal = gradientDiagonal;
+    chart->barFillFrom = gradientFrom;
+    chart->barFillTo = gradientTo;
+    chart->bandPadding = padding;
+    chart->barRadius = radius;
+    chart->domainMin = domainMin;
+    chart->domainMax = domainMax;
+    chart->tooltip = tooltip;
+    chart->name = tooltipName;
     return e;
 }
 
@@ -49481,15 +49175,16 @@ El* CandlestickChart::IntoEl() {
     Rgba none = {0, 0, 0, 0};
 
     El* e = ChartEl(a, closes, n, up, none, none, tickMargin);
-    e->chart.kind = ChartKind::Candlestick;
-    e->chart.labels = labels;
-    e->chart.opens = opens;
-    e->chart.highs = highs;
-    e->chart.lows = lows;
-    e->chart.up = up;
-    e->chart.down = down;
-    e->chart.bandPadding = padding;
-    e->chart.bodyWidthRatio = bodyWidthRatio;
+    ChartSeries* chart = e->Chart();
+    chart->kind = ChartKind::Candlestick;
+    chart->labels = labels;
+    chart->opens = opens;
+    chart->highs = highs;
+    chart->lows = lows;
+    chart->up = up;
+    chart->down = down;
+    chart->bandPadding = padding;
+    chart->bodyWidthRatio = bodyWidthRatio;
     return e;
 }
 
@@ -49638,13 +49333,14 @@ RadarChart* RadarChart::GridLevels(int v) {
 El* RadarChart::IntoEl() {
     Rgba none = {0, 0, 0, 0};
     El* e = ChartEl(a, values, n, stroke, fill, none, 1);
-    e->chart.kind = ChartKind::Radar;
-    e->chart.overlay = overlay;
-    e->chart.dot = dot;
-    e->chart.radarRadius = outerRadius;
-    e->chart.gridLevels = gridLevels;
-    e->chart.domainMin = domainMin;
-    e->chart.domainMax = domainMax;
+    ChartSeries* chart = e->Chart();
+    chart->kind = ChartKind::Radar;
+    chart->overlay = overlay;
+    chart->dot = dot;
+    chart->radarRadius = outerRadius;
+    chart->gridLevels = gridLevels;
+    chart->domainMin = domainMin;
+    chart->domainMax = domainMax;
     if (labels) {
         e->customPaint = PaintRadarLabels;
         e->customUser = this;
@@ -55342,12 +55038,12 @@ const LocaleRow* LocaleRowAt(int i) {
     return &kLocaleRows[i];
 }
 
-static const LocaleRow* FindRow(const char* key) {
+static const LocaleRow* FindRow(Str key) {
     int lo = 0;
     int hi = kLocaleRowCount - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        int cmp = strcmp(kLocaleRows[mid].key, key);
+        int cmp = StrCmp(Str(kLocaleRows[mid].key), key);
         if (cmp == 0) {
             return &kLocaleRows[mid];
         }
@@ -55364,7 +55060,7 @@ Str Tr(const char* key) {
     if (!key || !key[0]) {
         return {};
     }
-    const LocaleRow* row = FindRow(key);
+    const LocaleRow* row = FindRow(Str(key));
     if (!row) {
 
         return Str(key);
@@ -56522,8 +56218,8 @@ El* OtpInput::IntoEl() {
             if (masked) {
                 box->Child(IconEl(a, IconName::Asterisk, text)->Fg(fg));
             } else {
-                char ch[2] = {value[i], 0};
-                box->Child(TextEl(a, StrDup(a, Str(ch)))
+                Str ch(value + i, 1);
+                box->Child(TextEl(a, StrDup(a, ch))
                                ->Font(text)
                                ->LineHeight(1.f)
                                ->Fg(fg));
@@ -57390,9 +57086,9 @@ int KbdFormat(Keystroke stroke, char* out, int cap) {
 }
 
 Str KbdFormatStr(Ctx* cx, Keystroke stroke) {
-    char buf[64];
-    int n = KbdFormat(stroke, buf, (int)sizeof(buf));
-    return StrDup(cx->a, Str(buf, n));
+    TempStr buf = AllocStrTemp(63);
+    int n = KbdFormat(stroke, buf.s, buf.len + 1);
+    return StrDup(cx->a, Str(buf.s, n));
 }
 
 Kbd* Kbd::New(Ctx* cx, Str stroke) {
@@ -60621,23 +60317,8 @@ bool NotificationDeliveryIncludesSystem(NotificationDelivery d) {
 
 static const char kSystemTagPrefix[] = "gpui-component/notification/";
 
-Str NotificationSystemTag(char* buf, int cap, int id) {
-    if (!buf || cap <= 0) {
-        return {};
-    }
-    TempStr s = fmt("%d", id);
-    int prefixLen = (int)sizeof(kSystemTagPrefix) - 1;
-    int n = prefixLen + s.len;
-    if (n > cap - 1) {
-        n = cap - 1;
-    }
-    int take = n < prefixLen ? n : prefixLen;
-    memcpy(buf, kSystemTagPrefix, (size_t)take);
-    if (n > take) {
-        memcpy(buf + take, s.s, (size_t)(n - take));
-    }
-    buf[n] = 0;
-    return Str(buf, n);
+TempStr NotificationSystemTagTemp(int id) {
+    return fmt("%s%d", Str(kSystemTagPrefix), id);
 }
 
 bool NotificationTagId(Str tag, int* outId) {
@@ -60758,8 +60439,7 @@ int NotificationSystemCount(const App* app) {
 }
 
 static void SysDismissTag(int id) {
-    char buf[64];
-    SysNotifyDismiss(NotificationSystemTag(buf, (int)sizeof(buf), id));
+    SysNotifyDismiss(NotificationSystemTagTemp(id));
 }
 
 static bool SystemIdentityMatches(const NotificationSystemEntry& e,
@@ -60993,8 +60673,7 @@ static void NotificationPushSystem(NotificationListState* s, Ctx* cx,
         body = Str{};
     }
     NotificationInitSystem(cx->app);
-    char buf[64];
-    Str tag = NotificationSystemTag(buf, (int)sizeof(buf), item.id);
+    TempStr tag = NotificationSystemTagTemp(item.id);
 
     if (!SysNotifyShow(tag, title, body)) {
         return;
@@ -65934,13 +65613,10 @@ static double SettingNumParse(Str s, double fallback) {
     if (!s.s || s.len <= 0) {
         return fallback;
     }
-    char buf[64];
-    int n = s.len < (int)sizeof(buf) - 1 ? s.len : (int)sizeof(buf) - 1;
-    memcpy(buf, s.s, (size_t)n);
-    buf[n] = 0;
+    TempStr buf = StrDupTemp(s);
     char* end = nullptr;
-    double v = strtod(buf, &end);
-    return end == buf ? fallback : v;
+    double v = strtod(buf.s, &end);
+    return end == buf.s ? fallback : v;
 }
 
 static SettingBinding* FieldAt(SettingsState* self, intptr_t ix) {
@@ -73028,14 +72704,12 @@ static int ParseUint(const char* s, int len) {
 }
 
 static float ParseFloatOr(const char* s, int len, float fallback) {
-    char buf[32];
-    if (len <= 0 || len >= (int)sizeof(buf)) {
+    if (len <= 0 || len >= 32) {
         return fallback;
     }
-    memcpy(buf, s, (size_t)len);
-    buf[len] = 0;
+    TempStr buf = StrDupTemp(Str(s, len));
     char* end = nullptr;
-    float v = (float)strtod(buf, &end);
+    float v = (float)strtod(buf.s, &end);
     if (!end || *end) {
         return fallback;
     }
@@ -73421,7 +73095,7 @@ static const JsonValue* FindColor(const JsonValue* colors, const char* key) {
     if (!v) {
         for (size_t i = 0; i < sizeof(kKeyAliases) / sizeof(kKeyAliases[0]);
              i++) {
-            if (strcmp(kKeyAliases[i][0], key) == 0) {
+            if (StrEq(Str(kKeyAliases[i][0]), key)) {
                 v = JsonGet(colors, kKeyAliases[i][1]);
                 break;
             }
@@ -74314,19 +73988,17 @@ int ThemeRegistryLoadDir(App* app, Str dir) {
     if (!state || !state->arena) {
         return 0;
     }
-    char path[kMaxPath];
     int n = dir.len < kMaxPath - 1 ? dir.len : kMaxPath - 1;
-    memcpy(path, dir.s ? dir.s : "", (size_t)n);
-    path[n] = 0;
-    char resolved[kMaxPath];
-    if (!PlatDirExists(path)) {
-        if (!AssetsFindDir(dir, resolved, kMaxPath)) {
+    TempStr path = StrDupTemp(Str(dir.s ? dir.s : "", n));
+    if (!PlatDirExists(path.s)) {
+        TempStr resolved = AllocStrTemp(kMaxPath - 1);
+        if (!AssetsFindDir(dir, resolved.s, resolved.len + 1)) {
             return 0;
         }
-        StrCopyZ(path, kMaxPath, resolved);
+        path = Str(resolved.s);
     }
 
-    Str dirKey = Str(path);
+    Str dirKey = path;
     for (int i = 0; i < state->loadedDirs.len; i++) {
         if (base::StrEq(state->loadedDirs[i], dirKey)) {
             return 0;
@@ -74339,7 +74011,7 @@ int ThemeRegistryLoadDir(App* app, Str dir) {
     if (!entries) {
         return 0;
     }
-    int count = PlatListDir(path, entries, kMaxEntries);
+    int count = PlatListDir(path.s, entries, kMaxEntries);
     int added = 0;
     for (int i = 0; i < count; i++) {
         if (entries[i].isDir) {
@@ -74350,14 +74022,8 @@ int ThemeRegistryLoadDir(App* app, Str dir) {
         if (len < 6 || !base::StrEqI(Str(name + len - 5), ".json")) {
             continue;
         }
-        char file[kMaxPath];
-        StrCopyZ(file, kMaxPath, path);
-        int at = (int)strlen(file);
-        if (at + 1 < kMaxPath) {
-            file[at++] = ui_theme_kSep;
-            StrCopyZ(file + at, kMaxPath - at, name);
-        }
-        Str text = ReadTextFile(file);
+        TempStr file = fmt("%s%c%s", path, ui_theme_kSep, Str(name));
+        Str text = file.len < kMaxPath ? ReadTextFile(file.s) : Str{};
         if (text.s) {
 
             added += ThemeRegistryLoadStr(app, text);
@@ -75062,13 +74728,9 @@ static void AppendDateNumeric(Arena* a, StrBuilder* out, int value, int digits,
         AppendDateNumber(a, out, value, 1);
         return;
     }
-    char buf[32];
-    int len = pad == '0' ? snprintf(buf, sizeof(buf), "%0*d", digits, value)
-                         : snprintf(buf, sizeof(buf), "%*d", digits, value);
-    if (len > 0) {
-        StrBuilderAppend(a, *out,
-                         Str(buf, std::min(len, (int)sizeof(buf) - 1)));
-    }
+
+    TempStr format = pad == '0' ? fmt("%%0%dd", digits) : fmt("%%%dd", digits);
+    StrBuilderAppend(a, *out, fmt(format.s, value));
 }
 
 static int DateYearDay(LocalDate date) {
@@ -77383,7 +77045,7 @@ void SysSortProcesses(SysState* s, ProcessSort field, bool descending,
     }
 }
 
-TempStr FormatBytes(uint64_t bytes) {
+TempStr FormatBytesTemp(uint64_t bytes) {
     const uint64_t KB = 1024;
     const uint64_t MB = KB * 1024;
     const uint64_t GB = MB * 1024;
@@ -77399,7 +77061,7 @@ TempStr FormatBytes(uint64_t bytes) {
     return fmt("%d B", (int)bytes);
 }
 
-TempStr FormatPct(float v, int decimals) {
+TempStr FormatPctTemp(float v, int decimals) {
     if (decimals <= 0) {
         return fmt("%.0f%%", v);
     }
@@ -77929,14 +77591,14 @@ Rgba FpsRateColor(float fps, float budgetSecs, const FpsStyle& style) {
     return style.bad;
 }
 
-TempStr FpsFormatCpu(float percent) {
+TempStr FpsFormatCpuTemp(float percent) {
     if (percent < 10.f) {
         return fmt("%.1f%%", percent);
     }
     return fmt("%.0f%%", percent);
 }
 
-TempStr FpsFormatBytes(uint64_t bytes) {
+TempStr FpsFormatBytesTemp(uint64_t bytes) {
     const double kMib = 1024. * 1024.;
     const double kGib = kMib * 1024.;
     double v = (double)bytes;
@@ -77972,8 +77634,8 @@ static void UpdateReadout(FpsMonitor* self) {
     self->readout.frameMillis = FrameSamplerMeanDraw(s) * 1000.f;
     self->readout.percentileMillis =
         FrameSamplerPercentileDraw(s, kFramePercentile) * 1000.f;
-    self->readout.droppedPercent =
-        FrameSamplerOverBudget(s, self->frameBudget) * 100.f;
+    self->readout
+        .droppedPercent = FrameSamplerOverBudget(s, self->frameBudget) * 100.f;
     self->readout.invalidations = FrameSamplerMeanInvalidations(s);
     self->readoutAt = now;
 }
@@ -78169,20 +77831,19 @@ static El* FpsHeadline(Ctx* cx, FpsMonitor* self, float fps, Rgba color,
         ->W(kFill)
         ->H(kHeadlineHeight)
         ->Child(trace)
-        ->Child(
-            Div(cx->a)
-                ->FlexRow()
-                ->SizeFull()
-                ->ItemsEnd()
-                ->JustifyCenter()
-                ->Gap(4)
+        ->Child(Div(cx->a)
+                    ->FlexRow()
+                    ->SizeFull()
+                    ->ItemsEnd()
+                    ->JustifyCenter()
+                    ->Gap(4)
 
-                ->Child(Div(cx->a)->W(kUnitWidth)->H(kTextSize))
-                ->Child(figure)
-                ->Child(
-                    Div(cx->a)
-                        ->W(kUnitWidth)
-                        ->Child(TextEl(cx->a, StrL("FPS"))->Fg(style.muted))));
+                    ->Child(Div(cx->a)->W(kUnitWidth)->H(kTextSize))
+                    ->Child(figure)
+                    ->Child(Div(cx->a)
+                                ->W(kUnitWidth)
+                                ->Child(TextEl(cx->a, StrL("FPS"))
+                                            ->Fg(style.muted))));
 }
 
 void FpsMonitor::OnToggleCompact(FpsMonitor* self, Ctx* cx, const ClickEvent*) {
@@ -78272,10 +77933,10 @@ El* FpsMonitor::Render(FpsMonitor* self, Ctx* cx) {
         hud->Child(
             FpsRow(cx)
                 ->Child(FpsPair(cx, StrL("CPU"),
-                                FpsFormatCpu(self->resources.cpuPercent),
+                                FpsFormatCpuTemp(self->resources.cpuPercent),
                                 style.foreground, style))
                 ->Child(FpsPair(cx, StrL("MEM"),
-                                FpsFormatBytes(self->resources.memoryBytes),
+                                FpsFormatBytesTemp(self->resources.memoryBytes),
                                 style.foreground, style)));
     }
     return hud;
@@ -78341,6 +78002,1117 @@ El* FpsMonitorEl(Ctx* cx, FpsOverlayOpts opts) {
         *slot = EntityNew<FpsMonitor>(cx);
     }
     return FpsOverlayEl(cx, *slot, opts);
+}
+
+}
+
+#line 1 "src/html5ever/html5ever.cpp"
+
+namespace html5ever {
+
+using namespace base;
+
+static const char kVoidB[] = "base\0basefont\0bgsound\0br\0";
+static const char kVoidI[] = "img\0input\0";
+static const char kRawElements[] =
+    "iframe\0noembed\0noframes\0script\0style\0xmp\0";
+static const char kRcdataElements[] = "textarea\0title\0";
+static const char kFormattingB[] = "b\0big\0";
+static const char kFormattingS[] = "s\0small\0strike\0strong\0";
+static const char kBlockA[] = "address\0article\0aside\0";
+static const char kBlockD[] = "details\0dialog\0dir\0div\0dl\0";
+static const char kBlockF[] = "fieldset\0figcaption\0figure\0footer\0form\0";
+static const char kBlockH[] = "h1\0h2\0h3\0h4\0h5\0h6\0header\0hgroup\0hr\0";
+static const char kBlockM[] = "main\0menu\0";
+static const char kBlockP[] = "p\0pre\0";
+static const char kBlockS[] = "search\0section\0summary\0";
+static const char kHeadElements[] =
+    "base\0basefont\0bgsound\0link\0meta\0noframes\0script\0style\0template\0"
+    "title\0";
+static const char kTableParts[] =
+    "caption\0col\0colgroup\0tbody\0td\0tfoot\0th\0thead\0tr\0";
+
+static bool html5ever_html5ever_IsSpace(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+static bool IsAlpha(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static bool html5ever_html5ever_IsDigit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static bool html5ever_html5ever_IsNameChar(char c) {
+    return IsAlpha(c) || html5ever_html5ever_IsDigit(c) || c == '-' || c == '_' || c == ':';
+}
+
+static bool IsVoid(Str name) {
+    if (!name.s || name.len == 0) return false;
+    switch (name.s[0]) {
+        case 'a':
+            return StrEq(name, StrL("area"));
+        case 'b':
+            return SeqStrContainsI(kVoidB, name);
+        case 'c':
+            return StrEq(name, StrL("col"));
+        case 'e':
+            return StrEq(name, StrL("embed"));
+        case 'f':
+            return StrEq(name, StrL("frame"));
+        case 'h':
+            return StrEq(name, StrL("hr"));
+        case 'i':
+            return SeqStrContainsI(kVoidI, name);
+        case 'k':
+            return StrEq(name, StrL("keygen"));
+        case 'l':
+            return StrEq(name, StrL("link"));
+        case 'm':
+            return StrEq(name, StrL("meta"));
+        case 'p':
+            return StrEq(name, StrL("param"));
+        case 's':
+            return StrEq(name, StrL("source"));
+        case 't':
+            return StrEq(name, StrL("track"));
+        case 'w':
+            return StrEq(name, StrL("wbr"));
+        default:
+            return false;
+    }
+}
+
+static bool IsFormatting(Str name) {
+    if (!name.s || name.len == 0) return false;
+    switch (name.s[0]) {
+        case 'a':
+            return StrEq(name, StrL("a"));
+        case 'b':
+            return SeqStrContainsI(kFormattingB, name);
+        case 'c':
+            return StrEq(name, StrL("code"));
+        case 'e':
+            return StrEq(name, StrL("em"));
+        case 'f':
+            return StrEq(name, StrL("font"));
+        case 'i':
+            return StrEq(name, StrL("i"));
+        case 'n':
+            return StrEq(name, StrL("nobr"));
+        case 's':
+            return SeqStrContainsI(kFormattingS, name);
+        case 't':
+            return StrEq(name, StrL("tt"));
+        case 'u':
+            return StrEq(name, StrL("u"));
+        default:
+            return false;
+    }
+}
+
+static ArenaStr LowerCopy(Arena* a, Str value) {
+    ArenaStr result = ArenaStrDup(a, value);
+    StrLowerAscii(ArenaStrGet(a, result).s);
+    return result;
+}
+
+static const char kEntityNames[] =
+    "AMP\0AElig\0COPY\0CounterClockwiseContourIntegral\0GT\0LT\0QUOT\0REG\0"
+    "amp\0apos\0cent\0copy\0euro\0gt\0hellip\0laquo\0ldquo\0lsquo\0lt\0"
+    "mdash\0middot\0nbsp\0ndash\0pound\0quot\0raquo\0rdquo\0reg\0rsquo\0"
+    "trade\0yen\0";
+static const char kEntityValues[] =
+    "&\0Æ\0©\0∳\0>\0<\0\"\0®\0&\0'\0¢\0©\0€\0>\0…\0«\0“\0‘\0<\0—\0"
+    "·\0 \0–\0£\0\"\0»\0”\0®\0’\0™\0¥\0";
+
+static Str NamedEntity(Str name) {
+    int ix = SeqStrIndex(kEntityNames, name);
+    return ix < 0 ? Str{} : SeqStrByIndex(kEntityValues, ix);
+}
+
+static uint32_t NumericEntity(Str value, int radix) {
+    uint32_t cp = 0;
+    bool any = false;
+    for (int i = 0; i < value.len; i++) {
+        char c = value.s[i];
+        uint32_t digit = 0;
+        if (html5ever_html5ever_IsDigit(c)) {
+            digit = (uint32_t)(c - '0');
+        } else if (radix == 16 && c >= 'a' && c <= 'f') {
+            digit = (uint32_t)(c - 'a' + 10);
+        } else if (radix == 16 && c >= 'A' && c <= 'F') {
+            digit = (uint32_t)(c - 'A' + 10);
+        } else {
+            break;
+        }
+        any = true;
+        if (cp > 0x10ffffu / (uint32_t)radix) return 0xfffd;
+        cp = cp * (uint32_t)radix + digit;
+    }
+    if (!any || cp == 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+        return 0xfffd;
+    }
+
+    static const uint16_t controls[32] = {
+        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+        0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
+        0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+        0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+    };
+    if (cp >= 0x80 && cp <= 0x9f) cp = controls[cp - 0x80];
+    return cp;
+}
+
+static int EncodeUtf8(char* out, uint32_t cp) {
+    if (cp <= 0x7f) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp <= 0x7ff) {
+        out[0] = (char)(0xc0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3f));
+        return 2;
+    }
+    if (cp <= 0xffff) {
+        out[0] = (char)(0xe0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3f));
+        out[2] = (char)(0x80 | (cp & 0x3f));
+        return 3;
+    }
+    out[0] = (char)(0xf0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3f));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3f));
+    out[3] = (char)(0x80 | (cp & 0x3f));
+    return 4;
+}
+
+static void AppendCp(Arena* a, StrBuilder& out, uint32_t cp) {
+    char bytes[4];
+    int n = EncodeUtf8(bytes, cp);
+    StrBuilderAppend(a, out, Str(bytes, n));
+}
+
+static ArenaStr Decode(Arena* a, Str value, bool attribute) {
+    bool needsDecode = false;
+    for (int i = 0; i < value.len; i++) {
+        if (value.s[i] == '&' || value.s[i] == '\r' || value.s[i] == 0) {
+            needsDecode = true;
+            break;
+        }
+    }
+    if (!needsDecode) return ArenaStrDup(a, value);
+
+    StrBuilder out;
+    StrBuilderReserve(a, out, value.len);
+    for (int i = 0; i < value.len;) {
+        if (value.s[i] != '&') {
+            char c = value.s[i++] == '\r' ? '\n' : value.s[i - 1];
+            if (c == '\n' && i < value.len && value.s[i] == '\n' &&
+                value.s[i - 1] == '\r') {
+                i++;
+            }
+            if (c == 0) {
+                AppendCp(a, out, 0xfffd);
+            } else {
+                StrBuilderAppendChar(a, out, c);
+            }
+            continue;
+        }
+        int start = i++;
+        if (i < value.len && value.s[i] == '#') {
+            i++;
+            int radix = 10;
+            if (i < value.len && (value.s[i] == 'x' || value.s[i] == 'X')) {
+                radix = 16;
+                i++;
+            }
+            int digits = i;
+            while (
+                i < value.len &&
+                (html5ever_html5ever_IsDigit(value.s[i]) ||
+                 (radix == 16 && ((value.s[i] >= 'a' && value.s[i] <= 'f') ||
+                                  (value.s[i] >= 'A' && value.s[i] <= 'F'))))) {
+                i++;
+            }
+            if (digits == i) {
+                StrBuilderAppendChar(a, out, '&');
+                i = start + 1;
+                continue;
+            }
+            uint32_t cp =
+                NumericEntity(Str(value.s + digits, i - digits), radix);
+            if (i < value.len && value.s[i] == ';') i++;
+            AppendCp(a, out, cp);
+            continue;
+        }
+        int end = i;
+        while (end < value.len && IsAlpha(value.s[end]) && end - i < 31) end++;
+        if (end < value.len && html5ever_html5ever_IsDigit(value.s[end])) end++;
+        int matched = -1;
+        Str decoded = {};
+        for (int n = end - i; n > 0; n--) {
+            decoded = NamedEntity(Str(value.s + i, n));
+            if (decoded.s) {
+                matched = n;
+                break;
+            }
+        }
+        bool semi = matched > 0 && i + matched < value.len &&
+                    value.s[i + matched] == ';';
+        if (matched < 0 ||
+            (attribute && !semi && i + matched < value.len &&
+             (html5ever_html5ever_IsDigit(value.s[i + matched]) || IsAlpha(value.s[i + matched]) ||
+              value.s[i + matched] == '='))) {
+            StrBuilderAppendChar(a, out, '&');
+            i = start + 1;
+            continue;
+        }
+        StrBuilderAppend(a, out, decoded);
+        i += matched + (semi ? 1 : 0);
+    }
+    return ArenaStrDup(a, StrBuilderTakeStr(a, out));
+}
+
+struct Scanner {
+    Arena* a = nullptr;
+    Str source = {};
+    int at = 0;
+    int line = 1;
+    TokenSink sink = nullptr;
+    void* user = nullptr;
+    TokenizerOptions options = {};
+    Str rawName = {};
+    bool rcdata = false;
+};
+
+static void html5ever_html5ever_Emit(Scanner* s, const Token& token) {
+    if (s->sink) s->sink(s->user, &token);
+}
+
+static void Error(Scanner* s, const char* message) {
+    if (!s->options.exactErrors) return;
+    Token token;
+    token.kind = TokenKind::ParseError;
+    token.data = ArenaStrDup(s->a, Str((char*)message));
+    token.line = s->line;
+    html5ever_html5ever_Emit(s, token);
+}
+
+static void html5ever_html5ever_SkipSpace(Scanner* s) {
+    while (s->at < s->source.len && html5ever_html5ever_IsSpace(s->source.s[s->at])) {
+        if (s->source.s[s->at++] == '\n') s->line++;
+    }
+}
+
+static ArenaStr ScanName(Scanner* s) {
+    int start = s->at;
+    while (s->at < s->source.len && html5ever_html5ever_IsNameChar(s->source.s[s->at])) s->at++;
+    return LowerCopy(s->a, Str(s->source.s + start, s->at - start));
+}
+
+static Attribute* ScanAttrs(Scanner* s, bool* selfClosing) {
+    Attribute* first = nullptr;
+    Attribute* last = nullptr;
+    *selfClosing = false;
+    for (;;) {
+        html5ever_html5ever_SkipSpace(s);
+        if (s->at >= s->source.len) return first;
+        char c = s->source.s[s->at];
+        if (c == '>') {
+            s->at++;
+            return first;
+        }
+        if (c == '/' && s->at + 1 < s->source.len &&
+            s->source.s[s->at + 1] == '>') {
+            s->at += 2;
+            *selfClosing = true;
+            return first;
+        }
+        int nameStart = s->at;
+        while (s->at < s->source.len && !html5ever_html5ever_IsSpace(s->source.s[s->at]) &&
+               s->source.s[s->at] != '=' && s->source.s[s->at] != '>' &&
+               s->source.s[s->at] != '/') {
+            s->at++;
+        }
+        if (nameStart == s->at) {
+            Error(s, "unexpected byte in tag");
+            s->at++;
+            continue;
+        }
+        ArenaStr name =
+            LowerCopy(s->a, Str(s->source.s + nameStart, s->at - nameStart));
+        html5ever_html5ever_SkipSpace(s);
+        ArenaStr value = {};
+        if (s->at < s->source.len && s->source.s[s->at] == '=') {
+            s->at++;
+            html5ever_html5ever_SkipSpace(s);
+            int start = s->at;
+            if (s->at < s->source.len &&
+                (s->source.s[s->at] == '\'' || s->source.s[s->at] == '"')) {
+                char quote = s->source.s[s->at++];
+                start = s->at;
+                while (s->at < s->source.len && s->source.s[s->at] != quote) {
+                    if (s->source.s[s->at++] == '\n') s->line++;
+                }
+                value =
+                    Decode(s->a, Str(s->source.s + start, s->at - start), true);
+                if (s->at < s->source.len) s->at++;
+            } else {
+                while (s->at < s->source.len && !html5ever_html5ever_IsSpace(s->source.s[s->at]) &&
+                       s->source.s[s->at] != '>') {
+                    s->at++;
+                }
+                value =
+                    Decode(s->a, Str(s->source.s + start, s->at - start), true);
+            }
+        }
+        bool duplicate = false;
+        for (Attribute* at = first; at; at = AttributeNext(s->a, at)) {
+            if (StrEq(AttributeName(s->a, at), ArenaStrGet(s->a, name))) {
+                duplicate = true;
+            }
+        }
+        if (duplicate) {
+            Error(s, "duplicate attribute");
+            continue;
+        }
+        Attribute* attr = ArenaNew<Attribute>(s->a);
+        attr->name = name;
+        attr->value = value;
+        if (last)
+            last->next = ArenaPtrOf(s->a, attr);
+        else
+            first = attr;
+        last = attr;
+    }
+}
+
+static int FindRawClose(const Scanner* s) {
+    for (int i = s->at; i + 2 + s->rawName.len <= s->source.len; i++) {
+        if (s->source.s[i] != '<' || s->source.s[i + 1] != '/') continue;
+        if (!StrEqI(Str(s->source.s + i + 2, s->rawName.len), s->rawName)) {
+            continue;
+        }
+        int end = i + 2 + s->rawName.len;
+        if (end >= s->source.len || html5ever_html5ever_IsSpace(s->source.s[end]) ||
+            s->source.s[end] == '>') {
+            return i;
+        }
+    }
+    return s->source.len;
+}
+
+static void TokenizeRun(Scanner* s) {
+    if (s->options.discardBom && s->source.len >= 3 &&
+        (uint8_t)s->source.s[0] == 0xef && (uint8_t)s->source.s[1] == 0xbb &&
+        (uint8_t)s->source.s[2] == 0xbf) {
+        s->at = 3;
+    }
+    while (s->at < s->source.len) {
+        if (s->rawName.s) {
+            int end = FindRawClose(s);
+            if (end > s->at) {
+                Token text;
+                text.kind = TokenKind::Character;
+                Str raw(s->source.s + s->at, end - s->at);
+                text.data = s->rcdata ? Decode(s->a, raw, false)
+                                      : ArenaStrDup(s->a, raw);
+                text.line = s->line;
+                for (int i = s->at; i < end; i++) {
+                    if (s->source.s[i] == '\n') s->line++;
+                }
+                s->at = end;
+                html5ever_html5ever_Emit(s, text);
+                continue;
+            }
+            s->rawName = {};
+            s->rcdata = false;
+        }
+        if (s->source.s[s->at] != '<') {
+            int start = s->at;
+            while (s->at < s->source.len && s->source.s[s->at] != '<') {
+                if (s->source.s[s->at++] == '\n') s->line++;
+            }
+            Token text;
+            text.kind = TokenKind::Character;
+            text.data =
+                Decode(s->a, Str(s->source.s + start, s->at - start), false);
+            text.line = s->line;
+            html5ever_html5ever_Emit(s, text);
+            continue;
+        }
+        int tokenLine = s->line;
+        if (s->at + 3 < s->source.len &&
+            StrEq(Str(s->source.s + s->at, 4), StrL("<!--"))) {
+            s->at += 4;
+            int start = s->at;
+            while (s->at + 2 < s->source.len &&
+                   !(s->source.s[s->at] == '-' &&
+                     s->source.s[s->at + 1] == '-' &&
+                     s->source.s[s->at + 2] == '>')) {
+                if (s->source.s[s->at++] == '\n') s->line++;
+            }
+            Token comment;
+            comment.kind = TokenKind::Comment;
+            comment.data =
+                ArenaStrDup(s->a, Str(s->source.s + start, s->at - start));
+            comment.line = tokenLine;
+            if (s->at + 2 < s->source.len)
+                s->at += 3;
+            else
+                Error(s, "eof in comment");
+            html5ever_html5ever_Emit(s, comment);
+            continue;
+        }
+        if (s->at + 2 < s->source.len && s->source.s[s->at + 1] == '!') {
+            int start = s->at + 2;
+            s->at = start;
+            while (s->at < s->source.len && s->source.s[s->at] != '>') {
+                s->at++;
+            }
+            Str body = StrTrimAscii(Str(s->source.s + start, s->at - start));
+            if (s->at < s->source.len) s->at++;
+            Token token;
+            token.kind = TokenKind::Doctype;
+            token.line = tokenLine;
+            if (StrStartsWithI(body, StrL("doctype"))) {
+                body = StrTrimAscii(Str(body.s + 7, body.len - 7));
+                int n = 0;
+                while (n < body.len && !html5ever_html5ever_IsSpace(body.s[n])) n++;
+                token.name = LowerCopy(s->a, Str(body.s, n));
+                token.forceQuirks =
+                    !StrEqI(TokenName(s->a, &token), StrL("html"));
+            } else {
+                token.kind = TokenKind::Comment;
+                token.data = ArenaStrDup(s->a, body);
+            }
+            html5ever_html5ever_Emit(s, token);
+            continue;
+        }
+        if (s->at + 1 < s->source.len && s->source.s[s->at + 1] == '/') {
+            s->at += 2;
+            html5ever_html5ever_SkipSpace(s);
+            Token token;
+            token.kind = TokenKind::EndTag;
+            token.name = ScanName(s);
+            token.line = tokenLine;
+            while (s->at < s->source.len && s->source.s[s->at] != '>') s->at++;
+            if (s->at < s->source.len) s->at++;
+            html5ever_html5ever_Emit(s, token);
+            continue;
+        }
+        if (s->at + 1 < s->source.len && IsAlpha(s->source.s[s->at + 1])) {
+            s->at++;
+            Token token;
+            token.kind = TokenKind::StartTag;
+            token.name = ScanName(s);
+            token.line = tokenLine;
+            token.attrs = ArenaPtrOf(s->a, ScanAttrs(s, &token.selfClosing));
+            html5ever_html5ever_Emit(s, token);
+            Str name = TokenName(s->a, &token);
+            if (!token.selfClosing &&
+                (SeqStrContainsI(kRawElements, name) ||
+                 SeqStrContainsI(kRcdataElements, name))) {
+                s->rawName = name;
+                s->rcdata = SeqStrContainsI(kRcdataElements, name);
+            }
+            continue;
+        }
+        Token text;
+        text.kind = TokenKind::Character;
+        text.data = ArenaStrDup(s->a, Str(s->source.s + s->at, 1));
+        text.line = tokenLine;
+        s->at++;
+        html5ever_html5ever_Emit(s, text);
+    }
+    Token eof;
+    eof.kind = TokenKind::Eof;
+    eof.line = s->line;
+    html5ever_html5ever_Emit(s, eof);
+}
+
+void Tokenize(Arena* a, Str source, TokenSink sink, void* user,
+              TokenizerOptions options) {
+    if (!a || !sink) return;
+    Scanner scanner;
+    scanner.a = a;
+    scanner.source = source;
+    scanner.sink = sink;
+    scanner.user = user;
+    scanner.options = options;
+    TokenizeRun(&scanner);
+}
+
+static Node* NewNode(Arena* a, NodeKind kind, Str name = {}) {
+    Node* node = ArenaNew<Node>(a);
+    node->kind = kind;
+    node->name = ArenaStrDup(a, name);
+    return node;
+}
+
+static void Append(Arena* a, Node* parent, Node* child) {
+    child->parent = ArenaPtrOf(a, parent);
+    child->next = {};
+    Node* last = NodeLast(a, parent);
+    if (last)
+        last->next = ArenaPtrOf(a, child);
+    else
+        parent->first = ArenaPtrOf(a, child);
+    parent->last = ArenaPtrOf(a, child);
+}
+
+static void InsertBefore(Arena* a, Node* before, Node* child) {
+    Node* parent = NodeParent(a, before);
+    if (!parent) return;
+    child->parent = ArenaPtrOf(a, parent);
+    if (NodeFirst(a, parent) == before) {
+        child->next = ArenaPtrOf(a, before);
+        parent->first = ArenaPtrOf(a, child);
+        return;
+    }
+    Node* prev = NodeFirst(a, parent);
+    while (prev && NodeNext(a, prev) != before) prev = NodeNext(a, prev);
+    if (!prev) return;
+    prev->next = ArenaPtrOf(a, child);
+    child->next = ArenaPtrOf(a, before);
+}
+
+static Attribute* CloneAttrs(Arena* a, const Attribute* attrs) {
+    Attribute* first = nullptr;
+    Attribute* last = nullptr;
+    for (; attrs; attrs = AttributeNext(a, attrs)) {
+        Attribute* copy = ArenaNew<Attribute>(a);
+        *copy = *attrs;
+        copy->next = {};
+        if (last)
+            last->next = ArenaPtrOf(a, copy);
+        else
+            first = copy;
+        last = copy;
+    }
+    return first;
+}
+
+struct Builder {
+    Arena* a = nullptr;
+    ParseOptions options = {};
+    Node* doc = nullptr;
+    Node* html = nullptr;
+    Node* head = nullptr;
+    Node* body = nullptr;
+    ArenaVec<Node*> open{};
+    bool fragment = false;
+    Str context = {};
+};
+
+static Node* Current(Builder* b) {
+    return b->open.len ? b->open[b->open.len - 1] : b->doc;
+}
+
+static int OpenIndex(Builder* b, Str name) {
+    for (int i = b->open.len - 1; i >= 0; i--) {
+        if (StrEq(NodeName(b->a, b->open[i]), name)) return i;
+    }
+    return -1;
+}
+
+static bool HasOpen(Builder* b, Str name) {
+    return OpenIndex(b, name) >= 0;
+}
+
+static Node* Element(Builder* b, Str name, const Attribute* attrs,
+                     Namespace ns = Namespace::Html) {
+    Node* node = NewNode(b->a, NodeKind::Element, name);
+    node->attrs = ArenaPtrOf(b->a, CloneAttrs(b->a, attrs));
+    node->ns = ns;
+    return node;
+}
+
+static Node* ElementFromToken(Builder* b, const Token* token,
+                              Namespace ns = Namespace::Html) {
+    Node* node = ArenaNew<Node>(b->a);
+    node->kind = NodeKind::Element;
+    node->name = token->name;
+    node->attrs = token->attrs;
+    node->ns = ns;
+    return node;
+}
+
+static Node* EnsureWrapper(Builder* b, Node** slot, Str name, Node* parent) {
+    if (*slot) return *slot;
+    *slot = Element(b, name, nullptr);
+    (*slot)->implicit = true;
+    Append(b->a, parent, *slot);
+    return *slot;
+}
+
+static Node* Body(Builder* b) {
+    if (b->fragment) return b->doc;
+    if (b->body) return b->body;
+    EnsureWrapper(b, &b->html, StrL("html"), b->doc);
+    EnsureWrapper(b, &b->head, StrL("head"), b->html);
+    return EnsureWrapper(b, &b->body, StrL("body"), b->html);
+}
+
+static bool AllSpace(Str value) {
+    for (int i = 0; i < value.len; i++) {
+        if (!html5ever_html5ever_IsSpace(value.s[i])) return false;
+    }
+    return true;
+}
+
+static Node* TableInScope(Builder* b) {
+    for (int i = b->open.len - 1; i >= 0; i--) {
+        if (StrEq(NodeName(b->a, b->open[i]), StrL("table"))) {
+            return b->open[i];
+        }
+    }
+    return nullptr;
+}
+
+static bool TableAllows(Str parent, Str child) {
+    if (StrEq(parent, StrL("table"))) {
+        return SeqStrContainsI(kTableParts, child) ||
+               StrEq(child, StrL("style")) || StrEq(child, StrL("script")) ||
+               StrEq(child, StrL("template"));
+    }
+    if (StrEq(parent, StrL("tbody")) || StrEq(parent, StrL("thead")) ||
+        StrEq(parent, StrL("tfoot"))) {
+        return StrEq(child, StrL("tr"));
+    }
+    if (StrEq(parent, StrL("tr"))) {
+        return StrEq(child, StrL("td")) || StrEq(child, StrL("th"));
+    }
+    return true;
+}
+
+static Node* InsertionParent(Builder* b, Str child, bool textIsSpace,
+                             Node** tableOut, bool* fosterOut) {
+    Node* current = Current(b);
+    Node* table = TableInScope(b);
+    if (tableOut) *tableOut = table;
+    bool foster =
+        table && !textIsSpace && !TableAllows(NodeName(b->a, current), child);
+    if (fosterOut) *fosterOut = foster;
+    if (foster) {
+        Node* tableParent = NodeParent(b->a, table);
+        return tableParent ? tableParent : current;
+    }
+    return current == b->doc ? Body(b) : current;
+}
+
+static void AppendText(Builder* b, ArenaStr stored) {
+    Str data = ArenaStrGet(b->a, stored);
+    if (data.len <= 0) return;
+    Node* table = nullptr;
+    bool foster = false;
+    Node* parent = InsertionParent(b, {}, AllSpace(data), &table, &foster);
+    if (foster) {
+        Node* text = NewNode(b->a, NodeKind::Text);
+        text->data = stored;
+        InsertBefore(b->a, table, text);
+    } else {
+        Node* last = NodeLast(b->a, parent);
+        if (last && last->kind == NodeKind::Text) {
+            last->data = ArenaStrAppend(b->a, last->data, data);
+        } else {
+            Node* text = NewNode(b->a, NodeKind::Text);
+            text->data = stored;
+            Append(b->a, parent, text);
+        }
+    }
+}
+
+static bool ClosesP(Str name) {
+    if (!name.s || name.len == 0) return false;
+    char first = name.s[0];
+    if (first >= 'A' && first <= 'Z') first = (char)(first + ('a' - 'A'));
+    switch (first) {
+        case 'a':
+            return SeqStrContainsI(kBlockA, name);
+        case 'b':
+            return StrEq(name, StrL("blockquote"));
+        case 'c':
+            return StrEq(name, StrL("center"));
+        case 'd':
+            return SeqStrContainsI(kBlockD, name);
+        case 'f':
+            return SeqStrContainsI(kBlockF, name);
+        case 'h':
+            return SeqStrContainsI(kBlockH, name);
+        case 'l':
+            return StrEq(name, StrL("listing"));
+        case 'm':
+            return SeqStrContainsI(kBlockM, name);
+        case 'n':
+            return StrEq(name, StrL("nav"));
+        case 'o':
+            return StrEq(name, StrL("ol"));
+        case 'p':
+            return SeqStrContainsI(kBlockP, name);
+        case 's':
+            return SeqStrContainsI(kBlockS, name);
+        case 't':
+            return StrEq(name, StrL("table"));
+        case 'u':
+            return StrEq(name, StrL("ul"));
+        default:
+            return false;
+    }
+}
+
+static void CloseNamed(Builder* b, Str name) {
+    int at = OpenIndex(b, name);
+    if (at >= 0) b->open.Truncate(at);
+}
+
+static void CloseImplied(Builder* b, Str name) {
+    if (ClosesP(name)) CloseNamed(b, StrL("p"));
+    if (StrEq(name, StrL("li"))) {
+        int at = OpenIndex(b, StrL("li"));
+        if (at >= 0) b->open.Truncate(at);
+    }
+    if (StrEq(name, StrL("dt")) || StrEq(name, StrL("dd"))) {
+        int dt = OpenIndex(b, StrL("dt"));
+        int dd = OpenIndex(b, StrL("dd"));
+        int at = dt > dd ? dt : dd;
+        if (at >= 0) b->open.Truncate(at);
+    }
+    if (StrEq(name, StrL("tr"))) {
+        int at = OpenIndex(b, StrL("tr"));
+        if (at >= 0) b->open.Truncate(at);
+    }
+    if (StrEq(name, StrL("td")) || StrEq(name, StrL("th"))) {
+        int td = OpenIndex(b, StrL("td"));
+        int th = OpenIndex(b, StrL("th"));
+        int at = td > th ? td : th;
+        if (at >= 0) b->open.Truncate(at);
+    }
+    if (name.len == 2 && name.s[0] == 'h' && name.s[1] >= '1' &&
+        name.s[1] <= '6') {
+        for (int i = b->open.len - 1; i >= 0; i--) {
+            Str n = NodeName(b->a, b->open[i]);
+            if (n.len == 2 && n.s[0] == 'h' && n.s[1] >= '1' && n.s[1] <= '6') {
+                b->open.Truncate(i);
+                break;
+            }
+        }
+    }
+}
+
+static void MergeAttrs(Arena* a, Node* node, const Attribute* attrs) {
+    for (; attrs; attrs = AttributeNext(a, attrs)) {
+        bool exists = false;
+        for (Attribute* at = NodeAttrs(a, node); at;
+             at = AttributeNext(a, at)) {
+            if (StrEq(AttributeName(a, at), AttributeName(a, attrs))) {
+                exists = true;
+            }
+        }
+        if (exists) continue;
+        Attribute* copy = ArenaNew<Attribute>(a);
+        *copy = *attrs;
+        copy->next = node->attrs;
+        node->attrs = ArenaPtrOf(a, copy);
+    }
+}
+
+static Node* PushElement(Builder* b, const Token* token,
+                         Namespace ns = Namespace::Html) {
+    Str name = TokenName(b->a, token);
+    Node* table = nullptr;
+    bool foster = false;
+    Node* parent = InsertionParent(b, name, false, &table, &foster);
+    Node* node = ElementFromToken(b, token, ns);
+    if (foster) {
+        InsertBefore(b->a, table, node);
+    } else {
+        Append(b->a, parent, node);
+    }
+    if (!token->selfClosing && !IsVoid(name)) {
+        b->open.Append(b->a, node);
+    }
+    return node;
+}
+
+static void StartTag(Builder* b, const Token* token) {
+    Str name = TokenName(b->a, token);
+    if (!b->fragment && StrEq(name, StrL("html"))) {
+        Node* html = EnsureWrapper(b, &b->html, StrL("html"), b->doc);
+        html->implicit = false;
+        MergeAttrs(b->a, html, TokenAttrs(b->a, token));
+        if (b->open.len == 0) b->open.Append(b->a, html);
+        return;
+    }
+    if (!b->fragment && StrEq(name, StrL("head"))) {
+        EnsureWrapper(b, &b->html, StrL("html"), b->doc);
+        Node* head = EnsureWrapper(b, &b->head, StrL("head"), b->html);
+        head->implicit = false;
+        MergeAttrs(b->a, head, TokenAttrs(b->a, token));
+        if (!HasOpen(b, StrL("head"))) b->open.Append(b->a, head);
+        return;
+    }
+    if (!b->fragment && StrEq(name, StrL("body"))) {
+        Body(b)->implicit = false;
+        MergeAttrs(b->a, b->body, TokenAttrs(b->a, token));
+        while (b->open.len && b->open[b->open.len - 1] != b->html)
+            b->open.Pop();
+        if (!HasOpen(b, StrL("html"))) b->open.Append(b->a, b->html);
+        b->open.Append(b->a, b->body);
+        return;
+    }
+    if (!b->fragment && !b->body && SeqStrContainsI(kHeadElements, name)) {
+        EnsureWrapper(b, &b->html, StrL("html"), b->doc);
+        Node* head = EnsureWrapper(b, &b->head, StrL("head"), b->html);
+        Node* node = ElementFromToken(b, token);
+        Append(b->a, head, node);
+        if (!token->selfClosing && !IsVoid(name)) {
+            b->open.Append(b->a, node);
+        }
+        return;
+    }
+    Body(b);
+    if (!b->fragment && b->open.len == 0) {
+        b->open.Append(b->a, b->html);
+        b->open.Append(b->a, b->body);
+    } else if (!b->fragment && Current(b) == b->html) {
+        b->open.Append(b->a, b->body);
+    }
+
+    CloseImplied(b, name);
+    if (StrEq(name, StrL("tr")) &&
+        StrEq(NodeName(b->a, Current(b)), StrL("table"))) {
+        Node* tbody = Element(b, StrL("tbody"), nullptr);
+        tbody->implicit = true;
+        Append(b->a, Current(b), tbody);
+        b->open.Append(b->a, tbody);
+    } else if ((StrEq(name, StrL("td")) || StrEq(name, StrL("th"))) &&
+               StrEq(NodeName(b->a, Current(b)), StrL("table"))) {
+        Node* tbody = Element(b, StrL("tbody"), nullptr);
+        tbody->implicit = true;
+        Append(b->a, Current(b), tbody);
+        b->open.Append(b->a, tbody);
+        Node* tr = Element(b, StrL("tr"), nullptr);
+        tr->implicit = true;
+        Append(b->a, Current(b), tr);
+        b->open.Append(b->a, tr);
+    } else if ((StrEq(name, StrL("td")) || StrEq(name, StrL("th"))) &&
+               (StrEq(NodeName(b->a, Current(b)), StrL("tbody")) ||
+                StrEq(NodeName(b->a, Current(b)), StrL("thead")) ||
+                StrEq(NodeName(b->a, Current(b)), StrL("tfoot")))) {
+        Node* tr = Element(b, StrL("tr"), nullptr);
+        tr->implicit = true;
+        Append(b->a, Current(b), tr);
+        b->open.Append(b->a, tr);
+    }
+    Namespace ns = Current(b)->ns;
+    if (StrEq(name, StrL("svg")))
+        ns = Namespace::Svg;
+    else if (StrEq(name, StrL("math")))
+        ns = Namespace::MathMl;
+    PushElement(b, token, ns);
+}
+
+static void EndFormatting(Builder* b, Str name) {
+    int at = OpenIndex(b, name);
+    if (at < 0) return;
+    ArenaVec<Node*> reopen;
+    for (int i = at + 1; i < b->open.len; i++) {
+        if (IsFormatting(NodeName(b->a, b->open[i]))) {
+            reopen.Append(b->a, b->open[i]);
+        }
+    }
+    Node* parent = NodeParent(b->a, b->open[at]);
+    b->open.Truncate(at);
+    for (int i = 0; i < reopen.len; i++) {
+        Node* old = reopen[i];
+        Node* node =
+            Element(b, NodeName(b->a, old), NodeAttrs(b->a, old), old->ns);
+        Append(b->a, parent, node);
+        b->open.Append(b->a, node);
+        parent = node;
+    }
+}
+
+static void EndTag(Builder* b, const Token* token) {
+    Str name = TokenName(b->a, token);
+    if (StrEq(name, StrL("head"))) {
+        CloseNamed(b, StrL("head"));
+        return;
+    }
+    if (StrEq(name, StrL("body")) || StrEq(name, StrL("html"))) {
+        while (b->open.len && b->open[b->open.len - 1] != b->html)
+            b->open.Pop();
+        return;
+    }
+    if (IsFormatting(name)) {
+        EndFormatting(b, name);
+        return;
+    }
+    int at = OpenIndex(b, name);
+    if (at >= 0) b->open.Truncate(at);
+}
+
+static void BuildToken(void* user, const Token* token) {
+    Builder* b = (Builder*)user;
+    switch (token->kind) {
+        case TokenKind::Character:
+        case TokenKind::NullCharacter:
+            AppendText(b, token->data);
+            break;
+        case TokenKind::Comment: {
+            Node* comment = NewNode(b->a, NodeKind::Comment);
+            comment->data = token->data;
+            Append(b->a, Current(b), comment);
+            break;
+        }
+        case TokenKind::Doctype:
+            if (!b->options.dropDoctype && !b->fragment) {
+                Node* node =
+                    NewNode(b->a, NodeKind::Doctype, TokenName(b->a, token));
+                node->data = token->data;
+                node->systemId = token->systemId;
+                Append(b->a, b->doc, node);
+            }
+            break;
+        case TokenKind::StartTag:
+            StartTag(b, token);
+            break;
+        case TokenKind::EndTag:
+            EndTag(b, token);
+            break;
+        default:
+            break;
+    }
+}
+
+static Node* Parse(Arena* a, Str source, Str context, ParseOptions options,
+                   bool fragment) {
+    if (!a) return nullptr;
+    Builder builder;
+    builder.a = a;
+    builder.options = options;
+    builder.fragment = fragment;
+    builder.context = context;
+    builder.doc = NewNode(a, NodeKind::Document);
+    if (fragment) {
+        builder.doc->name =
+            context.s ? LowerCopy(a, context) : ArenaStrDup(a, StrL("body"));
+        builder.doc->ns = StrEqI(context, StrL("svg"))    ? Namespace::Svg
+                          : StrEqI(context, StrL("math")) ? Namespace::MathMl
+                                                          : Namespace::Html;
+    }
+    TokenizerOptions tokenizer = options.tokenizer;
+    tokenizer.exactErrors = tokenizer.exactErrors || options.exactErrors;
+    if (fragment && (SeqStrContainsI(kRawElements, context) ||
+                     SeqStrContainsI(kRcdataElements, context))) {
+        Scanner scanner;
+        scanner.a = a;
+        scanner.source = source;
+        scanner.sink = BuildToken;
+        scanner.user = &builder;
+        scanner.options = tokenizer;
+        scanner.rawName = context;
+        scanner.rcdata = SeqStrContainsI(kRcdataElements, context);
+        TokenizeRun(&scanner);
+    } else {
+        Tokenize(a, source, BuildToken, &builder, tokenizer);
+    }
+    if (!fragment) Body(&builder);
+    return builder.doc;
+}
+
+Node* ParseDocument(Arena* a, Str source, ParseOptions options) {
+    return Parse(a, source, {}, options, false);
+}
+
+Node* ParseFragment(Arena* a, Str source, Str context, ParseOptions options) {
+    return Parse(a, source, context, options, true);
+}
+
+const Attribute* Attr(Arena* a, const Node* node, Str name) {
+    if (!node) return nullptr;
+    for (const Attribute* attr = NodeAttrs(a, node); attr;
+         attr = AttributeNext(a, attr)) {
+        if (StrEqI(AttributeName(a, attr), name)) return attr;
+    }
+    return nullptr;
+}
+
+Str AttrValue(Arena* a, const Node* node, Str name) {
+    return AttributeValue(a, Attr(a, node, name));
+}
+
+static void WriteEscaped(Arena* a, StrBuilder& out, Str value, bool attribute) {
+    for (int i = 0; i < value.len; i++) {
+        char c = value.s[i];
+        if (c == '&')
+            StrBuilderAppend(a, out, StrL("&amp;"));
+        else if (c == '<')
+            StrBuilderAppend(a, out, StrL("&lt;"));
+        else if (c == '>' && !attribute)
+            StrBuilderAppend(a, out, StrL("&gt;"));
+        else if (c == '"' && attribute)
+            StrBuilderAppend(a, out, StrL("&quot;"));
+        else
+            StrBuilderAppendChar(a, out, c);
+    }
+}
+
+static void html5ever_html5ever_WriteNode(Arena* a, StrBuilder& out, const Node* node,
+                      bool include) {
+    if (!node) return;
+    bool element = node->kind == NodeKind::Element;
+    if (include) {
+        if (node->kind == NodeKind::Text) {
+            const Node* parent = NodeParent(a, node);
+            if (parent && SeqStrContainsI(kRawElements, NodeName(a, parent)))
+                StrBuilderAppend(a, out, NodeData(a, node));
+            else
+                WriteEscaped(a, out, NodeData(a, node), false);
+        } else if (node->kind == NodeKind::Comment) {
+            StrBuilderAppend(a, out, StrL("<!--"));
+            StrBuilderAppend(a, out, NodeData(a, node));
+            StrBuilderAppend(a, out, StrL("-->"));
+        } else if (node->kind == NodeKind::Doctype) {
+            StrBuilderAppend(a, out, StrL("<!DOCTYPE "));
+            StrBuilderAppend(a, out, NodeName(a, node));
+            StrBuilderAppendChar(a, out, '>');
+        } else if (element) {
+            StrBuilderAppendChar(a, out, '<');
+            StrBuilderAppend(a, out, NodeName(a, node));
+            for (const Attribute* attr = NodeAttrs(a, node); attr;
+                 attr = AttributeNext(a, attr)) {
+                StrBuilderAppendChar(a, out, ' ');
+                StrBuilderAppend(a, out, AttributeName(a, attr));
+                StrBuilderAppend(a, out, StrL("=\""));
+                WriteEscaped(a, out, AttributeValue(a, attr), true);
+                StrBuilderAppendChar(a, out, '"');
+            }
+            StrBuilderAppendChar(a, out, '>');
+        }
+    }
+    if (node->kind != NodeKind::Text && node->kind != NodeKind::Comment &&
+        node->kind != NodeKind::Doctype) {
+        for (const Node* child = NodeFirst(a, node); child;
+             child = NodeNext(a, child)) {
+            html5ever_html5ever_WriteNode(a, out, child, true);
+        }
+    }
+    if (include && element && !IsVoid(NodeName(a, node))) {
+        StrBuilderAppend(a, out, StrL("</"));
+        StrBuilderAppend(a, out, NodeName(a, node));
+        StrBuilderAppendChar(a, out, '>');
+    }
+}
+
+Str Serialize(Arena* a, const Node* node, SerializeOptions options) {
+    if (!a || !node) return {};
+    StrBuilder out;
+    html5ever_html5ever_WriteNode(a, out, node, options.includeNode);
+    return StrBuilderTakeStr(a, out);
 }
 
 }
@@ -90487,8 +91259,8 @@ static int32_t NodeToStringFill(Arena* a, const Node* node, char* out,
         }
         return at;
     }
-    Str value = NodeHasOwnValue(node) ? NodeGetStr(a, node, NodeStrKind::Value)
-                                      : Str{};
+    Str value =
+        NodeHasOwnValue(node) ? NodeGetStr(a, node, NodeStrKind::Value) : Str{};
     if (value.len > 0) {
         memcpy(out + at, value.s, (size_t)value.len);
         at += value.len;
@@ -90683,9 +91455,9 @@ uint32_t NodePerKind(Arena* a, const Node* n) {
 }
 
 void NodeSetPerKind(Arena* a, Node* n, uint32_t word) {
-    char buf[8];
-    int len = base::VarintPut(buf, word);
-    NodeSetStr(a, n, NodeStrKind::PerKind, Str(buf, len));
+    base::TempStr buf = base::AllocStrTemp(8);
+    buf.len = base::VarintPut(buf.s, word);
+    NodeSetStr(a, n, NodeStrKind::PerKind, buf);
 }
 
 static uint8_t* markdown_mdast_AlignAt(Arena* a, ArenaAlign al, int32_t* count) {
@@ -91011,645 +91783,332 @@ Vec<Event> Parse(ParseState* parseState) {
 
 namespace markdown {
 
-State Call(Tokenizer* t, StateName name) {
-    switch (name) {
-        case StateName::AttentionStart:
-            return AttentionStart(t);
-        case StateName::AttentionInside:
-            return AttentionInside(t);
-        case StateName::AutolinkStart:
-            return AutolinkStart(t);
-        case StateName::AutolinkOpen:
-            return AutolinkOpen(t);
-        case StateName::AutolinkSchemeOrEmailAtext:
-            return AutolinkSchemeOrEmailAtext(t);
-        case StateName::AutolinkSchemeInsideOrEmailAtext:
-            return AutolinkSchemeInsideOrEmailAtext(t);
-        case StateName::AutolinkUrlInside:
-            return AutolinkUrlInside(t);
-        case StateName::AutolinkEmailAtSignOrDot:
-            return AutolinkEmailAtSignOrDot(t);
-        case StateName::AutolinkEmailAtext:
-            return AutolinkEmailAtext(t);
-        case StateName::AutolinkEmailValue:
-            return AutolinkEmailValue(t);
-        case StateName::AutolinkEmailLabel:
-            return AutolinkEmailLabel(t);
-        case StateName::BlankLineStart:
-            return BlankLineStart(t);
-        case StateName::BlankLineAfter:
-            return BlankLineAfter(t);
-        case StateName::BlockQuoteStart:
-            return BlockQuoteStart(t);
-        case StateName::BlockQuoteContStart:
-            return BlockQuoteContStart(t);
-        case StateName::BlockQuoteContBefore:
-            return BlockQuoteContBefore(t);
-        case StateName::BlockQuoteContAfter:
-            return BlockQuoteContAfter(t);
-        case StateName::BomStart:
-            return BomStart(t);
-        case StateName::BomInside:
-            return BomInside(t);
-        case StateName::CharacterEscapeStart:
-            return CharacterEscapeStart(t);
-        case StateName::CharacterEscapeInside:
-            return CharacterEscapeInside(t);
-        case StateName::CharacterReferenceStart:
-            return CharacterReferenceStart(t);
-        case StateName::CharacterReferenceOpen:
-            return CharacterReferenceOpen(t);
-        case StateName::CharacterReferenceNumeric:
-            return CharacterReferenceNumeric(t);
-        case StateName::CharacterReferenceValue:
-            return CharacterReferenceValue(t);
-        case StateName::CodeIndentedStart:
-            return CodeIndentedStart(t);
-        case StateName::CodeIndentedAtBreak:
-            return CodeIndentedAtBreak(t);
-        case StateName::CodeIndentedAfter:
-            return CodeIndentedAfter(t);
-        case StateName::CodeIndentedFurtherStart:
-            return CodeIndentedFurtherStart(t);
-        case StateName::CodeIndentedInside:
-            return CodeIndentedInside(t);
-        case StateName::CodeIndentedFurtherBegin:
-            return CodeIndentedFurtherBegin(t);
-        case StateName::CodeIndentedFurtherAfter:
-            return CodeIndentedFurtherAfter(t);
-        case StateName::ContentChunkStart:
-            return ContentChunkStart(t);
-        case StateName::ContentChunkInside:
-            return ContentChunkInside(t);
-        case StateName::ContentDefinitionBefore:
-            return ContentDefinitionBefore(t);
-        case StateName::ContentDefinitionAfter:
-            return ContentDefinitionAfter(t);
-        case StateName::DataStart:
-            return DataStart(t);
-        case StateName::DataInside:
-            return DataInside(t);
-        case StateName::DataAtBreak:
-            return DataAtBreak(t);
-        case StateName::DefinitionStart:
-            return DefinitionStart(t);
-        case StateName::DefinitionBefore:
-            return DefinitionBefore(t);
-        case StateName::DefinitionLabelAfter:
-            return DefinitionLabelAfter(t);
-        case StateName::DefinitionLabelNok:
-            return DefinitionLabelNok(t);
-        case StateName::DefinitionMarkerAfter:
-            return DefinitionMarkerAfter(t);
-        case StateName::DefinitionDestinationBefore:
-            return DefinitionDestinationBefore(t);
-        case StateName::DefinitionDestinationAfter:
-            return DefinitionDestinationAfter(t);
-        case StateName::DefinitionDestinationMissing:
-            return DefinitionDestinationMissing(t);
-        case StateName::DefinitionTitleBefore:
-            return DefinitionTitleBefore(t);
-        case StateName::DefinitionAfter:
-            return DefinitionAfter(t);
-        case StateName::DefinitionAfterWhitespace:
-            return DefinitionAfterWhitespace(t);
-        case StateName::DefinitionTitleBeforeMarker:
-            return DefinitionTitleBeforeMarker(t);
-        case StateName::DefinitionTitleAfter:
-            return DefinitionTitleAfter(t);
-        case StateName::DefinitionTitleAfterOptionalWhitespace:
-            return DefinitionTitleAfterOptionalWhitespace(t);
-        case StateName::DestinationStart:
-            return DestinationStart(t);
-        case StateName::DestinationEnclosedBefore:
-            return DestinationEnclosedBefore(t);
-        case StateName::DestinationEnclosed:
-            return DestinationEnclosed(t);
-        case StateName::DestinationEnclosedEscape:
-            return DestinationEnclosedEscape(t);
-        case StateName::DestinationRaw:
-            return DestinationRaw(t);
-        case StateName::DestinationRawEscape:
-            return DestinationRawEscape(t);
-        case StateName::DocumentStart:
-            return DocumentStart(t);
-        case StateName::DocumentBeforeFrontmatter:
-            return DocumentBeforeFrontmatter(t);
-        case StateName::DocumentContainerExistingBefore:
-            return DocumentContainerExistingBefore(t);
-        case StateName::DocumentContainerExistingAfter:
-            return DocumentContainerExistingAfter(t);
-        case StateName::DocumentContainerNewBefore:
-            return DocumentContainerNewBefore(t);
-        case StateName::DocumentContainerNewBeforeNotBlockQuote:
-            return DocumentContainerNewBeforeNotBlockQuote(t);
-        case StateName::DocumentContainerNewBeforeNotList:
-            return DocumentContainerNewBeforeNotList(t);
-        case StateName::DocumentContainerNewBeforeNotGfmFootnoteDefinition:
-            return DocumentContainerNewBeforeNotGfmFootnoteDefinition(t);
-        case StateName::DocumentContainerNewAfter:
-            return DocumentContainerNewAfter(t);
-        case StateName::DocumentContainersAfter:
-            return DocumentContainersAfter(t);
-        case StateName::DocumentFlowInside:
-            return DocumentFlowInside(t);
-        case StateName::DocumentFlowEnd:
-            return DocumentFlowEnd(t);
-        case StateName::FlowStart:
-            return FlowStart(t);
-        case StateName::FlowBeforeGfmTable:
-            return FlowBeforeGfmTable(t);
-        case StateName::FlowBeforeCodeIndented:
-            return FlowBeforeCodeIndented(t);
-        case StateName::FlowBeforeRaw:
-            return FlowBeforeRaw(t);
-        case StateName::FlowBeforeHtml:
-            return FlowBeforeHtml(t);
-        case StateName::FlowBeforeHeadingAtx:
-            return FlowBeforeHeadingAtx(t);
-        case StateName::FlowBeforeHeadingSetext:
-            return FlowBeforeHeadingSetext(t);
-        case StateName::FlowBeforeThematicBreak:
-            return FlowBeforeThematicBreak(t);
-        case StateName::FlowAfter:
-            return FlowAfter(t);
-        case StateName::FlowBlankLineBefore:
-            return FlowBlankLineBefore(t);
-        case StateName::FlowBlankLineAfter:
-            return FlowBlankLineAfter(t);
-        case StateName::FlowBeforeContent:
-            return FlowBeforeContent(t);
-        case StateName::FrontmatterStart:
-            return FrontmatterStart(t);
-        case StateName::FrontmatterOpenSequence:
-            return FrontmatterOpenSequence(t);
-        case StateName::FrontmatterOpenAfter:
-            return FrontmatterOpenAfter(t);
-        case StateName::FrontmatterAfter:
-            return FrontmatterAfter(t);
-        case StateName::FrontmatterContentStart:
-            return FrontmatterContentStart(t);
-        case StateName::FrontmatterContentInside:
-            return FrontmatterContentInside(t);
-        case StateName::FrontmatterContentEnd:
-            return FrontmatterContentEnd(t);
-        case StateName::FrontmatterCloseStart:
-            return FrontmatterCloseStart(t);
-        case StateName::FrontmatterCloseSequence:
-            return FrontmatterCloseSequence(t);
-        case StateName::FrontmatterCloseAfter:
-            return FrontmatterCloseAfter(t);
-        case StateName::GfmAutolinkLiteralProtocolStart:
-            return GfmAutolinkLiteralProtocolStart(t);
-        case StateName::GfmAutolinkLiteralProtocolAfter:
-            return GfmAutolinkLiteralProtocolAfter(t);
-        case StateName::GfmAutolinkLiteralProtocolPrefixInside:
-            return GfmAutolinkLiteralProtocolPrefixInside(t);
-        case StateName::GfmAutolinkLiteralProtocolSlashesInside:
-            return GfmAutolinkLiteralProtocolSlashesInside(t);
-        case StateName::GfmAutolinkLiteralWwwStart:
-            return GfmAutolinkLiteralWwwStart(t);
-        case StateName::GfmAutolinkLiteralWwwAfter:
-            return GfmAutolinkLiteralWwwAfter(t);
-        case StateName::GfmAutolinkLiteralWwwPrefixInside:
-            return GfmAutolinkLiteralWwwPrefixInside(t);
-        case StateName::GfmAutolinkLiteralWwwPrefixAfter:
-            return GfmAutolinkLiteralWwwPrefixAfter(t);
-        case StateName::GfmAutolinkLiteralDomainInside:
-            return GfmAutolinkLiteralDomainInside(t);
-        case StateName::GfmAutolinkLiteralDomainAtPunctuation:
-            return GfmAutolinkLiteralDomainAtPunctuation(t);
-        case StateName::GfmAutolinkLiteralDomainAfter:
-            return GfmAutolinkLiteralDomainAfter(t);
-        case StateName::GfmAutolinkLiteralPathInside:
-            return GfmAutolinkLiteralPathInside(t);
-        case StateName::GfmAutolinkLiteralPathAtPunctuation:
-            return GfmAutolinkLiteralPathAtPunctuation(t);
-        case StateName::GfmAutolinkLiteralPathAfter:
-            return GfmAutolinkLiteralPathAfter(t);
-        case StateName::GfmAutolinkLiteralTrail:
-            return GfmAutolinkLiteralTrail(t);
-        case StateName::GfmAutolinkLiteralTrailCharRefInside:
-            return GfmAutolinkLiteralTrailCharRefInside(t);
-        case StateName::GfmAutolinkLiteralTrailCharRefStart:
-            return GfmAutolinkLiteralTrailCharRefStart(t);
-        case StateName::GfmAutolinkLiteralTrailBracketAfter:
-            return GfmAutolinkLiteralTrailBracketAfter(t);
-        case StateName::GfmFootnoteDefinitionStart:
-            return GfmFootnoteDefinitionStart(t);
-        case StateName::GfmFootnoteDefinitionLabelBefore:
-            return GfmFootnoteDefinitionLabelBefore(t);
-        case StateName::GfmFootnoteDefinitionLabelAtMarker:
-            return GfmFootnoteDefinitionLabelAtMarker(t);
-        case StateName::GfmFootnoteDefinitionLabelInside:
-            return GfmFootnoteDefinitionLabelInside(t);
-        case StateName::GfmFootnoteDefinitionLabelEscape:
-            return GfmFootnoteDefinitionLabelEscape(t);
-        case StateName::GfmFootnoteDefinitionLabelAfter:
-            return GfmFootnoteDefinitionLabelAfter(t);
-        case StateName::GfmFootnoteDefinitionWhitespaceAfter:
-            return GfmFootnoteDefinitionWhitespaceAfter(t);
-        case StateName::GfmFootnoteDefinitionContStart:
-            return GfmFootnoteDefinitionContStart(t);
-        case StateName::GfmFootnoteDefinitionContBlank:
-            return GfmFootnoteDefinitionContBlank(t);
-        case StateName::GfmFootnoteDefinitionContFilled:
-            return GfmFootnoteDefinitionContFilled(t);
-        case StateName::GfmLabelStartFootnoteStart:
-            return GfmLabelStartFootnoteStart(t);
-        case StateName::GfmLabelStartFootnoteOpen:
-            return GfmLabelStartFootnoteOpen(t);
-        case StateName::GfmTaskListItemCheckStart:
-            return GfmTaskListItemCheckStart(t);
-        case StateName::GfmTaskListItemCheckInside:
-            return GfmTaskListItemCheckInside(t);
-        case StateName::GfmTaskListItemCheckClose:
-            return GfmTaskListItemCheckClose(t);
-        case StateName::GfmTaskListItemCheckAfter:
-            return GfmTaskListItemCheckAfter(t);
-        case StateName::GfmTaskListItemCheckAfterSpaceOrTab:
-            return GfmTaskListItemCheckAfterSpaceOrTab(t);
-        case StateName::GfmTableStart:
-            return GfmTableStart(t);
-        case StateName::GfmTableHeadRowBefore:
-            return GfmTableHeadRowBefore(t);
-        case StateName::GfmTableHeadRowStart:
-            return GfmTableHeadRowStart(t);
-        case StateName::GfmTableHeadRowBreak:
-            return GfmTableHeadRowBreak(t);
-        case StateName::GfmTableHeadRowData:
-            return GfmTableHeadRowData(t);
-        case StateName::GfmTableHeadRowEscape:
-            return GfmTableHeadRowEscape(t);
-        case StateName::GfmTableHeadDelimiterStart:
-            return GfmTableHeadDelimiterStart(t);
-        case StateName::GfmTableHeadDelimiterBefore:
-            return GfmTableHeadDelimiterBefore(t);
-        case StateName::GfmTableHeadDelimiterCellBefore:
-            return GfmTableHeadDelimiterCellBefore(t);
-        case StateName::GfmTableHeadDelimiterValueBefore:
-            return GfmTableHeadDelimiterValueBefore(t);
-        case StateName::GfmTableHeadDelimiterLeftAlignmentAfter:
-            return GfmTableHeadDelimiterLeftAlignmentAfter(t);
-        case StateName::GfmTableHeadDelimiterFiller:
-            return GfmTableHeadDelimiterFiller(t);
-        case StateName::GfmTableHeadDelimiterRightAlignmentAfter:
-            return GfmTableHeadDelimiterRightAlignmentAfter(t);
-        case StateName::GfmTableHeadDelimiterCellAfter:
-            return GfmTableHeadDelimiterCellAfter(t);
-        case StateName::GfmTableHeadDelimiterNok:
-            return GfmTableHeadDelimiterNok(t);
-        case StateName::GfmTableBodyRowStart:
-            return GfmTableBodyRowStart(t);
-        case StateName::GfmTableBodyRowBreak:
-            return GfmTableBodyRowBreak(t);
-        case StateName::GfmTableBodyRowData:
-            return GfmTableBodyRowData(t);
-        case StateName::GfmTableBodyRowEscape:
-            return GfmTableBodyRowEscape(t);
-        case StateName::HardBreakEscapeStart:
-            return HardBreakEscapeStart(t);
-        case StateName::HardBreakEscapeAfter:
-            return HardBreakEscapeAfter(t);
-        case StateName::HeadingAtxStart:
-            return HeadingAtxStart(t);
-        case StateName::HeadingAtxBefore:
-            return HeadingAtxBefore(t);
-        case StateName::HeadingAtxSequenceOpen:
-            return HeadingAtxSequenceOpen(t);
-        case StateName::HeadingAtxAtBreak:
-            return HeadingAtxAtBreak(t);
-        case StateName::HeadingAtxSequenceFurther:
-            return HeadingAtxSequenceFurther(t);
-        case StateName::HeadingAtxData:
-            return HeadingAtxData(t);
-        case StateName::HeadingSetextStart:
-            return HeadingSetextStart(t);
-        case StateName::HeadingSetextBefore:
-            return HeadingSetextBefore(t);
-        case StateName::HeadingSetextInside:
-            return HeadingSetextInside(t);
-        case StateName::HeadingSetextAfter:
-            return HeadingSetextAfter(t);
-        case StateName::HtmlFlowStart:
-            return HtmlFlowStart(t);
-        case StateName::HtmlFlowBefore:
-            return HtmlFlowBefore(t);
-        case StateName::HtmlFlowOpen:
-            return HtmlFlowOpen(t);
-        case StateName::HtmlFlowDeclarationOpen:
-            return HtmlFlowDeclarationOpen(t);
-        case StateName::HtmlFlowCommentOpenInside:
-            return HtmlFlowCommentOpenInside(t);
-        case StateName::HtmlFlowCdataOpenInside:
-            return HtmlFlowCdataOpenInside(t);
-        case StateName::HtmlFlowTagCloseStart:
-            return HtmlFlowTagCloseStart(t);
-        case StateName::HtmlFlowTagName:
-            return HtmlFlowTagName(t);
-        case StateName::HtmlFlowBasicSelfClosing:
-            return HtmlFlowBasicSelfClosing(t);
-        case StateName::HtmlFlowCompleteClosingTagAfter:
-            return HtmlFlowCompleteClosingTagAfter(t);
-        case StateName::HtmlFlowCompleteEnd:
-            return HtmlFlowCompleteEnd(t);
-        case StateName::HtmlFlowCompleteAttributeNameBefore:
-            return HtmlFlowCompleteAttributeNameBefore(t);
-        case StateName::HtmlFlowCompleteAttributeName:
-            return HtmlFlowCompleteAttributeName(t);
-        case StateName::HtmlFlowCompleteAttributeNameAfter:
-            return HtmlFlowCompleteAttributeNameAfter(t);
-        case StateName::HtmlFlowCompleteAttributeValueBefore:
-            return HtmlFlowCompleteAttributeValueBefore(t);
-        case StateName::HtmlFlowCompleteAttributeValueQuoted:
-            return HtmlFlowCompleteAttributeValueQuoted(t);
-        case StateName::HtmlFlowCompleteAttributeValueQuotedAfter:
-            return HtmlFlowCompleteAttributeValueQuotedAfter(t);
-        case StateName::HtmlFlowCompleteAttributeValueUnquoted:
-            return HtmlFlowCompleteAttributeValueUnquoted(t);
-        case StateName::HtmlFlowCompleteAfter:
-            return HtmlFlowCompleteAfter(t);
-        case StateName::HtmlFlowBlankLineBefore:
-            return HtmlFlowBlankLineBefore(t);
-        case StateName::HtmlFlowContinuation:
-            return HtmlFlowContinuation(t);
-        case StateName::HtmlFlowContinuationDeclarationInside:
-            return HtmlFlowContinuationDeclarationInside(t);
-        case StateName::HtmlFlowContinuationAfter:
-            return HtmlFlowContinuationAfter(t);
-        case StateName::HtmlFlowContinuationStart:
-            return HtmlFlowContinuationStart(t);
-        case StateName::HtmlFlowContinuationBefore:
-            return HtmlFlowContinuationBefore(t);
-        case StateName::HtmlFlowContinuationCommentInside:
-            return HtmlFlowContinuationCommentInside(t);
-        case StateName::HtmlFlowContinuationRawTagOpen:
-            return HtmlFlowContinuationRawTagOpen(t);
-        case StateName::HtmlFlowContinuationRawEndTag:
-            return HtmlFlowContinuationRawEndTag(t);
-        case StateName::HtmlFlowContinuationClose:
-            return HtmlFlowContinuationClose(t);
-        case StateName::HtmlFlowContinuationCdataInside:
-            return HtmlFlowContinuationCdataInside(t);
-        case StateName::HtmlFlowContinuationStartNonLazy:
-            return HtmlFlowContinuationStartNonLazy(t);
-        case StateName::HtmlTextStart:
-            return HtmlTextStart(t);
-        case StateName::HtmlTextOpen:
-            return HtmlTextOpen(t);
-        case StateName::HtmlTextDeclarationOpen:
-            return HtmlTextDeclarationOpen(t);
-        case StateName::HtmlTextTagCloseStart:
-            return HtmlTextTagCloseStart(t);
-        case StateName::HtmlTextTagClose:
-            return HtmlTextTagClose(t);
-        case StateName::HtmlTextTagCloseBetween:
-            return HtmlTextTagCloseBetween(t);
-        case StateName::HtmlTextTagOpen:
-            return HtmlTextTagOpen(t);
-        case StateName::HtmlTextTagOpenBetween:
-            return HtmlTextTagOpenBetween(t);
-        case StateName::HtmlTextTagOpenAttributeName:
-            return HtmlTextTagOpenAttributeName(t);
-        case StateName::HtmlTextTagOpenAttributeNameAfter:
-            return HtmlTextTagOpenAttributeNameAfter(t);
-        case StateName::HtmlTextTagOpenAttributeValueBefore:
-            return HtmlTextTagOpenAttributeValueBefore(t);
-        case StateName::HtmlTextTagOpenAttributeValueQuoted:
-            return HtmlTextTagOpenAttributeValueQuoted(t);
-        case StateName::HtmlTextTagOpenAttributeValueQuotedAfter:
-            return HtmlTextTagOpenAttributeValueQuotedAfter(t);
-        case StateName::HtmlTextTagOpenAttributeValueUnquoted:
-            return HtmlTextTagOpenAttributeValueUnquoted(t);
-        case StateName::HtmlTextCdata:
-            return HtmlTextCdata(t);
-        case StateName::HtmlTextCdataOpenInside:
-            return HtmlTextCdataOpenInside(t);
-        case StateName::HtmlTextCdataClose:
-            return HtmlTextCdataClose(t);
-        case StateName::HtmlTextCdataEnd:
-            return HtmlTextCdataEnd(t);
-        case StateName::HtmlTextCommentOpenInside:
-            return HtmlTextCommentOpenInside(t);
-        case StateName::HtmlTextComment:
-            return HtmlTextComment(t);
-        case StateName::HtmlTextCommentClose:
-            return HtmlTextCommentClose(t);
-        case StateName::HtmlTextCommentEnd:
-            return HtmlTextCommentEnd(t);
-        case StateName::HtmlTextDeclaration:
-            return HtmlTextDeclaration(t);
-        case StateName::HtmlTextEnd:
-            return HtmlTextEnd(t);
-        case StateName::HtmlTextInstruction:
-            return HtmlTextInstruction(t);
-        case StateName::HtmlTextInstructionClose:
-            return HtmlTextInstructionClose(t);
-        case StateName::HtmlTextLineEndingBefore:
-            return HtmlTextLineEndingBefore(t);
-        case StateName::HtmlTextLineEndingAfter:
-            return HtmlTextLineEndingAfter(t);
-        case StateName::HtmlTextLineEndingAfterPrefix:
-            return HtmlTextLineEndingAfterPrefix(t);
-        case StateName::LabelStart:
-            return LabelStart(t);
-        case StateName::LabelAtBreak:
-            return LabelAtBreak(t);
-        case StateName::LabelEolAfter:
-            return LabelEolAfter(t);
-        case StateName::LabelEscape:
-            return LabelEscape(t);
-        case StateName::LabelInside:
-            return LabelInside(t);
-        case StateName::LabelNok:
-            return LabelNok(t);
-        case StateName::LabelEndStart:
-            return LabelEndStart(t);
-        case StateName::LabelEndAfter:
-            return LabelEndAfter(t);
-        case StateName::LabelEndResourceStart:
-            return LabelEndResourceStart(t);
-        case StateName::LabelEndResourceBefore:
-            return LabelEndResourceBefore(t);
-        case StateName::LabelEndResourceOpen:
-            return LabelEndResourceOpen(t);
-        case StateName::LabelEndResourceDestinationAfter:
-            return LabelEndResourceDestinationAfter(t);
-        case StateName::LabelEndResourceDestinationMissing:
-            return LabelEndResourceDestinationMissing(t);
-        case StateName::LabelEndResourceBetween:
-            return LabelEndResourceBetween(t);
-        case StateName::LabelEndResourceTitleAfter:
-            return LabelEndResourceTitleAfter(t);
-        case StateName::LabelEndResourceEnd:
-            return LabelEndResourceEnd(t);
-        case StateName::LabelEndOk:
-            return LabelEndOk(t);
-        case StateName::LabelEndNok:
-            return LabelEndNok(t);
-        case StateName::LabelEndReferenceFull:
-            return LabelEndReferenceFull(t);
-        case StateName::LabelEndReferenceFullAfter:
-            return LabelEndReferenceFullAfter(t);
-        case StateName::LabelEndReferenceFullMissing:
-            return LabelEndReferenceFullMissing(t);
-        case StateName::LabelEndReferenceNotFull:
-            return LabelEndReferenceNotFull(t);
-        case StateName::LabelEndReferenceCollapsed:
-            return LabelEndReferenceCollapsed(t);
-        case StateName::LabelEndReferenceCollapsedOpen:
-            return LabelEndReferenceCollapsedOpen(t);
-        case StateName::LabelStartImageStart:
-            return LabelStartImageStart(t);
-        case StateName::LabelStartImageOpen:
-            return LabelStartImageOpen(t);
-        case StateName::LabelStartImageAfter:
-            return LabelStartImageAfter(t);
-        case StateName::LabelStartLinkStart:
-            return LabelStartLinkStart(t);
-        case StateName::ListItemStart:
-            return ListItemStart(t);
-        case StateName::ListItemBefore:
-            return ListItemBefore(t);
-        case StateName::ListItemBeforeOrdered:
-            return ListItemBeforeOrdered(t);
-        case StateName::ListItemBeforeUnordered:
-            return ListItemBeforeUnordered(t);
-        case StateName::ListItemValue:
-            return ListItemValue(t);
-        case StateName::ListItemMarker:
-            return ListItemMarker(t);
-        case StateName::ListItemMarkerAfter:
-            return ListItemMarkerAfter(t);
-        case StateName::ListItemAfter:
-            return ListItemAfter(t);
-        case StateName::ListItemMarkerAfterFilled:
-            return ListItemMarkerAfterFilled(t);
-        case StateName::ListItemWhitespace:
-            return ListItemWhitespace(t);
-        case StateName::ListItemPrefixOther:
-            return ListItemPrefixOther(t);
-        case StateName::ListItemWhitespaceAfter:
-            return ListItemWhitespaceAfter(t);
-        case StateName::ListItemContStart:
-            return ListItemContStart(t);
-        case StateName::ListItemContBlank:
-            return ListItemContBlank(t);
-        case StateName::ListItemContFilled:
-            return ListItemContFilled(t);
-        case StateName::NonLazyContinuationStart:
-            return NonLazyContinuationStart(t);
-        case StateName::NonLazyContinuationAfter:
-            return NonLazyContinuationAfter(t);
-        case StateName::ParagraphStart:
-            return ParagraphStart(t);
-        case StateName::ParagraphLineStart:
-            return ParagraphLineStart(t);
-        case StateName::ParagraphInside:
-            return ParagraphInside(t);
-        case StateName::RawFlowStart:
-            return RawFlowStart(t);
-        case StateName::RawFlowBeforeSequenceOpen:
-            return RawFlowBeforeSequenceOpen(t);
-        case StateName::RawFlowSequenceOpen:
-            return RawFlowSequenceOpen(t);
-        case StateName::RawFlowInfoBefore:
-            return RawFlowInfoBefore(t);
-        case StateName::RawFlowInfo:
-            return RawFlowInfo(t);
-        case StateName::RawFlowMetaBefore:
-            return RawFlowMetaBefore(t);
-        case StateName::RawFlowMeta:
-            return RawFlowMeta(t);
-        case StateName::RawFlowAtNonLazyBreak:
-            return RawFlowAtNonLazyBreak(t);
-        case StateName::RawFlowCloseStart:
-            return RawFlowCloseStart(t);
-        case StateName::RawFlowBeforeSequenceClose:
-            return RawFlowBeforeSequenceClose(t);
-        case StateName::RawFlowSequenceClose:
-            return RawFlowSequenceClose(t);
-        case StateName::RawFlowAfterSequenceClose:
-            return RawFlowAfterSequenceClose(t);
-        case StateName::RawFlowContentBefore:
-            return RawFlowContentBefore(t);
-        case StateName::RawFlowContentStart:
-            return RawFlowContentStart(t);
-        case StateName::RawFlowBeforeContentChunk:
-            return RawFlowBeforeContentChunk(t);
-        case StateName::RawFlowContentChunk:
-            return RawFlowContentChunk(t);
-        case StateName::RawFlowAfter:
-            return RawFlowAfter(t);
-        case StateName::RawTextStart:
-            return RawTextStart(t);
-        case StateName::RawTextSequenceOpen:
-            return RawTextSequenceOpen(t);
-        case StateName::RawTextBetween:
-            return RawTextBetween(t);
-        case StateName::RawTextData:
-            return RawTextData(t);
-        case StateName::RawTextSequenceClose:
-            return RawTextSequenceClose(t);
-        case StateName::SpaceOrTabStart:
-            return SpaceOrTabStart(t);
-        case StateName::SpaceOrTabInside:
-            return SpaceOrTabInside(t);
-        case StateName::SpaceOrTabAfter:
-            return SpaceOrTabAfter(t);
-        case StateName::SpaceOrTabEolStart:
-            return SpaceOrTabEolStart(t);
-        case StateName::SpaceOrTabEolAfterFirst:
-            return SpaceOrTabEolAfterFirst(t);
-        case StateName::SpaceOrTabEolAfterEol:
-            return SpaceOrTabEolAfterEol(t);
-        case StateName::SpaceOrTabEolAtEol:
-            return SpaceOrTabEolAtEol(t);
-        case StateName::SpaceOrTabEolAfterMore:
-            return SpaceOrTabEolAfterMore(t);
-        case StateName::StringStart:
-            return StringStart(t);
-        case StateName::StringBefore:
-            return StringBefore(t);
-        case StateName::StringBeforeData:
-            return StringBeforeData(t);
-        case StateName::TextStart:
-            return TextStart(t);
-        case StateName::TextBefore:
-            return TextBefore(t);
-        case StateName::TextBeforeHtml:
-            return TextBeforeHtml(t);
-        case StateName::TextBeforeHardBreakEscape:
-            return TextBeforeHardBreakEscape(t);
-        case StateName::TextBeforeLabelStartLink:
-            return TextBeforeLabelStartLink(t);
-        case StateName::TextBeforeData:
-            return TextBeforeData(t);
-        case StateName::ThematicBreakStart:
-            return ThematicBreakStart(t);
-        case StateName::ThematicBreakBefore:
-            return ThematicBreakBefore(t);
-        case StateName::ThematicBreakSequence:
-            return ThematicBreakSequence(t);
-        case StateName::ThematicBreakAtBreak:
-            return ThematicBreakAtBreak(t);
-        case StateName::TitleStart:
-            return TitleStart(t);
-        case StateName::TitleBegin:
-            return TitleBegin(t);
-        case StateName::TitleAfterEol:
-            return TitleAfterEol(t);
-        case StateName::TitleAtBreak:
-            return TitleAtBreak(t);
-        case StateName::TitleEscape:
-            return TitleEscape(t);
-        case StateName::TitleInside:
-            return TitleInside(t);
-        case StateName::TitleNok:
-            return TitleNok(t);
-    }
+using StateFn = State (*)(Tokenizer*);
 
-    return StateNok();
+static StateFn const kStateFns[] = {
+    AttentionStart,
+    AttentionInside,
+    AutolinkStart,
+    AutolinkOpen,
+    AutolinkSchemeOrEmailAtext,
+    AutolinkSchemeInsideOrEmailAtext,
+    AutolinkUrlInside,
+    AutolinkEmailAtSignOrDot,
+    AutolinkEmailAtext,
+    AutolinkEmailValue,
+    AutolinkEmailLabel,
+    BlankLineStart,
+    BlankLineAfter,
+    BlockQuoteStart,
+    BlockQuoteContStart,
+    BlockQuoteContBefore,
+    BlockQuoteContAfter,
+    BomStart,
+    BomInside,
+    CharacterEscapeStart,
+    CharacterEscapeInside,
+    CharacterReferenceStart,
+    CharacterReferenceOpen,
+    CharacterReferenceNumeric,
+    CharacterReferenceValue,
+    CodeIndentedStart,
+    CodeIndentedAtBreak,
+    CodeIndentedAfter,
+    CodeIndentedFurtherStart,
+    CodeIndentedInside,
+    CodeIndentedFurtherBegin,
+    CodeIndentedFurtherAfter,
+    ContentChunkStart,
+    ContentChunkInside,
+    ContentDefinitionBefore,
+    ContentDefinitionAfter,
+    DataStart,
+    DataInside,
+    DataAtBreak,
+    DefinitionStart,
+    DefinitionBefore,
+    DefinitionLabelAfter,
+    DefinitionLabelNok,
+    DefinitionMarkerAfter,
+    DefinitionDestinationBefore,
+    DefinitionDestinationAfter,
+    DefinitionDestinationMissing,
+    DefinitionTitleBefore,
+    DefinitionAfter,
+    DefinitionAfterWhitespace,
+    DefinitionTitleBeforeMarker,
+    DefinitionTitleAfter,
+    DefinitionTitleAfterOptionalWhitespace,
+    DestinationStart,
+    DestinationEnclosedBefore,
+    DestinationEnclosed,
+    DestinationEnclosedEscape,
+    DestinationRaw,
+    DestinationRawEscape,
+    DocumentStart,
+    DocumentBeforeFrontmatter,
+    DocumentContainerExistingBefore,
+    DocumentContainerExistingAfter,
+    DocumentContainerNewBefore,
+    DocumentContainerNewBeforeNotBlockQuote,
+    DocumentContainerNewBeforeNotList,
+    DocumentContainerNewBeforeNotGfmFootnoteDefinition,
+    DocumentContainerNewAfter,
+    DocumentContainersAfter,
+    DocumentFlowInside,
+    DocumentFlowEnd,
+    FlowStart,
+    FlowBeforeGfmTable,
+    FlowBeforeCodeIndented,
+    FlowBeforeRaw,
+    FlowBeforeHtml,
+    FlowBeforeHeadingAtx,
+    FlowBeforeHeadingSetext,
+    FlowBeforeThematicBreak,
+    FlowAfter,
+    FlowBlankLineBefore,
+    FlowBlankLineAfter,
+    FlowBeforeContent,
+    FrontmatterStart,
+    FrontmatterOpenSequence,
+    FrontmatterOpenAfter,
+    FrontmatterAfter,
+    FrontmatterContentStart,
+    FrontmatterContentInside,
+    FrontmatterContentEnd,
+    FrontmatterCloseStart,
+    FrontmatterCloseSequence,
+    FrontmatterCloseAfter,
+    GfmAutolinkLiteralProtocolStart,
+    GfmAutolinkLiteralProtocolAfter,
+    GfmAutolinkLiteralProtocolPrefixInside,
+    GfmAutolinkLiteralProtocolSlashesInside,
+    GfmAutolinkLiteralWwwStart,
+    GfmAutolinkLiteralWwwAfter,
+    GfmAutolinkLiteralWwwPrefixInside,
+    GfmAutolinkLiteralWwwPrefixAfter,
+    GfmAutolinkLiteralDomainInside,
+    GfmAutolinkLiteralDomainAtPunctuation,
+    GfmAutolinkLiteralDomainAfter,
+    GfmAutolinkLiteralPathInside,
+    GfmAutolinkLiteralPathAtPunctuation,
+    GfmAutolinkLiteralPathAfter,
+    GfmAutolinkLiteralTrail,
+    GfmAutolinkLiteralTrailCharRefInside,
+    GfmAutolinkLiteralTrailCharRefStart,
+    GfmAutolinkLiteralTrailBracketAfter,
+    GfmFootnoteDefinitionStart,
+    GfmFootnoteDefinitionLabelBefore,
+    GfmFootnoteDefinitionLabelAtMarker,
+    GfmFootnoteDefinitionLabelInside,
+    GfmFootnoteDefinitionLabelEscape,
+    GfmFootnoteDefinitionLabelAfter,
+    GfmFootnoteDefinitionWhitespaceAfter,
+    GfmFootnoteDefinitionContStart,
+    GfmFootnoteDefinitionContBlank,
+    GfmFootnoteDefinitionContFilled,
+    GfmLabelStartFootnoteStart,
+    GfmLabelStartFootnoteOpen,
+    GfmTaskListItemCheckStart,
+    GfmTaskListItemCheckInside,
+    GfmTaskListItemCheckClose,
+    GfmTaskListItemCheckAfter,
+    GfmTaskListItemCheckAfterSpaceOrTab,
+    GfmTableStart,
+    GfmTableHeadRowBefore,
+    GfmTableHeadRowStart,
+    GfmTableHeadRowBreak,
+    GfmTableHeadRowData,
+    GfmTableHeadRowEscape,
+    GfmTableHeadDelimiterStart,
+    GfmTableHeadDelimiterBefore,
+    GfmTableHeadDelimiterCellBefore,
+    GfmTableHeadDelimiterValueBefore,
+    GfmTableHeadDelimiterLeftAlignmentAfter,
+    GfmTableHeadDelimiterFiller,
+    GfmTableHeadDelimiterRightAlignmentAfter,
+    GfmTableHeadDelimiterCellAfter,
+    GfmTableHeadDelimiterNok,
+    GfmTableBodyRowStart,
+    GfmTableBodyRowBreak,
+    GfmTableBodyRowData,
+    GfmTableBodyRowEscape,
+    HardBreakEscapeStart,
+    HardBreakEscapeAfter,
+    HeadingAtxStart,
+    HeadingAtxBefore,
+    HeadingAtxSequenceOpen,
+    HeadingAtxAtBreak,
+    HeadingAtxSequenceFurther,
+    HeadingAtxData,
+    HeadingSetextStart,
+    HeadingSetextBefore,
+    HeadingSetextInside,
+    HeadingSetextAfter,
+    HtmlFlowStart,
+    HtmlFlowBefore,
+    HtmlFlowOpen,
+    HtmlFlowDeclarationOpen,
+    HtmlFlowCommentOpenInside,
+    HtmlFlowCdataOpenInside,
+    HtmlFlowTagCloseStart,
+    HtmlFlowTagName,
+    HtmlFlowBasicSelfClosing,
+    HtmlFlowCompleteClosingTagAfter,
+    HtmlFlowCompleteEnd,
+    HtmlFlowCompleteAttributeNameBefore,
+    HtmlFlowCompleteAttributeName,
+    HtmlFlowCompleteAttributeNameAfter,
+    HtmlFlowCompleteAttributeValueBefore,
+    HtmlFlowCompleteAttributeValueQuoted,
+    HtmlFlowCompleteAttributeValueQuotedAfter,
+    HtmlFlowCompleteAttributeValueUnquoted,
+    HtmlFlowCompleteAfter,
+    HtmlFlowBlankLineBefore,
+    HtmlFlowContinuation,
+    HtmlFlowContinuationDeclarationInside,
+    HtmlFlowContinuationAfter,
+    HtmlFlowContinuationStart,
+    HtmlFlowContinuationBefore,
+    HtmlFlowContinuationCommentInside,
+    HtmlFlowContinuationRawTagOpen,
+    HtmlFlowContinuationRawEndTag,
+    HtmlFlowContinuationClose,
+    HtmlFlowContinuationCdataInside,
+    HtmlFlowContinuationStartNonLazy,
+    HtmlTextStart,
+    HtmlTextOpen,
+    HtmlTextDeclarationOpen,
+    HtmlTextTagCloseStart,
+    HtmlTextTagClose,
+    HtmlTextTagCloseBetween,
+    HtmlTextTagOpen,
+    HtmlTextTagOpenBetween,
+    HtmlTextTagOpenAttributeName,
+    HtmlTextTagOpenAttributeNameAfter,
+    HtmlTextTagOpenAttributeValueBefore,
+    HtmlTextTagOpenAttributeValueQuoted,
+    HtmlTextTagOpenAttributeValueQuotedAfter,
+    HtmlTextTagOpenAttributeValueUnquoted,
+    HtmlTextCdata,
+    HtmlTextCdataOpenInside,
+    HtmlTextCdataClose,
+    HtmlTextCdataEnd,
+    HtmlTextCommentOpenInside,
+    HtmlTextComment,
+    HtmlTextCommentClose,
+    HtmlTextCommentEnd,
+    HtmlTextDeclaration,
+    HtmlTextEnd,
+    HtmlTextInstruction,
+    HtmlTextInstructionClose,
+    HtmlTextLineEndingBefore,
+    HtmlTextLineEndingAfter,
+    HtmlTextLineEndingAfterPrefix,
+    LabelStart,
+    LabelAtBreak,
+    LabelEolAfter,
+    LabelEscape,
+    LabelInside,
+    LabelNok,
+    LabelEndStart,
+    LabelEndAfter,
+    LabelEndResourceStart,
+    LabelEndResourceBefore,
+    LabelEndResourceOpen,
+    LabelEndResourceDestinationAfter,
+    LabelEndResourceDestinationMissing,
+    LabelEndResourceBetween,
+    LabelEndResourceTitleAfter,
+    LabelEndResourceEnd,
+    LabelEndOk,
+    LabelEndNok,
+    LabelEndReferenceFull,
+    LabelEndReferenceFullAfter,
+    LabelEndReferenceFullMissing,
+    LabelEndReferenceNotFull,
+    LabelEndReferenceCollapsed,
+    LabelEndReferenceCollapsedOpen,
+    LabelStartImageStart,
+    LabelStartImageOpen,
+    LabelStartImageAfter,
+    LabelStartLinkStart,
+    ListItemStart,
+    ListItemBefore,
+    ListItemBeforeOrdered,
+    ListItemBeforeUnordered,
+    ListItemValue,
+    ListItemMarker,
+    ListItemMarkerAfter,
+    ListItemAfter,
+    ListItemMarkerAfterFilled,
+    ListItemWhitespace,
+    ListItemPrefixOther,
+    ListItemWhitespaceAfter,
+    ListItemContStart,
+    ListItemContBlank,
+    ListItemContFilled,
+    NonLazyContinuationStart,
+    NonLazyContinuationAfter,
+    ParagraphStart,
+    ParagraphLineStart,
+    ParagraphInside,
+    RawFlowStart,
+    RawFlowBeforeSequenceOpen,
+    RawFlowSequenceOpen,
+    RawFlowInfoBefore,
+    RawFlowInfo,
+    RawFlowMetaBefore,
+    RawFlowMeta,
+    RawFlowAtNonLazyBreak,
+    RawFlowCloseStart,
+    RawFlowBeforeSequenceClose,
+    RawFlowSequenceClose,
+    RawFlowAfterSequenceClose,
+    RawFlowContentBefore,
+    RawFlowContentStart,
+    RawFlowBeforeContentChunk,
+    RawFlowContentChunk,
+    RawFlowAfter,
+    RawTextStart,
+    RawTextSequenceOpen,
+    RawTextBetween,
+    RawTextData,
+    RawTextSequenceClose,
+    SpaceOrTabStart,
+    SpaceOrTabInside,
+    SpaceOrTabAfter,
+    SpaceOrTabEolStart,
+    SpaceOrTabEolAfterFirst,
+    SpaceOrTabEolAfterEol,
+    SpaceOrTabEolAtEol,
+    SpaceOrTabEolAfterMore,
+    StringStart,
+    StringBefore,
+    StringBeforeData,
+    TextStart,
+    TextBefore,
+    TextBeforeHtml,
+    TextBeforeHardBreakEscape,
+    TextBeforeLabelStartLink,
+    TextBeforeData,
+    ThematicBreakStart,
+    ThematicBreakBefore,
+    ThematicBreakSequence,
+    ThematicBreakAtBreak,
+    TitleStart,
+    TitleBegin,
+    TitleAfterEol,
+    TitleAtBreak,
+    TitleEscape,
+    TitleInside,
+    TitleNok,
+};
+static_assert(sizeof(kStateFns) / sizeof(kStateFns[0]) ==
+              (uint16_t)StateName::Count);
+
+State Call(Tokenizer* t, StateName name) {
+    return kStateFns[(uint16_t)name](t);
 }
 
 }
@@ -91670,8 +92129,8 @@ struct Reference {
 struct TreeFrame {
     Node* tree = nullptr;
 
-    ArenaVec<Node*> stack {};
-    ArenaVec<int32_t> eventStack {};
+    ArenaVec<Node*> stack{};
+    ArenaVec<int32_t> eventStack{};
 };
 
 struct CompileContext {
@@ -91810,8 +92269,7 @@ static void OnEnterGfmAutolinkLiteral(CompileContext* c) {
 
 static void OnEnterList(CompileContext* c) {
     Node* node = NodeNew(c->a, NodeKind::List);
-    node->Set(NodeOrdered,
-              (*c->events)[c->index].name == Name::ListOrdered);
+    node->Set(NodeOrdered, (*c->events)[c->index].name == Name::ListOrdered);
     node->Set(NodeSpread, ListLoose(*c->events, c->index, false));
     TailPush(c, node);
 }
@@ -91888,9 +92346,9 @@ static void Enter(CompileContext* c) {
             break;
         case Name::Frontmatter: {
             int32_t index = (*c->events)[c->index].point.index;
-            TailPush(c, NodeNew(c->a, c->bytes.s[index] == '+'
-                                          ? NodeKind::Toml
-                                          : NodeKind::Yaml));
+            TailPush(c,
+                     NodeNew(c->a, c->bytes.s[index] == '+' ? NodeKind::Toml
+                                                            : NodeKind::Yaml));
             Buffer(c);
             break;
         }
@@ -91958,14 +92416,14 @@ static void Enter(CompileContext* c) {
             TailPush(c, NodeNew(c->a, NodeKind::Paragraph));
             break;
         case Name::Reference:
-            c->mediaReferenceStack[c->mediaReferenceStack.len - 1].kind =
-                ReferenceKind::Collapsed;
-            c->mediaReferenceStack[c->mediaReferenceStack.len - 1].kindSome =
-                true;
+            c->mediaReferenceStack[c->mediaReferenceStack.len - 1]
+                .kind = ReferenceKind::Collapsed;
+            c->mediaReferenceStack[c->mediaReferenceStack.len - 1]
+                .kindSome = true;
             break;
         case Name::Resource:
-            c->mediaReferenceStack[c->mediaReferenceStack.len - 1].kindSome =
-                false;
+            c->mediaReferenceStack[c->mediaReferenceStack.len - 1]
+                .kindSome = false;
             break;
         case Name::Strong:
             TailPush(c, NodeNew(c->a, NodeKind::Strong));
@@ -92011,9 +92469,8 @@ static void OnExitAutolinkEmail(CompileContext* c) {
 
 static void OnExitCharacterReferenceValue(CompileContext* c) {
 
-    char buf[4];
-    Str value = CharacterReferenceDecodeInto(buf, ExitSlice(c).bytes,
-                                             c->characterReferenceMarker);
+    base::TempStr value = CharacterReferenceDecodeTemp(
+        ExitSlice(c).bytes, c->characterReferenceMarker);
     Node* node = TailMut(c);
     Grow(c, node, NodeStrKind::Value, value);
     c->characterReferenceMarker = 0;
@@ -92105,8 +92562,8 @@ static void OnExitGfmAutolinkLiteral(CompileContext* c) {
 }
 
 static void OnExitGfmTaskListItemValue(CompileContext* c) {
-    bool checked =
-        (*c->events)[c->index].name == Name::GfmTaskListItemValueChecked;
+    bool checked = (*c->events)[c->index]
+                       .name == Name::GfmTaskListItemValueChecked;
     Node* ancestor = TailPenultimateMut(c);
     ancestor->Set(NodeChecked, checked);
     ancestor->Set(NodeHasChecked, true);
@@ -92172,8 +92629,7 @@ static void OnExitHtml(CompileContext* c) {
 }
 
 static void OnExitMedia(CompileContext* c) {
-    Reference reference =
-        c->mediaReferenceStack[--c->mediaReferenceStack.len];
+    Reference reference = c->mediaReferenceStack[--c->mediaReferenceStack.len];
     OnExit(c);
     if (!reference.kindSome) {
         return;
@@ -92207,8 +92663,7 @@ static void OnExitListItem(CompileContext* c) {
         first->kind == NodeKind::Paragraph) {
         Node* paragraph = first;
         Node* firstInParagraph = NodeFirstChild(c->a, paragraph);
-        if (firstInParagraph &&
-            firstInParagraph->kind == NodeKind::Text) {
+        if (firstInParagraph && firstInParagraph->kind == NodeKind::Text) {
             Node* text = firstInParagraph;
             Str value = Get(c, text, NodeStrKind::Value);
             int32_t start = 0;
@@ -92312,21 +92767,17 @@ static void Exit(CompileContext* c) {
         case Name::CharacterReferenceValue:
             OnExitCharacterReferenceValue(c);
             break;
-        case Name::CodeFencedFenceInfo:
-            {
+        case Name::CodeFencedFenceInfo: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Lang, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Lang, s);
+        } break;
         case Name::CodeFencedFenceMeta:
-        case Name::MathFlowFenceMeta:
-            {
+        case Name::MathFlowFenceMeta: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Meta, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Meta, s);
+        } break;
         case Name::CodeFencedFence:
         case Name::MathFlowFence:
             OnExitRawFlowFence(c);
@@ -92342,24 +92793,20 @@ static void Exit(CompileContext* c) {
         case Name::MathText:
             OnExitRawText(c);
             break;
-        case Name::DefinitionDestinationString:
-            {
+        case Name::DefinitionDestinationString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Url, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Url, s);
+        } break;
         case Name::DefinitionLabelString:
         case Name::GfmFootnoteDefinitionLabelString:
             OnExitDefinitionId(c);
             break;
-        case Name::DefinitionTitleString:
-            {
+        case Name::DefinitionTitleString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Title, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Title, s);
+        } break;
         case Name::Frontmatter: {
 
             Str s = TrimEol(NodeToString(c->a, Resume(c)), true, true);
@@ -92424,20 +92871,16 @@ static void Exit(CompileContext* c) {
         case Name::ReferenceString:
             OnExitReferenceString(c);
             break;
-        case Name::ResourceDestinationString:
-            {
+        case Name::ResourceDestinationString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Url, s);
-            }
-            break;
-        case Name::ResourceTitleString:
-            {
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Url, s);
+        } break;
+        case Name::ResourceTitleString: {
 
-                Str s = NodeToString(c->a, Resume(c));
-                Keep(c, TailMut(c), NodeStrKind::Title, s);
-            }
-            break;
+            Str s = NodeToString(c->a, Resume(c));
+            Keep(c, TailMut(c), NodeStrKind::Title, s);
+        } break;
         default:
             break;
     }
@@ -93283,7 +93726,7 @@ static void AddImpl(EditMap& map, int32_t at, int32_t remove, const Event* add,
         EditMap::Entry& e = map.map[map.buckets[bucket] - 1];
         e.remove += remove;
         if (before) {
-            ArenaVec<Event> merged {};
+            ArenaVec<Event> merged{};
             merged.Reserve(map.a, addLen + e.add.len);
             merged.AppendMany(map.a, add, addLen);
             for (const Event& ev : e.add) {
@@ -93425,8 +93868,8 @@ static int32_t SkipOptImpl(const Vec<Event>& events, int32_t index,
     Kind open = forward ? Kind::Enter : Kind::Exit;
     while (index < events.len) {
         Name current = events[index].name;
-        if (!NamesContain(names, namesLen, current) ||
-            events[index].kind != open) {
+        if (!NamesContain(names, namesLen, current) || events[index]
+                                                               .kind != open) {
             break;
         }
         index = forward ? index + 1 : index - 1;
@@ -93577,8 +94020,8 @@ bool ListItemLoose(const Vec<Event>& events, int32_t index) {
     return false;
 }
 
-static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index,
-                              Arena* a, ArenaAlign out) {
+static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index, Arena* a,
+                              ArenaAlign out) {
     bool inDelimiterRow = false;
     int32_t count = 0;
     while (index < events.len) {
@@ -93587,10 +94030,10 @@ static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index,
             if (event.kind == Kind::Enter) {
                 if (event.name == Name::GfmTableDelimiterCellValue) {
 
-                    AlignKind kind = events[index + 1].name ==
-                                             Name::GfmTableDelimiterMarker
-                                         ? AlignKind::Left
-                                         : AlignKind::None;
+                    AlignKind kind =
+                        events[index + 1].name == Name::GfmTableDelimiterMarker
+                            ? AlignKind::Left
+                            : AlignKind::None;
                     if (out != kArenaAlignNone) {
                         ArenaAlignSet(a, out, count, kind);
                     }
@@ -93598,8 +94041,8 @@ static int32_t ScanTableAlign(const Vec<Event>& events, int32_t index,
                 }
             } else if (event.name == Name::GfmTableDelimiterCellValue) {
 
-                if (count > 0 && events[index - 1].name ==
-                                     Name::GfmTableDelimiterMarker) {
+                if (count > 0 &&
+                    events[index - 1].name == Name::GfmTableDelimiterMarker) {
                     if (out != kArenaAlignNone) {
                         AlignKind was = ArenaAlignAt(a, out, count - 1);
                         ArenaAlignSet(a, out, count - 1,
@@ -93658,19 +94101,14 @@ static const char* NamedValue(Str name) {
         int32_t mid = (lo + hi) / 2;
         const char* candidate =
             kCharacterReferenceNames + kCharacterReferences[mid].nameOff;
-        int32_t n = (int32_t)strlen(candidate);
-        int32_t common = n < name.len ? n : name.len;
-        int cmp = common == 0 ? 0 : memcmp(candidate, name.s, (size_t)common);
-        if (cmp == 0) {
-            cmp = n < name.len ? -1 : (n > name.len ? 1 : 0);
-        }
+        int cmp = StrCmp(Str(candidate), name);
         if (cmp < 0) {
             lo = mid + 1;
         } else if (cmp > 0) {
             hi = mid - 1;
         } else {
-            return kCharacterReferenceValues +
-                   kCharacterReferences[mid].valueOff;
+            return kCharacterReferenceValues + kCharacterReferences[mid]
+                                                   .valueOff;
         }
     }
     return nullptr;
@@ -93708,15 +94146,17 @@ static uint32_t DecodeNumericCp(Str value, int radix) {
 }
 
 Str DecodeNumeric(Arena* a, Str value, int radix) {
-    char buf[4];
-    int32_t n = Utf8Encode(buf, DecodeNumericCp(value, radix));
-    return StrOwn(a, buf, n);
+    char* out = (char*)a->Push(4, 1, false);
+    int32_t n = Utf8Encode(out, DecodeNumericCp(value, radix));
+    return Str(out, n);
 }
 
-Str CharacterReferenceDecodeInto(char buf[4], Str value, uint8_t marker) {
+base::TempStr CharacterReferenceDecodeTemp(Str value, uint8_t marker) {
     if (marker == '#' || marker == 'x') {
+        base::TempStr out = base::AllocStrTemp(4);
         uint32_t cp = DecodeNumericCp(value, marker == '#' ? 10 : 16);
-        return Str(buf, Utf8Encode(buf, cp));
+        out.len = Utf8Encode(out.s, cp);
+        return out;
     }
     const char* found = NamedValue(value);
     return found ? Str((char*)found, (int32_t)strlen(found)) : Str{};
@@ -93933,19 +94373,21 @@ bool AppAssets::Resolve(Str path, Str* relative, Str* error) const {
         *error = {};
     }
     if (!path || path.len >= kMaxPath || path.s[0] == '/' ||
-        path.s[0] == '\\' ||
-        (path.len >= 2 && path.s[1] == ':')) {
-        if (error) *error = StrDup(fmt("asset `%s` is outside the application directory", path));
+        path.s[0] == '\\' || (path.len >= 2 && path.s[1] == ':')) {
+        if (error)
+            *error = StrDup(
+                fmt("asset `%s` is outside the application directory", path));
         return false;
     }
     int segment = 0;
     for (int i = 0; i <= path.len; i++) {
-        bool separator = i == path.len || path.s[i] == '/' ||
-                         path.s[i] == '\\';
+        bool separator = i == path.len || path.s[i] == '/' || path.s[i] == '\\';
         if (!separator) continue;
         int n = i - segment;
         if (n == 2 && path.s[segment] == '.' && path.s[segment + 1] == '.') {
-            if (error) *error = StrDup(fmt("asset `%s` is outside the application directory", path));
+            if (error)
+                *error = StrDup(fmt(
+                    "asset `%s` is outside the application directory", path));
             return false;
         }
         segment = i + 1;
@@ -93957,10 +94399,7 @@ bool AppAssets::Resolve(Str path, Str* relative, Str* error) const {
 static int CompareAssetNames(const void* a, const void* b) {
     const Str* left = (const Str*)a;
     const Str* right = (const Str*)b;
-    int count = left->len < right->len ? left->len : right->len;
-    int compared = count > 0 ? memcmp(left->s, right->s, (size_t)count) : 0;
-    if (compared != 0) return compared;
-    return left->len < right->len ? -1 : (left->len > right->len ? 1 : 0);
+    return StrCmp(*left, *right);
 }
 
 bool AppAssets::Load(Str path, Vec<uint8_t>* out, Str* error) {
@@ -93983,18 +94422,23 @@ bool AppAssets::Load(Str path, Vec<uint8_t>* out, Str* error) {
                 missing.len--;
             }
             VecAppend(missing, StrDup(path));
-            log(fmt("asset `%s` was not found under `%s`; asset paths resolve against the application directory", path, root));
+            log(
+                fmt("asset `%s` was not found under `%s`; asset paths resolve "
+                    "against the application directory",
+                    path, root));
         }
-        if (error) *error = failure;
-        else StrFree(failure);
+        if (error)
+            *error = failure;
+        else
+            StrFree(failure);
         result.Free();
         return false;
     }
     if (result.bytes.len > kShellMaxAssetBytes) {
         if (error)
-            *error = StrDup(fmt("asset `%s` is %d bytes, over the %d-byte limit",
-                                path, result.bytes.len,
-                                kShellMaxAssetBytes));
+            *error =
+                StrDup(fmt("asset `%s` is %d bytes, over the %d-byte limit",
+                           path, result.bytes.len, kShellMaxAssetBytes));
         result.Free();
         return false;
     }
@@ -94421,8 +94865,8 @@ static Str NormalizePath(Arena* arena, Str path, bool* escaped) {
         int end = at;
         while (end < path.len && !shell_capability_IsSeparator(path.s[end])) end++;
         Str part(path.s + at, end - at);
-        if (part.len == 0 || StrEq(part, ".")) {
-        } else if (StrEq(part, "..")) {
+        if (part.len == 0 || StrEq(part, StrL("."))) {
+        } else if (StrEq(part, StrL(".."))) {
             if (parts.len == 0) {
                 if (escaped) *escaped = true;
             } else {
@@ -94528,7 +94972,7 @@ static bool shell_dependencies_IsSeparator(char c) {
     return c == '/' || c == '\\';
 }
 
-static Str shell_dependencies_JoinPath(Str left, Str right) {
+static Str JoinPath(Str left, Str right) {
     if (!left) return StrDup(right);
     if (!right) return StrDup(left);
     bool separated = shell_dependencies_IsSeparator(left.s[left.len - 1]);
@@ -94543,7 +94987,8 @@ static bool PathEq(Str a, Str b) {
         char ca = a.s[i];
         char cb = b.s[i];
         if (shell_dependencies_IsSeparator(ca) && shell_dependencies_IsSeparator(cb)) continue;
-        if (tolower((unsigned char)ca) != tolower((unsigned char)cb)) return false;
+        if (tolower((unsigned char)ca) != tolower((unsigned char)cb))
+            return false;
     }
     return true;
 #else
@@ -94558,22 +95003,21 @@ static bool WithinPath(Str root, Str path) {
         char a = root.s[i];
         char b = path.s[i];
         if (shell_dependencies_IsSeparator(a) && shell_dependencies_IsSeparator(b)) continue;
-        if (tolower((unsigned char)a) != tolower((unsigned char)b)) return false;
+        if (tolower((unsigned char)a) != tolower((unsigned char)b))
+            return false;
     }
 #else
-    if (memcmp(root.s, path.s, (size_t)root.len) != 0) return false;
+    if (!StrEq(root, Str(path.s, root.len))) return false;
 #endif
     return path.len == root.len || shell_dependencies_IsSeparator(path.s[root.len]);
 }
 
 static Str Canonical(Str path) {
     if (!path || path.len >= kMaxPath) return {};
-    char input[kMaxPath];
-    char output[kMaxPath];
-    memcpy(input, path.s, (size_t)path.len);
-    input[path.len] = 0;
-    if (!PlatCanonicalPath(input, output, kMaxPath)) return {};
-    return StrDup(Str(output));
+    TempStr input = StrDupTemp(path);
+    TempStr output = AllocStrTemp(kMaxPath - 1);
+    if (!PlatCanonicalPath(input.s, output.s, output.len + 1)) return {};
+    return StrDup(Str(output.s));
 }
 
 static Str shell_dependencies_TrimAscii(Str value) {
@@ -94584,43 +95028,10 @@ static Str shell_dependencies_TrimAscii(Str value) {
     return Str(value.s + start, end - start);
 }
 
-static bool shell_dependencies_ReadBounded(Str path, int limit, Str* out) {
-    *out = {};
-    if (!path || path.len >= kMaxPath) return false;
-    char name[kMaxPath];
-    memcpy(name, path.s, (size_t)path.len);
-    name[path.len] = 0;
-    FILE* file = fopen(name, "rb");
-    if (!file) return false;
-    Vec<char> bytes;
-    char block[16384];
-    bool ok = true;
-    for (;;) {
-        size_t read = fread(block, 1, sizeof(block), file);
-        if (read > 0) {
-            if (bytes.len > limit - (int)read) {
-                ok = false;
-                break;
-            }
-            memcpy(VecAppendBlanks(bytes, (int)read), block, read);
-        }
-        if (read != sizeof(block)) {
-            if (ferror(file)) ok = false;
-            break;
-        }
-    }
-    fclose(file);
-    if (ok) *out = StrDup(Str(bytes.els, bytes.len));
-    VecReset(bytes);
-    return ok;
-}
-
 static bool WriteWhole(Str path, Str contents) {
     if (!path || path.len >= kMaxPath) return false;
-    char name[kMaxPath];
-    memcpy(name, path.s, (size_t)path.len);
-    name[path.len] = 0;
-    FILE* file = fopen(name, "wb");
+    TempStr name = StrDupTemp(path);
+    FILE* file = fopen(name.s, "wb");
     if (!file) return false;
     bool ok = contents.len == 0 || fwrite(contents.s, 1, (size_t)contents.len,
                                           file) == (size_t)contents.len;
@@ -94629,9 +95040,9 @@ static bool WriteWhole(Str path, Str contents) {
 }
 
 Str GitDependencyCacheRoot(Str home) {
-    Str shell = shell_dependencies_JoinPath(home, StrL(".gpui-shell"));
-    Str cache = shell_dependencies_JoinPath(shell, StrL("cache"));
-    Str result = shell_dependencies_JoinPath(cache, StrL("dependencies"));
+    Str shell = JoinPath(home, StrL(".gpui-shell"));
+    Str cache = JoinPath(shell, StrL("cache"));
+    Str result = JoinPath(cache, StrL("dependencies"));
     StrFree(shell);
     StrFree(cache);
     return result;
@@ -94688,14 +95099,13 @@ Str GitDependencyRemoteKey(Str git) {
     uint8_t digest[32];
     Sha256(Str((const char*)input.els, input.len), digest);
     VecReset(input);
-    char hex[65];
+    TempStr hex = AllocStrTemp(64);
     static const char* digits = "0123456789abcdef";
     for (int i = 0; i < 32; i++) {
-        hex[i * 2] = digits[digest[i] >> 4];
-        hex[i * 2 + 1] = digits[digest[i] & 15];
+        hex.s[i * 2] = digits[digest[i] >> 4];
+        hex.s[i * 2 + 1] = digits[digest[i] & 15];
     }
-    hex[64] = 0;
-    return StrDup(Str(hex, 64));
+    return StrDup(hex);
 }
 
 static Mutex gTemporaryMutex;
@@ -94708,7 +95118,7 @@ static Str TemporaryPath(Str parent, Str label) {
     Str name =
         StrDup(fmt(".%s.tmp-%u-%llu", label, (unsigned)DependencyProcessId(),
                    (unsigned long long)next));
-    Str result = shell_dependencies_JoinPath(parent, name);
+    Str result = JoinPath(parent, name);
     StrFree(name);
     return result;
 }
@@ -94782,7 +95192,7 @@ static Str ConfiguredOrigin(Str name, Str mirror, Str* error) {
 static Str DependencyEntryName(Str name, const GitDependency& dependency,
                                Str root, Str* error) {
     if (!dependency.packageEntry) return StrDup(dependency.entry);
-    Str manifestPath = shell_dependencies_JoinPath(root, StrL("package.json"));
+    Str manifestPath = JoinPath(root, StrL("package.json"));
     if (!PlatFileExists(manifestPath.s) && !PlatDirExists(manifestPath.s)) {
         StrFree(manifestPath);
         return StrDup(Str(kGitDependencyDefaultEntry));
@@ -94798,8 +95208,8 @@ static Str DependencyEntryName(Str name, const GitDependency& dependency,
         return {};
     }
     StrFree(manifestPath);
-    Str source = {};
-    if (!shell_dependencies_ReadBounded(canonical, kShellMaxManifestBytes, &source)) {
+    TempStr source = ReadBoundedFileTemp(canonical, kShellMaxManifestBytes);
+    if (!source.s) {
         DepError(
             error,
             fmt("reading package.json for Git dependency `%s` failed", name));
@@ -94809,7 +95219,6 @@ static Str DependencyEntryName(Str name, const GitDependency& dependency,
     StrFree(canonical);
     Arena* arena = ArenaNew();
     JsonValue* value = JsonParse(arena, source);
-    StrFree(source);
     if (!value) {
         DepError(error, fmt("Git dependency `%s` package.json must contain "
                             "valid JSON",
@@ -94929,10 +95338,10 @@ bool GitDependencyStore::Materialize(Str name, const GitDependency& dependency,
     }
     if (!DependencyMakeDirectories(root, error)) return false;
     Str remoteKey = GitDependencyRemoteKey(dependency.git);
-    Str locks = shell_dependencies_JoinPath(root, StrL("locks"));
-    Str mirrors = shell_dependencies_JoinPath(root, StrL("mirrors"));
-    Str checkoutRoot = shell_dependencies_JoinPath(root, StrL("checkouts"));
-    Str checkouts = shell_dependencies_JoinPath(checkoutRoot, remoteKey);
+    Str locks = JoinPath(root, StrL("locks"));
+    Str mirrors = JoinPath(root, StrL("mirrors"));
+    Str checkoutRoot = JoinPath(root, StrL("checkouts"));
+    Str checkouts = JoinPath(checkoutRoot, remoteKey);
     Str lockPath = {};
     Str mirror = {};
     Str configured = {};
@@ -94948,11 +95357,11 @@ bool GitDependencyStore::Materialize(Str name, const GitDependency& dependency,
               DependencyMakeDirectories(mirrors, error) &&
               DependencyMakeDirectories(checkouts, error);
     if (ok) {
-        lockPath = shell_dependencies_JoinPath(locks, fmt("%s.lock", remoteKey));
+        lockPath = JoinPath(locks, fmt("%s.lock", remoteKey));
         ok = DependencyLockAcquire(lockPath, name, &lock, error);
     }
     if (ok) {
-        mirror = shell_dependencies_JoinPath(mirrors, fmt("%s.git", remoteKey));
+        mirror = JoinPath(mirrors, fmt("%s.git", remoteKey));
         if (!PlatDirExists(mirror.s)) {
             Str temporary = TemporaryPath(mirrors, remoteKey);
             Str args[5] = {StrL("clone"), StrL("--mirror"), StrL("--"),
@@ -95022,8 +95431,8 @@ bool GitDependencyStore::Materialize(Str name, const GitDependency& dependency,
         }
     }
     if (ok) {
-        checkout = shell_dependencies_JoinPath(checkouts, commit);
-        Str marker = shell_dependencies_JoinPath(checkout, StrL(".git"));
+        checkout = JoinPath(checkouts, commit);
+        Str marker = JoinPath(checkout, StrL(".git"));
         bool present = PlatDirExists(marker.s);
         StrFree(marker);
         if (!present) {
@@ -95041,7 +95450,7 @@ bool GitDependencyStore::Materialize(Str name, const GitDependency& dependency,
             if (!ok) {
                 DependencyRemoveTree(temporary);
             } else if (!DependencyRenameDirectory(temporary, checkout)) {
-                Str published = shell_dependencies_JoinPath(checkout, StrL(".git"));
+                Str published = JoinPath(checkout, StrL(".git"));
                 bool other = PlatDirExists(published.s);
                 StrFree(published);
                 DependencyRemoveTree(temporary);
@@ -95068,7 +95477,7 @@ bool GitDependencyStore::Materialize(Str name, const GitDependency& dependency,
         ok = entryName.s != nullptr;
     }
     if (ok) {
-        entryPath = shell_dependencies_JoinPath(checkoutCanonical, entryName);
+        entryPath = JoinPath(checkoutCanonical, entryName);
         entryCanonical = Canonical(entryPath);
         if (!entryCanonical) {
             DepError(error, fmt("Git dependency `%s` has no entry `%s`", name,
@@ -95126,7 +95535,7 @@ bool GitDependencyStore::MaterializeAll(const PluginManifest& manifest,
 }
 
 static bool IsEditorLinkStub(Str link) {
-    Str marker = shell_dependencies_JoinPath(link, Str(kEditorLinkMarker));
+    Str marker = JoinPath(link, Str(kEditorLinkMarker));
     bool result = PlatFileExists(marker.s);
     StrFree(marker);
     return result;
@@ -95155,9 +95564,9 @@ static bool WriteEditorLinkStub(Str link, Str name,
                                 const MaterializedDependency& dependency,
                                 Str* error) {
     if (!DependencyMakeDirectories(link, error)) return false;
-    Str markerPath = shell_dependencies_JoinPath(link, Str(kEditorLinkMarker));
-    Str manifestPath = shell_dependencies_JoinPath(link, StrL("package.json"));
-    Str indexPath = shell_dependencies_JoinPath(link, StrL("index.js"));
+    Str markerPath = JoinPath(link, Str(kEditorLinkMarker));
+    Str manifestPath = JoinPath(link, StrL("package.json"));
+    Str indexPath = JoinPath(link, StrL("index.js"));
 
     Str specifier = StrDup(dependency.entry);
     for (int i = 0; i < specifier.len; i++)
@@ -95194,7 +95603,7 @@ bool GitDependencyStore::LinkForEditor(
     Str applicationRoot, const MaterializedDependencies& dependencies,
     int* linked, Str* error) {
     if (linked) *linked = 0;
-    Str modules = shell_dependencies_JoinPath(applicationRoot, Str(kEditorModuleDirectory));
+    Str modules = JoinPath(applicationRoot, Str(kEditorModuleDirectory));
     if (dependencies.items.len == 0 && !PlatDirExists(modules.s)) {
         StrFree(modules);
         return true;
@@ -95203,7 +95612,7 @@ bool GitDependencyStore::LinkForEditor(
     Vec<Str> declared;
     for (int i = 0; ok && i < dependencies.items.len; i++) {
         const MaterializedDependency& dependency = dependencies.items[i];
-        Str link = shell_dependencies_JoinPath(modules, dependency.name);
+        Str link = JoinPath(modules, dependency.name);
         VecAppend(declared, link);
 
         int lastSeparator = -1;
@@ -95265,9 +95674,9 @@ void GitDependencyStore::Prune(Str modules, const Vec<Str>& declared) {
                             : 0;
         for (int i = 0; i < count && i < kEditorPruneMaxEntries; i++) {
             const DirEntry& item = entries[i];
-            if (strcmp(item.name, ".") == 0 || strcmp(item.name, "..") == 0)
-                continue;
-            Str path = shell_dependencies_JoinPath(directory.path, Str(item.name));
+            Str name = Str(item.name);
+            if (StrEq(name, StrL(".")) || StrEq(name, StrL(".."))) continue;
+            Str path = JoinPath(directory.path, name);
             bool isDeclared = false;
             for (int d = 0; d < declared.len; d++)
                 if (PathEq(declared[d], path)) isDeclared = true;
@@ -95303,7 +95712,7 @@ void GitDependencyStore::Prune(Str modules, const Vec<Str>& declared) {
 
 bool ShellWriteDependencyLinks(Str applicationRoot, int* linked, Str* error) {
     if (linked) *linked = 0;
-    Str manifestPath = shell_dependencies_JoinPath(applicationRoot, Str(kShellManifestFile));
+    Str manifestPath = JoinPath(applicationRoot, Str(kShellManifestFile));
     bool present = PlatFileExists(manifestPath.s);
     StrFree(manifestPath);
     if (!present) return true;
@@ -96596,9 +97005,7 @@ void FsResult::Free() {
 namespace gpui {
 
 static bool HostStrLess(Str a, Str b) {
-    int n = a.len < b.len ? a.len : b.len;
-    int cmp = n > 0 ? memcmp(a.s, b.s, (size_t)n) : 0;
-    return cmp < 0 || (cmp == 0 && a.len < b.len);
+    return StrCmp(a, b) < 0;
 }
 
 static HostValue* CopyValue(const HostValue& value) {
@@ -96648,7 +97055,8 @@ bool HostValue::CopyFrom(const HostValue& other) {
         }
     }
     for (int i = 0; i < other.array.len; i++) {
-        HostValue* value = other.array[i] ? CopyValue(*other.array[i]) : nullptr;
+        HostValue* value =
+            other.array[i] ? CopyValue(*other.array[i]) : nullptr;
         if (!value || !VecAppend(array, value)) {
             if (value) {
                 value->Free();
@@ -96661,9 +97069,8 @@ bool HostValue::CopyFrom(const HostValue& other) {
     for (int i = 0; i < other.object.len; i++) {
         HostField field;
         field.name = StrDup(other.object[i].name);
-        field.value = other.object[i].value
-                          ? CopyValue(*other.object[i].value)
-                          : nullptr;
+        field.value =
+            other.object[i].value ? CopyValue(*other.object[i].value) : nullptr;
         if ((!field.name.s && other.object[i].name.len > 0) || !field.value ||
             !VecAppend(object, field)) {
             StrFree(field.name);
@@ -96678,7 +97085,9 @@ bool HostValue::CopyFrom(const HostValue& other) {
     return true;
 }
 
-void HostValue::SetNull() { Free(); }
+void HostValue::SetNull() {
+    Free();
+}
 
 void HostValue::SetBool(bool value) {
     Free();
@@ -96758,12 +97167,18 @@ const HostValue* HostValue::Get(Str fieldName) const {
 
 const char* HostValue::Describe() const {
     switch (kind) {
-        case HostValueKind::Null: return "null";
-        case HostValueKind::Bool: return "a boolean";
-        case HostValueKind::Number: return "a number";
-        case HostValueKind::String: return "a string";
-        case HostValueKind::Array: return "an array";
-        case HostValueKind::Object: return "an object";
+        case HostValueKind::Null:
+            return "null";
+        case HostValueKind::Bool:
+            return "a boolean";
+        case HostValueKind::Number:
+            return "a number";
+        case HostValueKind::String:
+            return "a string";
+        case HostValueKind::Array:
+            return "an array";
+        case HostValueKind::Object:
+            return "an object";
     }
     return "a value";
 }
@@ -96799,15 +97214,17 @@ bool HostArguments::Value(int index, const HostValue** value,
         if (value) *value = found;
         return true;
     }
-    if (error) error->Set(fmt("argument %d is missing; %d were passed",
-                              index + 1, values.len));
+    if (error)
+        error->Set(fmt("argument %d is missing; %d were passed", index + 1,
+                       values.len));
     return false;
 }
 
 static bool Mistyped(int index, const char* expected, const HostValue* got,
                      HostError* error) {
-    if (error) error->Set(fmt("argument %d must be %s, got %s", index + 1,
-                              Str(expected), Str(got ? got->Describe() : "nothing")));
+    if (error)
+        error->Set(fmt("argument %d must be %s, got %s", index + 1,
+                       Str(expected), Str(got ? got->Describe() : "nothing")));
     return false;
 }
 
@@ -96834,7 +97251,8 @@ bool HostArguments::Integer(int index, int64_t* value, HostError* error) const {
     if (!Number(index, &number, error)) return false;
     if (!isfinite(number) || floor(number) != number ||
         number < (double)INT64_MIN || number > (double)INT64_MAX) {
-        if (error) error->Set(fmt("argument %d must be a whole number", index + 1));
+        if (error)
+            error->Set(fmt("argument %d must be a whole number", index + 1));
         return false;
     }
     if (value) *value = (int64_t)number;
@@ -96871,7 +97289,9 @@ HostModule::~HostModule() {
     VecReset(functions);
 }
 
-HostModule* HostModule::New(Str name) { return new HostModule(name); }
+HostModule* HostModule::New(Str name) {
+    return new HostModule(name);
+}
 
 HostModule* HostModule::Retain() {
     refs++;
@@ -96929,8 +97349,9 @@ HostModule* HostModule::AsyncFunction(Str function, Func1<HostCall*> work,
     return SetFunction(function, true, work, {}, release);
 }
 
-HostModule* HostModule::AsyncFunction(
-    Str function, Func1<HostAsyncRequest*> begin, Func0 release) {
+HostModule* HostModule::AsyncFunction(Str function,
+                                      Func1<HostAsyncRequest*> begin,
+                                      Func0 release) {
     return SetFunction(function, true, {}, begin, release);
 }
 
@@ -96944,7 +97365,9 @@ Str HostModule::FunctionName(int index) const {
     return index >= 0 && index < functions.len ? functions[index]->name : Str{};
 }
 
-bool HostModule::Has(Str function) const { return Find(function) != nullptr; }
+bool HostModule::Has(Str function) const {
+    return Find(function) != nullptr;
+}
 
 bool HostModule::IsAsync(Str function) const {
     FunctionEntry* entry = Find(function);
@@ -96952,9 +97375,9 @@ bool HostModule::IsAsync(Str function) const {
 }
 
 static const char* const kReserved[] = {
-    "gpui", "gpui-base", "gpui-shell", "gpui-fps", "buffer", "console",
-    "crypto", "fs/promises", "net", "os", "path", "process", "url",
-    "websocket", "zlib",
+    "gpui",    "gpui-base", "gpui-shell",  "gpui-fps",  "buffer",
+    "console", "crypto",    "fs/promises", "net",       "os",
+    "path",    "process",   "url",         "websocket", "zlib",
 };
 
 bool HostIsReservedSpecifier(Str value) {
@@ -96967,8 +97390,8 @@ bool HostIsReservedSpecifier(Str value) {
 bool HostIsIdentifier(Str value) {
     if (!value.s || value.len == 0) return false;
     char first = value.s[0];
-    if (!((first >= 'a' && first <= 'z') ||
-          (first >= 'A' && first <= 'Z') || first == '_' || first == '$'))
+    if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') ||
+          first == '_' || first == '$'))
         return false;
     for (int i = 1; i < value.len; i++) {
         char c = value.s[i];
@@ -96999,8 +97422,11 @@ bool HostModule::Validate(HostError* error) const {
         return false;
     }
     if (HostIsReservedSpecifier(name)) {
-        if (error) error->Set(fmt("`%s` is one of the runtime's own module names and cannot be registered",
-                                  name));
+        if (error)
+            error
+                ->Set(fmt("`%s` is one of the runtime's own module names and "
+                          "cannot be registered",
+                          name));
         return false;
     }
     if (!declarations.s) return true;
@@ -97012,14 +97438,14 @@ bool HostModule::Validate(HostError* error) const {
         const char* lineEnd = (const char*)memchr(at, '\n', (size_t)(end - at));
         if (!lineEnd) lineEnd = end;
         while (at < lineEnd && (*at == ' ' || *at == '\t')) at++;
-        static const char* prefixes[] = {"export function ",
-                                         "export declare function ",
-                                         "export const "};
+        static const char* prefixes[] = {
+            "export function ", "export declare function ", "export const "};
         const char* rest = nullptr;
         for (int i = 0; i < 3; i++) {
-            int n = (int)strlen(prefixes[i]);
-            if (lineEnd - at >= n && memcmp(at, prefixes[i], (size_t)n) == 0) {
-                rest = at + n;
+            Str prefix = Str(prefixes[i]);
+            if (lineEnd - at >= prefix.len &&
+                StrEq(Str(at, prefix.len), prefix)) {
+                rest = at + prefix.len;
                 break;
             }
         }
@@ -97027,8 +97453,7 @@ bool HostModule::Validate(HostError* error) const {
             const char* stop = rest;
             while (stop < lineEnd) {
                 char c = *stop;
-                if (!((c >= 'a' && c <= 'z') ||
-                      (c >= 'A' && c <= 'Z') ||
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                       (c >= '0' && c <= '9') || c == '_' || c == '$'))
                     break;
                 stop++;
@@ -97051,8 +97476,10 @@ bool HostModule::Validate(HostError* error) const {
     }
     if (missing.len == 0 && extra.len == 0) return true;
     StrBuilder message;
-    message.Append(fmt("HostModule `%s` declares a different set of functions than it registers",
-                       name));
+    message
+        .Append(fmt("HostModule `%s` declares a different set of functions "
+                    "than it registers",
+                    name));
     if (missing.len) {
         message.Append(StrL("; registered but not declared: "));
         AppendNames(&message, nullptr, &missing);
@@ -97070,8 +97497,10 @@ bool HostModule::Validate(HostError* error) const {
 bool HostModule::Call(Str function, HostCall* call) const {
     FunctionEntry* entry = Find(function);
     if (!entry || entry->async || !entry->body.IsValid()) {
-        if (call) call->error.Set(fmt("HostModule `%s` has no synchronous function `%s`",
-                                      name, function));
+        if (call)
+            call->error
+                .Set(fmt("HostModule `%s` has no synchronous function `%s`",
+                         name, function));
         return false;
     }
     entry->body.Call(call);
@@ -97081,12 +97510,16 @@ bool HostModule::Call(Str function, HostCall* call) const {
 bool HostModule::Begin(Str function, HostAsyncRequest* request) const {
     FunctionEntry* entry = Find(function);
     if (!entry || !entry->async) {
-        if (request) request->error.Set(fmt("HostModule `%s` has no asynchronous function `%s`",
-                                            name, function));
+        if (request)
+            request->error
+                .Set(fmt("HostModule `%s` has no asynchronous function `%s`",
+                         name, function));
         return false;
     }
-    if (entry->begin.IsValid()) entry->begin.Call(request);
-    else request->work = entry->body;
+    if (entry->begin.IsValid())
+        entry->begin.Call(request);
+    else
+        request->work = entry->body;
     if (!request->work.IsValid() && !request->error.IsSet()) {
         request->error.Set(StrL("asynchronous host function returned no work"));
     }
@@ -97157,7 +97590,8 @@ HostModule* HostModulesAt(const HostModules* modules, int index) {
 HostModule* HostModulesGet(const HostModules* modules, Str name) {
     if (!modules) return nullptr;
     for (int i = 0; i < modules->modules.len; i++) {
-        if (StrEq(modules->modules[i]->Name(), name)) return modules->modules[i];
+        if (StrEq(modules->modules[i]->Name(), name))
+            return modules->modules[i];
     }
     return nullptr;
 }
@@ -97173,8 +97607,8 @@ bool HostModulesInsert(HostModules* modules, HostModule* module) {
     }
     if (!VecAppend(modules->modules, module->Retain())) return false;
     for (int i = modules->modules.len - 1; i > 0; i--) {
-        if (HostStrLess(modules->modules[i - 1]->Name(),
-                        modules->modules[i]->Name()))
+        if (HostStrLess(modules->modules[i - 1]->Name(), modules->modules[i]
+                                                             ->Name()))
             break;
         HostModule* swap = modules->modules[i - 1];
         modules->modules[i - 1] = modules->modules[i];
@@ -97226,8 +97660,9 @@ static void MissingModule(Str module, HostError* error,
                           const HostModules* modules) {
     if (!error) return;
     if (HostModulesCount(modules) == 0) {
-        error->Set(fmt("HostModule `%s` is not available: this Host registered none",
-                       module));
+        error->Set(
+            fmt("HostModule `%s` is not available: this Host registered none",
+                module));
         return;
     }
     StrBuilder out;
@@ -97244,8 +97679,10 @@ static void MissingModule(Str module, HostError* error,
 bool HostDispatch(Str module, Str function, HostCall* call) {
     if (!call) return false;
     if (gInHostCall) {
-        call->error.Set(fmt("`%s.%s` was reached from inside another host call: a host function may not call back into the script engine",
-                            module, function));
+        call->error
+            .Set(fmt("`%s.%s` was reached from inside another host call: a "
+                     "host function may not call back into the script engine",
+                     module, function));
         return false;
     }
     HostModules* modules = CurrentModules();
@@ -97260,8 +97697,10 @@ bool HostDispatch(Str module, Str function, HostCall* call) {
 bool HostDispatchBegin(Str module, Str function, HostAsyncRequest* request) {
     if (!request) return false;
     if (gInHostCall) {
-        request->error.Set(fmt("`%s.%s` was reached from inside another host call: a host function may not call back into the script engine",
-                               module, function));
+        request->error
+            .Set(fmt("`%s.%s` was reached from inside another host call: a "
+                     "host function may not call back into the script engine",
+                     module, function));
         return false;
     }
     HostModules* modules = CurrentModules();
@@ -97269,8 +97708,10 @@ bool HostDispatchBegin(Str module, Str function, HostAsyncRequest* request) {
     if (!found) MissingModule(module, &request->error, modules);
     HostCallGuard guard;
     bool ok = found && found->Begin(function, request);
-    if (ok) request->registry = modules;
-    else HostModulesRelease(modules);
+    if (ok)
+        request->registry = modules;
+    else
+        HostModulesRelease(modules);
     return ok;
 }
 
@@ -97404,24 +97845,18 @@ static shell::EntityHandle AsHandle(const shell::SpecOp& op, int at) {
 }
 
 static PopupAnchor AnchorOf(Str name, bool* found) {
-    *found = true;
-    if (StrEq(name, "top_left")) return PopupAnchor::TopLeft;
-    if (StrEq(name, "top_right")) return PopupAnchor::TopRight;
-    if (StrEq(name, "bottom_left")) return PopupAnchor::BottomLeft;
-    if (StrEq(name, "bottom_right")) return PopupAnchor::BottomRight;
-    if (StrEq(name, "top_center")) return PopupAnchor::TopCenter;
-    if (StrEq(name, "bottom_center")) return PopupAnchor::BottomCenter;
-    if (StrEq(name, "left_center")) return PopupAnchor::LeftCenter;
-    if (StrEq(name, "right_center")) return PopupAnchor::RightCenter;
-    *found = false;
-    return PopupAnchor::TopLeft;
+    static const char names[] =
+        "top_left\0top_center\0top_right\0bottom_left\0bottom_center\0"
+        "bottom_right\0left_center\0right_center\0";
+    int ix = SeqStrIndex(names, name);
+    *found = ix >= 0;
+    return ix < 0 ? PopupAnchor::TopLeft : (PopupAnchor)ix;
 }
 
 static DockPlacement DockPlacementOfName(Str name) {
-    if (StrEq(name, "left")) return DockPlacement::Left;
-    if (StrEq(name, "right")) return DockPlacement::Right;
-    if (StrEq(name, "bottom")) return DockPlacement::Bottom;
-    return DockPlacement::Center;
+    static const char names[] = "center\0left\0bottom\0right\0";
+    int ix = SeqStrIndex(names, name);
+    return ix < 0 ? DockPlacement::Center : (DockPlacement)ix;
 }
 
 static bool IsDockCommandName(Str name) {
@@ -97438,62 +97873,62 @@ static void ResolveBehavior(const shell::SpecNode* node,
                             MaterialBehavior* out) {
     for (const shell::SpecOp& op : node->ops) {
         if (op.kind == shell::SpecOpKind::Callback) {
-            if (StrEq(op.name, "on_click"))
+            if (StrEq(op.name, StrL("on_click")))
                 out->onClick = op.callback;
-            else if (StrEq(op.name, "on_change"))
+            else if (StrEq(op.name, StrL("on_change")))
                 out->onChange = op.callback;
-            else if (StrEq(op.name, "on_hover"))
+            else if (StrEq(op.name, StrL("on_hover")))
                 out->onHover = op.callback;
-            else if (StrEq(op.name, "on_mouse_move"))
+            else if (StrEq(op.name, StrL("on_mouse_move")))
                 out->onMouseMove = op.callback;
-            else if (StrEq(op.name, "on_open_change"))
+            else if (StrEq(op.name, StrL("on_open_change")))
                 out->onOpenChange = op.callback;
-            else if (StrEq(op.name, "on_confirm"))
+            else if (StrEq(op.name, StrL("on_confirm")))
                 out->onConfirm = op.callback;
-            else if (StrEq(op.name, "on_dismiss"))
+            else if (StrEq(op.name, StrL("on_dismiss")))
                 out->onDismiss = op.callback;
-            else if (StrEq(op.name, "on_step"))
+            else if (StrEq(op.name, StrL("on_step")))
                 out->onStep = op.callback;
-            else if (StrEq(op.name, "on_resize"))
+            else if (StrEq(op.name, StrL("on_resize")))
                 out->onResize = op.callback;
-            else if (StrEq(op.name, "on_item_click"))
+            else if (StrEq(op.name, StrL("on_item_click")))
                 out->onItemClick = op.callback;
-            else if (StrEq(op.name, "on_item_secondary_click"))
+            else if (StrEq(op.name, StrL("on_item_secondary_click")))
                 out->onItemSecondaryClick = op.callback;
-            else if (StrEq(op.name, "on_key_down"))
+            else if (StrEq(op.name, StrL("on_key_down")))
                 out->onKeyDown = op.callback;
-            else if (StrEq(op.name, "on_key_up"))
+            else if (StrEq(op.name, StrL("on_key_up")))
                 out->onKeyUp = op.callback;
 
-            else if (StrEq(op.name, "on_mouse_down_left")) {
+            else if (StrEq(op.name, StrL("on_mouse_down_left"))) {
                 out->mouseDown.left = op.callback;
                 out->hasMouseDown = true;
-            } else if (StrEq(op.name, "on_mouse_down_right")) {
+            } else if (StrEq(op.name, StrL("on_mouse_down_right"))) {
                 out->mouseDown.right = op.callback;
                 out->hasMouseDown = true;
-            } else if (StrEq(op.name, "on_mouse_down_middle")) {
+            } else if (StrEq(op.name, StrL("on_mouse_down_middle"))) {
                 out->mouseDown.middle = op.callback;
                 out->hasMouseDown = true;
-            } else if (StrEq(op.name, "on_mouse_up_left")) {
+            } else if (StrEq(op.name, StrL("on_mouse_up_left"))) {
                 out->mouseUp.left = op.callback;
                 out->hasMouseUp = true;
-            } else if (StrEq(op.name, "on_mouse_up_right")) {
+            } else if (StrEq(op.name, StrL("on_mouse_up_right"))) {
                 out->mouseUp.right = op.callback;
                 out->hasMouseUp = true;
-            } else if (StrEq(op.name, "on_mouse_up_middle")) {
+            } else if (StrEq(op.name, StrL("on_mouse_up_middle"))) {
                 out->mouseUp.middle = op.callback;
                 out->hasMouseUp = true;
-            } else if (StrEq(op.name, "on_mouse_down_out")) {
+            } else if (StrEq(op.name, StrL("on_mouse_down_out"))) {
                 out->onMouseDownOut = op.callback;
-            } else if (StrEq(op.name, "on_scroll_wheel")) {
+            } else if (StrEq(op.name, StrL("on_scroll_wheel"))) {
                 out->onScrollWheel = op.callback;
-            } else if (StrEq(op.name, "tab_bar")) {
+            } else if (StrEq(op.name, StrL("tab_bar"))) {
                 out->dockChrome.tabBar = op.callback;
-            } else if (StrEq(op.name, "empty_group")) {
+            } else if (StrEq(op.name, StrL("empty_group"))) {
                 out->dockChrome.emptyGroup = op.callback;
-            } else if (StrEq(op.name, "drop_indicator")) {
+            } else if (StrEq(op.name, StrL("drop_indicator"))) {
                 out->dockChrome.dropIndicator = op.callback;
-            } else if (StrEq(op.name, "dock")) {
+            } else if (StrEq(op.name, StrL("dock"))) {
                 out->dockChrome.dock = op.callback;
             }
             continue;
@@ -97516,127 +97951,128 @@ static void ResolveBehavior(const shell::SpecNode* node,
             }
             continue;
         }
-        if (StrEq(op.name, "id"))
+        if (StrEq(op.name, StrL("id")))
             out->key = AsString(op, 0);
-        else if (StrEq(op.name, "accessibility_label"))
+        else if (StrEq(op.name, StrL("accessibility_label")))
             out->accessibilityLabel = AsString(op, 0);
-        else if (StrEq(op.name, "href"))
+        else if (StrEq(op.name, StrL("href")))
             out->href = AsString(op, 0);
-        else if (StrEq(op.name, "disabled"))
+        else if (StrEq(op.name, StrL("disabled")))
             out->disabled = AsBool(op, 0, true);
-        else if (StrEq(op.name, "selected"))
+        else if (StrEq(op.name, StrL("selected")))
             out->selected = AsBool(op, 0, true);
-        else if (StrEq(op.name, "checked"))
+        else if (StrEq(op.name, StrL("checked")))
             out->checked = AsBool(op, 0, true);
-        else if (StrEq(op.name, "pressed"))
+        else if (StrEq(op.name, StrL("pressed")))
             out->pressed = AsBool(op, 0, true);
-        else if (StrEq(op.name, "indeterminate"))
+        else if (StrEq(op.name, StrL("indeterminate")))
             out->indeterminate = AsBool(op, 0, true);
-        else if (StrEq(op.name, "open")) {
+        else if (StrEq(op.name, StrL("open"))) {
             out->open = AsBool(op, 0, true);
             out->hasOpen = true;
-        } else if (StrEq(op.name, "default_open"))
+        } else if (StrEq(op.name, StrL("default_open")))
             out->defaultOpen = AsBool(op, 0, true);
-        else if (StrEq(op.name, "overlay_closable"))
+        else if (StrEq(op.name, StrL("overlay_closable")))
             out->overlayClosable = AsBool(op, 0, true);
-        else if (StrEq(op.name, "controls_right"))
+        else if (StrEq(op.name, StrL("controls_right")))
             out->controlsRight = AsBool(op, 0, true);
-        else if (StrEq(op.name, "start"))
+        else if (StrEq(op.name, StrL("start")))
             out->start = AsBool(op, 0, true);
-        else if (StrEq(op.name, "value"))
+        else if (StrEq(op.name, StrL("value")))
             out->value = AsNumber(op, 0);
-        else if (StrEq(op.name, "row_count"))
+        else if (StrEq(op.name, StrL("row_count")))
             out->rowCount = (int)AsNumber(op, 0, -1);
-        else if (StrEq(op.name, "column_count"))
+        else if (StrEq(op.name, StrL("column_count")))
             out->columnCount = (int)AsNumber(op, 0, -1);
-        else if (StrEq(op.name, "tab_index"))
+        else if (StrEq(op.name, StrL("tab_index")))
             out->tabIndex = (int)AsNumber(op, 0);
-        else if (StrEq(op.name, "tab_stop"))
+        else if (StrEq(op.name, StrL("tab_stop")))
             out->tabStop = AsBool(op, 0, true);
-        else if (StrEq(op.name, "overflow_scroll"))
+        else if (StrEq(op.name, StrL("overflow_scroll")))
             out->scrollX = out->scrollY = true;
-        else if (StrEq(op.name, "overflow_x_scroll"))
+        else if (StrEq(op.name, StrL("overflow_x_scroll")))
             out->scrollX = true;
-        else if (StrEq(op.name, "overflow_y_scroll"))
+        else if (StrEq(op.name, StrL("overflow_y_scroll")))
             out->scrollY = true;
-        else if (StrEq(op.name, "overflow_scrollbar")) {
+        else if (StrEq(op.name, StrL("overflow_scrollbar"))) {
             out->scrollX = out->scrollY = out->scrollbar = true;
-        } else if (StrEq(op.name, "overflow_x_scrollbar")) {
+        } else if (StrEq(op.name, StrL("overflow_x_scrollbar"))) {
             out->scrollX = out->scrollbar = true;
-        } else if (StrEq(op.name, "overflow_y_scrollbar")) {
+        } else if (StrEq(op.name, StrL("overflow_y_scrollbar"))) {
             out->scrollY = out->scrollbar = true;
-        } else if (StrEq(op.name, "mode")) {
+        } else if (StrEq(op.name, StrL("mode"))) {
             Str mode = AsString(op, 0);
             out->hasScrollbarMode = true;
-            if (StrEq(mode, "hover"))
+            if (StrEq(mode, StrL("hover")))
                 out->scrollbarMode = ScrollbarMode::Hover;
-            else if (StrEq(mode, "always"))
+            else if (StrEq(mode, StrL("always")))
                 out->scrollbarMode = ScrollbarMode::Always;
             else
                 out->scrollbarMode = ScrollbarMode::Scrolling;
-        } else if (StrEq(op.name, "viewport_from_layout")) {
+        } else if (StrEq(op.name, StrL("viewport_from_layout"))) {
             out->viewportFromLayout = true;
-        } else if (StrEq(op.name, "scroll_size")) {
+        } else if (StrEq(op.name, StrL("scroll_size"))) {
             out->scrollSize = {AsNumber(op, 0), AsNumber(op, 1)};
             out->hasScrollSize = true;
-        } else if (StrEq(op.name, "panel_visible")) {
+        } else if (StrEq(op.name, StrL("panel_visible"))) {
             out->panelVisible = AsBool(op, 0, true);
             out->hasPanelVisible = true;
-        } else if (StrEq(op.name, "panel_size")) {
+        } else if (StrEq(op.name, StrL("panel_size"))) {
             out->panelSize = AsNumber(op, 0);
             out->hasPanelSize = true;
-        } else if (StrEq(op.name, "size_range")) {
+        } else if (StrEq(op.name, StrL("size_range"))) {
             out->panelMin = AsNumber(op, 0, kResizablePanelMinSize);
             out->panelMax = AsNumber(op, 1, 0);
             out->hasSizeRange = true;
-        } else if (StrEq(op.name, "set_position")) {
+        } else if (StrEq(op.name, StrL("set_position"))) {
             out->positionInSet = (int)AsNumber(op, 0);
             out->sizeOfSet = (int)AsNumber(op, 1);
             out->hasPosition = true;
-        } else if (StrEq(op.name, "anchor")) {
+        } else if (StrEq(op.name, StrL("anchor"))) {
             out->anchor = AnchorOf(AsString(op, 0), &out->hasAnchor);
-        } else if (StrEq(op.name, "mouse_button")) {
+        } else if (StrEq(op.name, StrL("mouse_button"))) {
             Str button = AsString(op, 0);
             out->mouseButton =
-                StrEq(button, "right")
+                StrEq(button, StrL("right"))
                     ? MouseButton::Right
-                    : (StrEq(button, "middle") ? MouseButton::Middle
-                                               : MouseButton::Left);
-        } else if (StrEq(op.name, "open_delay")) {
+                    : (StrEq(button, StrL("middle")) ? MouseButton::Middle
+                                                     : MouseButton::Left);
+        } else if (StrEq(op.name, StrL("open_delay"))) {
             out->openDelayMs = (int)AsNumber(op, 0, 600);
-        } else if (StrEq(op.name, "close_delay")) {
+        } else if (StrEq(op.name, StrL("close_delay"))) {
             out->closeDelayMs = (int)AsNumber(op, 0, 300);
-        } else if (StrEq(op.name, "track_focus")) {
+        } else if (StrEq(op.name, StrL("track_focus"))) {
             out->focus = AsHandle(op, 0);
-        } else if (StrEq(op.name, "content_focus_handle")) {
+        } else if (StrEq(op.name, StrL("content_focus_handle"))) {
             out->contentFocus = AsHandle(op, 0);
-        } else if (StrEq(op.name, "role")) {
+        } else if (StrEq(op.name, StrL("role"))) {
             out->role = AsString(op, 0);
-        } else if (StrEq(op.name, "aria_selected")) {
+        } else if (StrEq(op.name, StrL("aria_selected"))) {
             out->ariaSelected = AsBool(op, 0, true);
             out->hasAriaSelected = true;
-        } else if (StrEq(op.name, "aria_active_descendant")) {
+        } else if (StrEq(op.name, StrL("aria_active_descendant"))) {
             out->ariaActiveDescendant = true;
-        } else if (StrEq(op.name, "tooltip")) {
+        } else if (StrEq(op.name, StrL("tooltip"))) {
             out->tooltip = AsString(op, 0);
-        } else if (StrEq(op.name, "track_scroll")) {
+        } else if (StrEq(op.name, StrL("track_scroll"))) {
             const shell::Bridged* handle = Arg(op, 0);
             if (handle && handle->kind == shell::BridgedKind::Number &&
                 handle->number >= 0)
                 out->virtualScroll = (shell::EntityHandle)handle->number;
-        } else if (StrEq(op.name, "axis")) {
-            out->axis = StrEq(AsString(op, 0), "vertical") ? Axis::Vertical
-                                                           : Axis::Horizontal;
-        } else if (StrEq(op.name, "with_item_to_measure_index")) {
+        } else if (StrEq(op.name, StrL("axis"))) {
+            out->axis = StrEq(AsString(op, 0), StrL("vertical"))
+                            ? Axis::Vertical
+                            : Axis::Horizontal;
+        } else if (StrEq(op.name, StrL("with_item_to_measure_index"))) {
             out->itemToMeasure = (int)AsNumber(op, 0);
             out->hasItemToMeasure = true;
-        } else if (StrEq(op.name, "key_context")) {
+        } else if (StrEq(op.name, StrL("key_context"))) {
             out->keyContext = AsString(op, 0);
-        } else if (StrEq(op.name, "aria_level")) {
+        } else if (StrEq(op.name, StrL("aria_level"))) {
 
             float level = AsNumber(op, 0, 3);
             out->ariaLevel = (int)(level < 1 ? 1 : level);
-        } else if (StrEq(op.name, "keep_mounted")) {
+        } else if (StrEq(op.name, StrL("keep_mounted"))) {
             out->keepMounted = AsBool(op, 0, true);
         }
     }
@@ -97644,11 +98080,10 @@ static void ResolveBehavior(const shell::SpecNode* node,
 
 static bool ParseNumber(Str text, float* out) {
     if (!text || text.len <= 0 || text.len >= 64) return false;
-    char value[64] = {};
-    memcpy(value, text.s, (size_t)text.len);
+    TempStr value = StrDupTemp(text);
     char* end = nullptr;
-    double number = strtod(value, &end);
-    if (!end || end == value || !isfinite(number)) return false;
+    double number = strtod(value.s, &end);
+    if (!end || end == value.s || !isfinite(number)) return false;
     while (*end == ' ' || *end == '\t') end++;
     if (*end) return false;
     *out = (float)number;
@@ -97686,7 +98121,7 @@ static MaterialLength LengthOf(const shell::Bridged* value) {
     }
     if (value->kind != shell::BridgedKind::String) return result;
     Str text = TrimSpace(value->string);
-    if (StrEq(text, "auto")) {
+    if (StrEq(text, StrL("auto"))) {
         result.automatic = true;
         result.valid = true;
         return result;
@@ -97725,12 +98160,12 @@ static float PresetNumber(Str name, Str prefix, bool* found) {
     *found = false;
     if (!StrStartsWith(name, prefix) || name.len <= prefix.len) return 0;
     Str suffix(name.s + prefix.len, name.len - prefix.len);
-    char text[32] = {};
-    if (suffix.len >= (int)sizeof(text)) return 0;
+    if (suffix.len >= 32) return 0;
+    TempStr text = StrDupTemp(suffix);
     for (int i = 0; i < suffix.len; i++)
-        text[i] = suffix.s[i] == 'p' ? '.' : suffix.s[i];
+        text.s[i] = suffix.s[i] == 'p' ? '.' : suffix.s[i];
     float value = 0;
-    if (!ParseNumber(Str(text), &value)) return 0;
+    if (!ParseNumber(text, &value)) return 0;
     *found = true;
     return value;
 }
@@ -97742,121 +98177,121 @@ static bool PresetNumberIs(Str name, Str prefix, float* value) {
 }
 
 static bool ApplyNullary(El* element, Str name) {
-    if (StrEq(name, "flex"))
+    if (StrEq(name, StrL("flex")))
         element->Flex();
-    else if (StrEq(name, "flex_row"))
+    else if (StrEq(name, StrL("flex_row")))
         element->FlexRow();
-    else if (StrEq(name, "flex_col"))
+    else if (StrEq(name, StrL("flex_col")))
         element->FlexCol();
-    else if (StrEq(name, "flex_row_reverse"))
+    else if (StrEq(name, StrL("flex_row_reverse")))
         element->FlexRowReverse();
-    else if (StrEq(name, "flex_col_reverse"))
+    else if (StrEq(name, StrL("flex_col_reverse")))
         element->FlexColReverse();
-    else if (StrEq(name, "flex_wrap"))
+    else if (StrEq(name, StrL("flex_wrap")))
         element->FlexWrap();
-    else if (StrEq(name, "flex_1"))
+    else if (StrEq(name, StrL("flex_1")))
         element->Flex1();
-    else if (StrEq(name, "flex_none"))
+    else if (StrEq(name, StrL("flex_none")))
         element->FlexNone();
-    else if (StrEq(name, "grow"))
+    else if (StrEq(name, StrL("grow")))
         element->Grow();
-    else if (StrEq(name, "shrink_0"))
+    else if (StrEq(name, StrL("shrink_0")))
         element->Shrink0();
-    else if (StrEq(name, "size_full"))
+    else if (StrEq(name, StrL("size_full")))
         element->SizeFull();
-    else if (StrEq(name, "w_full"))
+    else if (StrEq(name, StrL("w_full")))
         element->W(kFill);
-    else if (StrEq(name, "h_full"))
+    else if (StrEq(name, StrL("h_full")))
         element->H(kFill);
-    else if (StrEq(name, "w_auto"))
+    else if (StrEq(name, StrL("w_auto")))
         element->style.width = kAuto;
-    else if (StrEq(name, "h_auto"))
+    else if (StrEq(name, StrL("h_auto")))
         element->style.height = kAuto;
-    else if (StrEq(name, "items_center"))
+    else if (StrEq(name, StrL("items_center")))
         element->ItemsCenter();
-    else if (StrEq(name, "items_start"))
+    else if (StrEq(name, StrL("items_start")))
         element->ItemsStart();
-    else if (StrEq(name, "items_end"))
+    else if (StrEq(name, StrL("items_end")))
         element->ItemsEnd();
-    else if (StrEq(name, "items_stretch"))
+    else if (StrEq(name, StrL("items_stretch")))
         element->ItemsStretch();
-    else if (StrEq(name, "justify_center"))
+    else if (StrEq(name, StrL("justify_center")))
         element->JustifyCenter();
-    else if (StrEq(name, "justify_start"))
+    else if (StrEq(name, StrL("justify_start")))
         element->JustifyStart();
-    else if (StrEq(name, "justify_end"))
+    else if (StrEq(name, StrL("justify_end")))
         element->JustifyEnd();
-    else if (StrEq(name, "justify_between"))
+    else if (StrEq(name, StrL("justify_between")))
         element->JustifyBetween();
-    else if (StrEq(name, "justify_around"))
+    else if (StrEq(name, StrL("justify_around")))
         element->JustifyAround();
-    else if (StrEq(name, "absolute"))
+    else if (StrEq(name, StrL("absolute")))
         element->Absolute();
 
-    else if (StrEq(name, "relative")) {
-    } else if (StrEq(name, "fixed"))
+    else if (StrEq(name, StrL("relative"))) {
+    } else if (StrEq(name, StrL("fixed")))
         element->Fixed();
-    else if (StrEq(name, "overflow_hidden"))
+    else if (StrEq(name, StrL("overflow_hidden")))
         element->ClipX()->ClipY();
-    else if (StrEq(name, "overflow_x_hidden"))
+    else if (StrEq(name, StrL("overflow_x_hidden")))
         element->ClipX();
-    else if (StrEq(name, "overflow_y_hidden"))
+    else if (StrEq(name, StrL("overflow_y_hidden")))
         element->ClipY();
-    else if (StrEq(name, "overflow_scroll"))
+    else if (StrEq(name, StrL("overflow_scroll")))
         element->ScrollX(0)->ScrollY(0);
-    else if (StrEq(name, "overflow_x_scroll"))
+    else if (StrEq(name, StrL("overflow_x_scroll")))
         element->ScrollX(0);
-    else if (StrEq(name, "overflow_y_scroll"))
+    else if (StrEq(name, StrL("overflow_y_scroll")))
         element->ScrollY(0);
-    else if (StrEq(name, "truncate"))
+    else if (StrEq(name, StrL("truncate")))
         element->Truncate();
-    else if (StrEq(name, "whitespace_normal"))
+    else if (StrEq(name, StrL("whitespace_normal")))
         element->Wrap();
-    else if (StrEq(name, "underline"))
+    else if (StrEq(name, StrL("underline")))
         element->Underline();
-    else if (StrEq(name, "italic"))
+    else if (StrEq(name, StrL("italic")))
         element->Italic();
-    else if (StrEq(name, "line_through"))
+    else if (StrEq(name, StrL("line_through")))
         element->Strikethrough();
-    else if (StrEq(name, "font_medium"))
+    else if (StrEq(name, StrL("font_medium")))
         element->Medium();
-    else if (StrEq(name, "font_semibold"))
+    else if (StrEq(name, StrL("font_semibold")))
         element->Semibold();
-    else if (StrEq(name, "font_bold"))
+    else if (StrEq(name, StrL("font_bold")))
         element->Bold();
-    else if (StrEq(name, "font_normal"))
+    else if (StrEq(name, StrL("font_normal")))
         element->Weight(FontWeight::Normal);
-    else if (StrEq(name, "font_thin"))
+    else if (StrEq(name, StrL("font_thin")))
         element->Weight((FontWeight)100);
-    else if (StrEq(name, "font_extralight"))
+    else if (StrEq(name, StrL("font_extralight")))
         element->Weight((FontWeight)200);
-    else if (StrEq(name, "font_light"))
+    else if (StrEq(name, StrL("font_light")))
         element->Weight((FontWeight)300);
-    else if (StrEq(name, "font_extrabold"))
+    else if (StrEq(name, StrL("font_extrabold")))
         element->Weight((FontWeight)800);
-    else if (StrEq(name, "font_black"))
+    else if (StrEq(name, StrL("font_black")))
         element->Weight((FontWeight)900);
-    else if (StrEq(name, "text_xs"))
+    else if (StrEq(name, StrL("text_xs")))
         element->Font(12);
-    else if (StrEq(name, "text_sm"))
+    else if (StrEq(name, StrL("text_sm")))
         element->Font(14);
-    else if (StrEq(name, "text_base"))
+    else if (StrEq(name, StrL("text_base")))
         element->Font(16);
-    else if (StrEq(name, "text_lg"))
+    else if (StrEq(name, StrL("text_lg")))
         element->Font(18);
-    else if (StrEq(name, "text_xl"))
+    else if (StrEq(name, StrL("text_xl")))
         element->Font(20);
-    else if (StrEq(name, "cursor_pointer"))
+    else if (StrEq(name, StrL("cursor_pointer")))
         element->Cursor(CursorKind::Pointer);
-    else if (StrEq(name, "cursor_text"))
+    else if (StrEq(name, StrL("cursor_text")))
         element->Cursor(CursorKind::IBeam);
-    else if (StrEq(name, "cursor_col_resize"))
+    else if (StrEq(name, StrL("cursor_col_resize")))
         element->Cursor(CursorKind::ColResize);
-    else if (StrEq(name, "cursor_row_resize"))
+    else if (StrEq(name, StrL("cursor_row_resize")))
         element->Cursor(CursorKind::RowResize);
-    else if (StrEq(name, "invisible"))
+    else if (StrEq(name, StrL("invisible")))
         element->Opacity(0);
-    else if (StrEq(name, "visible"))
+    else if (StrEq(name, StrL("visible")))
         element->Opacity(1);
     else {
         bool found = false;
@@ -97908,146 +98343,146 @@ static bool ApplyNullary(El* element, Str name) {
 static bool ApplyParam(El* e, const shell::SpecOp& op) {
     MaterialLength length = LengthOf(Arg(op, 0));
     Rgba color = {};
-    if (StrEq(op.name, "w") && length.valid) {
+    if (StrEq(op.name, StrL("w")) && length.valid) {
         if (length.fraction != 0)
             e->WFrac(length.fraction);
         else
             e->style.width = length.automatic ? kAuto : length.pixels;
-    } else if (StrEq(op.name, "h") && length.valid)
+    } else if (StrEq(op.name, StrL("h")) && length.valid)
         e->style.height = length.automatic ? kAuto : length.pixels;
-    else if (StrEq(op.name, "size") && length.valid) {
+    else if (StrEq(op.name, StrL("size")) && length.valid) {
         e->style.width = e->style
                              .height = length.automatic ? kAuto : length.pixels;
-    } else if (StrEq(op.name, "min_w") && length.valid)
+    } else if (StrEq(op.name, StrL("min_w")) && length.valid)
         e->style.minW = length.automatic ? kAuto : length.pixels;
-    else if (StrEq(op.name, "min_h") && length.valid)
+    else if (StrEq(op.name, StrL("min_h")) && length.valid)
         e->style.minH = length.automatic ? kAuto : length.pixels;
-    else if (StrEq(op.name, "min_size") && length.valid)
+    else if (StrEq(op.name, StrL("min_size")) && length.valid)
         e->style.minW = e->style
                             .minH = length.automatic ? kAuto : length.pixels;
-    else if (StrEq(op.name, "max_w") && length.valid)
+    else if (StrEq(op.name, StrL("max_w")) && length.valid)
         e->style.maxW = length.automatic ? 1e9f : length.pixels;
-    else if (StrEq(op.name, "max_h") && length.valid)
+    else if (StrEq(op.name, StrL("max_h")) && length.valid)
         e->style.maxH = length.automatic ? 1e9f : length.pixels;
-    else if (StrEq(op.name, "max_size") && length.valid)
+    else if (StrEq(op.name, StrL("max_size")) && length.valid)
         e->style.maxW = e->style.maxH = length.automatic ? 1e9f : length.pixels;
-    else if (StrEq(op.name, "p") && length.valid)
+    else if (StrEq(op.name, StrL("p")) && length.valid)
         e->Pad(length.pixels);
-    else if (StrEq(op.name, "px") && length.valid)
+    else if (StrEq(op.name, StrL("px")) && length.valid)
         e->PadX(length.pixels);
-    else if (StrEq(op.name, "py") && length.valid)
+    else if (StrEq(op.name, StrL("py")) && length.valid)
         e->PadY(length.pixels);
-    else if (StrEq(op.name, "pt") && length.valid)
+    else if (StrEq(op.name, StrL("pt")) && length.valid)
         e->PadT(length.pixels);
-    else if (StrEq(op.name, "pb") && length.valid)
+    else if (StrEq(op.name, StrL("pb")) && length.valid)
         e->PadB(length.pixels);
-    else if (StrEq(op.name, "pl") && length.valid)
+    else if (StrEq(op.name, StrL("pl")) && length.valid)
         e->PadL(length.pixels);
-    else if (StrEq(op.name, "pr") && length.valid)
+    else if (StrEq(op.name, StrL("pr")) && length.valid)
         e->PadR(length.pixels);
-    else if (StrEq(op.name, "m") && length.valid)
+    else if (StrEq(op.name, StrL("m")) && length.valid)
         e->Margin(length.pixels);
-    else if (StrEq(op.name, "mx") && length.valid)
+    else if (StrEq(op.name, StrL("mx")) && length.valid)
         e->MarginX(length.pixels);
-    else if (StrEq(op.name, "my") && length.valid)
+    else if (StrEq(op.name, StrL("my")) && length.valid)
         e->MarginY(length.pixels);
-    else if (StrEq(op.name, "mt") && length.valid)
+    else if (StrEq(op.name, StrL("mt")) && length.valid)
         e->MarginT(length.pixels);
-    else if (StrEq(op.name, "mb") && length.valid)
+    else if (StrEq(op.name, StrL("mb")) && length.valid)
         e->MarginB(length.pixels);
-    else if (StrEq(op.name, "ml") && length.valid)
+    else if (StrEq(op.name, StrL("ml")) && length.valid)
         e->MarginL(length.pixels);
-    else if (StrEq(op.name, "mr") && length.valid)
+    else if (StrEq(op.name, StrL("mr")) && length.valid)
         e->MarginR(length.pixels);
-    else if (StrEq(op.name, "inset") && length.valid)
+    else if (StrEq(op.name, StrL("inset")) && length.valid)
         e->Top(length.pixels)
             ->Bottom(length.pixels)
             ->Left(length.pixels)
             ->Right(length.pixels);
-    else if (StrEq(op.name, "top") && length.valid) {
+    else if (StrEq(op.name, StrL("top")) && length.valid) {
         if (length.fraction != 0)
             e->TopRel(length.fraction);
         else
             e->Top(length.pixels);
-    } else if (StrEq(op.name, "bottom") && length.valid) {
+    } else if (StrEq(op.name, StrL("bottom")) && length.valid) {
         if (length.fraction != 0)
             e->BottomRel(length.fraction);
         else
             e->Bottom(length.pixels);
-    } else if (StrEq(op.name, "left") && length.valid) {
+    } else if (StrEq(op.name, StrL("left")) && length.valid) {
         if (length.fraction != 0)
             e->LeftRel(length.fraction);
         else
             e->Left(length.pixels);
-    } else if (StrEq(op.name, "right") && length.valid) {
+    } else if (StrEq(op.name, StrL("right")) && length.valid) {
         if (length.fraction != 0)
             e->RightRel(length.fraction);
         else
             e->Right(length.pixels);
-    } else if (StrEq(op.name, "gap") && length.valid)
+    } else if (StrEq(op.name, StrL("gap")) && length.valid)
         e->Gap(length.pixels);
-    else if (StrEq(op.name, "gap_x") && length.valid)
+    else if (StrEq(op.name, StrL("gap_x")) && length.valid)
         e->GapX(length.pixels);
-    else if (StrEq(op.name, "gap_y") && length.valid)
+    else if (StrEq(op.name, StrL("gap_y")) && length.valid)
         e->GapY(length.pixels);
-    else if (StrEq(op.name, "flex_grow"))
+    else if (StrEq(op.name, StrL("flex_grow")))
         e->Grow(AsNumber(op, 0));
-    else if (StrEq(op.name, "flex_shrink"))
+    else if (StrEq(op.name, StrL("flex_shrink")))
         e->Shrink(AsNumber(op, 0));
-    else if (StrEq(op.name, "flex_basis") && length.valid)
+    else if (StrEq(op.name, StrL("flex_basis")) && length.valid)
         e->Basis(length.pixels);
-    else if (StrEq(op.name, "bg") && StyleColor(op, &color))
+    else if (StrEq(op.name, StrL("bg")) && StyleColor(op, &color))
         e->Bg(color);
-    else if (StrEq(op.name, "text_color") && StyleColor(op, &color))
+    else if (StrEq(op.name, StrL("text_color")) && StyleColor(op, &color))
         e->Fg(color);
-    else if (StrEq(op.name, "text_size") && length.valid)
+    else if (StrEq(op.name, StrL("text_size")) && length.valid)
         e->Font(length.pixels);
-    else if (StrEq(op.name, "font_family")) {
-        if (StrEq(AsString(op, 0), "monospace")) e->Mono();
-    } else if (StrEq(op.name, "font_weight"))
+    else if (StrEq(op.name, StrL("font_family"))) {
+        if (StrEq(AsString(op, 0), StrL("monospace"))) e->Mono();
+    } else if (StrEq(op.name, StrL("font_weight")))
         e->Weight((FontWeight)(int)AsNumber(op, 0, 400));
-    else if (StrEq(op.name, "line_height")) {
+    else if (StrEq(op.name, StrL("line_height"))) {
         const shell::Bridged* value = Arg(op, 0);
         if (value && value->kind == shell::BridgedKind::Number)
             e->LineHeight((float)value->number);
         else if (length.valid)
             e->LineHeight(length.pixels /
                           (e->style.fontSize > 0 ? e->style.fontSize : 16));
-    } else if (StrEq(op.name, "opacity"))
+    } else if (StrEq(op.name, StrL("opacity")))
         e->Opacity(AsNumber(op, 0, 1));
-    else if (StrEq(op.name, "border_color") && StyleColor(op, &color))
+    else if (StrEq(op.name, StrL("border_color")) && StyleColor(op, &color))
         e->style.borderColor = color;
-    else if (StrEq(op.name, "border") && length.valid)
+    else if (StrEq(op.name, StrL("border")) && length.valid)
         e->style.border = length.pixels;
-    else if (StrEq(op.name, "border_t") && length.valid)
+    else if (StrEq(op.name, StrL("border_t")) && length.valid)
         e->style.borderT = length.pixels;
-    else if (StrEq(op.name, "border_b") && length.valid)
+    else if (StrEq(op.name, StrL("border_b")) && length.valid)
         e->style.borderB = length.pixels;
-    else if (StrEq(op.name, "border_l") && length.valid)
+    else if (StrEq(op.name, StrL("border_l")) && length.valid)
         e->style.borderL = length.pixels;
-    else if (StrEq(op.name, "border_r") && length.valid)
+    else if (StrEq(op.name, StrL("border_r")) && length.valid)
         e->style.borderR = length.pixels;
-    else if (StrEq(op.name, "border_x") && length.valid)
+    else if (StrEq(op.name, StrL("border_x")) && length.valid)
         e->style.borderL = e->style.borderR = length.pixels;
-    else if (StrEq(op.name, "border_y") && length.valid)
+    else if (StrEq(op.name, StrL("border_y")) && length.valid)
         e->style.borderT = e->style.borderB = length.pixels;
-    else if (StrEq(op.name, "rounded") && length.valid)
+    else if (StrEq(op.name, StrL("rounded")) && length.valid)
         e->Radius(length.pixels);
-    else if (StrEq(op.name, "rounded_t") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_t")) && length.valid)
         e->Corners(length.pixels, length.pixels, 0, 0);
-    else if (StrEq(op.name, "rounded_b") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_b")) && length.valid)
         e->Corners(0, 0, length.pixels, length.pixels);
-    else if (StrEq(op.name, "rounded_l") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_l")) && length.valid)
         e->Corners(length.pixels, 0, 0, length.pixels);
-    else if (StrEq(op.name, "rounded_r") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_r")) && length.valid)
         e->Corners(0, length.pixels, length.pixels, 0);
-    else if (StrEq(op.name, "rounded_tl") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_tl")) && length.valid)
         e->Corners(length.pixels, 0, 0, 0);
-    else if (StrEq(op.name, "rounded_tr") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_tr")) && length.valid)
         e->Corners(0, length.pixels, 0, 0);
-    else if (StrEq(op.name, "rounded_br") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_br")) && length.valid)
         e->Corners(0, 0, length.pixels, 0);
-    else if (StrEq(op.name, "rounded_bl") && length.valid)
+    else if (StrEq(op.name, StrL("rounded_bl")) && length.valid)
         e->Corners(0, 0, 0, length.pixels);
     else
         return false;
@@ -98055,39 +98490,45 @@ static bool ApplyParam(El* e, const shell::SpecOp& op) {
 }
 
 static uint32_t StyleFieldsFor(Str name) {
-    if (StrEq(name, "bg")) return StyleFieldBg;
-    if (StrEq(name, "text_color")) return StyleFieldColor;
-    if (StrEq(name, "border_color")) return StyleFieldBorderColor;
-    if (StrEq(name, "opacity") || StrEq(name, "invisible") ||
-        StrEq(name, "visible"))
+    if (StrEq(name, StrL("bg"))) return StyleFieldBg;
+    if (StrEq(name, StrL("text_color"))) return StyleFieldColor;
+    if (StrEq(name, StrL("border_color"))) return StyleFieldBorderColor;
+    if (StrEq(name, StrL("opacity")) || StrEq(name, StrL("invisible")) ||
+        StrEq(name, StrL("visible")))
         return StyleFieldOpacity;
-    if (StrEq(name, "w") || StrEq(name, "w_full") || StrEq(name, "w_auto"))
+    if (StrEq(name, StrL("w")) || StrEq(name, StrL("w_full")) ||
+        StrEq(name, StrL("w_auto")))
         return StyleFieldWidth;
-    if (StrEq(name, "h") || StrEq(name, "h_full") || StrEq(name, "h_auto"))
+    if (StrEq(name, StrL("h")) || StrEq(name, StrL("h_full")) ||
+        StrEq(name, StrL("h_auto")))
         return StyleFieldHeight;
-    if (StrEq(name, "size") || StrEq(name, "size_full"))
+    if (StrEq(name, StrL("size")) || StrEq(name, StrL("size_full")))
         return StyleFieldWidth | StyleFieldHeight;
-    if (StrEq(name, "text_size") || StrStartsWith(name, "text_"))
+    if (StrEq(name, StrL("text_size")) || StrStartsWith(name, "text_"))
         return StyleFieldFontSize;
-    if (StrEq(name, "gap") || StrEq(name, "gap_x") || StrEq(name, "gap_y") ||
-        StrStartsWith(name, "gap_"))
+    if (StrEq(name, StrL("gap")) || StrEq(name, StrL("gap_x")) ||
+        StrEq(name, StrL("gap_y")) || StrStartsWith(name, "gap_"))
         return StyleFieldGap;
-    if (StrEq(name, "p") || StrEq(name, "px") || StrEq(name, "py") ||
-        StrEq(name, "pt") || StrEq(name, "pb") || StrEq(name, "pl") ||
-        StrEq(name, "pr") || StrStartsWith(name, "p_"))
+    if (StrEq(name, StrL("p")) || StrEq(name, StrL("px")) ||
+        StrEq(name, StrL("py")) || StrEq(name, StrL("pt")) ||
+        StrEq(name, StrL("pb")) || StrEq(name, StrL("pl")) ||
+        StrEq(name, StrL("pr")) || StrStartsWith(name, "p_"))
         return StyleFieldPad;
-    if (StrEq(name, "m") || StrEq(name, "mx") || StrEq(name, "my") ||
-        StrEq(name, "mt") || StrEq(name, "mb") || StrEq(name, "ml") ||
-        StrEq(name, "mr") || StrStartsWith(name, "m_"))
+    if (StrEq(name, StrL("m")) || StrEq(name, StrL("mx")) ||
+        StrEq(name, StrL("my")) || StrEq(name, StrL("mt")) ||
+        StrEq(name, StrL("mb")) || StrEq(name, StrL("ml")) ||
+        StrEq(name, StrL("mr")) || StrStartsWith(name, "m_"))
         return StyleFieldMargin;
     if (StrStartsWith(name, "rounded")) return StyleFieldRadius;
-    if (StrEq(name, "border_t")) return StyleFieldBorderT;
-    if (StrEq(name, "border_b")) return StyleFieldBorderB;
-    if (StrEq(name, "border_l")) return StyleFieldBorderL;
-    if (StrEq(name, "border_r")) return StyleFieldBorderR;
-    if (StrEq(name, "border_x")) return StyleFieldBorderL | StyleFieldBorderR;
-    if (StrEq(name, "border_y")) return StyleFieldBorderT | StyleFieldBorderB;
-    if (StrEq(name, "border") || StrStartsWith(name, "border_"))
+    if (StrEq(name, StrL("border_t"))) return StyleFieldBorderT;
+    if (StrEq(name, StrL("border_b"))) return StyleFieldBorderB;
+    if (StrEq(name, StrL("border_l"))) return StyleFieldBorderL;
+    if (StrEq(name, StrL("border_r"))) return StyleFieldBorderR;
+    if (StrEq(name, StrL("border_x")))
+        return StyleFieldBorderL | StyleFieldBorderR;
+    if (StrEq(name, StrL("border_y")))
+        return StyleFieldBorderT | StyleFieldBorderB;
+    if (StrEq(name, StrL("border")) || StrStartsWith(name, "border_"))
         return StyleFieldBorder;
     return 0;
 }
@@ -98118,7 +98559,7 @@ static bool ApplyStyleNode(Arena* arena, const shell::SpecNode* node,
 
 static const shell::SpecNode* StateNode(const shell::SpecArena* specs,
                                         const shell::SpecNode* owner,
-                                        const char* name) {
+                                        Str name) {
     if (!specs || !owner) return nullptr;
     for (const shell::SpecOp& op : owner->ops) {
         if (op.kind == shell::SpecOpKind::StateStyle && StrEq(op.name, name))
@@ -98128,7 +98569,7 @@ static const shell::SpecNode* StateNode(const shell::SpecArena* specs,
 }
 
 static void ApplyStateNode(Ctx* cx, const shell::SpecNode* state, El* target,
-                           const char* kind, ShellError* error) {
+                           Str kind, ShellError* error) {
     if (!state || !target) return;
     El* resolved = Div(cx->a);
     uint32_t fields = 0;
@@ -98136,23 +98577,23 @@ static void ApplyStateNode(Ctx* cx, const shell::SpecNode* state, El* target,
     StateStyle style;
     style.style = resolved->style;
     style.set = fields;
-    if (strcmp(kind, "hover") == 0)
+    if (StrEq(kind, StrL("hover")))
         target->Hover(style);
-    else if (strcmp(kind, "active") == 0)
+    else if (StrEq(kind, StrL("active")))
         target->Active(style);
-    else if (strcmp(kind, "focus") == 0)
+    else if (StrEq(kind, StrL("focus")))
         target->Focus(style);
 }
 
 static void ApplyStateStyles(Ctx* cx, const shell::SpecArena* specs,
                              const shell::SpecNode* owner, El* target,
                              ShellError* error) {
-    ApplyStateNode(cx, StateNode(specs, owner, "hover"), target, "hover",
-                   error);
-    ApplyStateNode(cx, StateNode(specs, owner, "active"), target, "active",
-                   error);
-    ApplyStateNode(cx, StateNode(specs, owner, "focus"), target, "focus",
-                   error);
+    ApplyStateNode(cx, StateNode(specs, owner, StrL("hover")), target,
+                   StrL("hover"), error);
+    ApplyStateNode(cx, StateNode(specs, owner, StrL("active")), target,
+                   StrL("active"), error);
+    ApplyStateNode(cx, StateNode(specs, owner, StrL("focus")), target,
+                   StrL("focus"), error);
 }
 
 struct MaterialPath {
@@ -98293,20 +98734,20 @@ static void PaintMaterialPath(PaintCtx* ctx, El* element, void* user) {
     Point current = {}, start = {};
     bool hasCurrent = false;
     for (const shell::SpecOp& op : node->ops) {
-        if (StrEq(op.name, "move_to")) {
+        if (StrEq(op.name, StrL("move_to"))) {
             Point point;
             if (!shell_materialize_PathPoint(op, 0, bounds, &point)) continue;
             PathMoveTo(path, point.x, point.y);
             current = start = point;
             hasCurrent = true;
-        } else if (StrEq(op.name, "line_to")) {
+        } else if (StrEq(op.name, StrL("line_to"))) {
             Point point;
             if (!shell_materialize_PathPoint(op, 0, bounds, &point)) continue;
             PathLineTo(path, point.x, point.y);
             current = point;
             if (!hasCurrent) start = point;
             hasCurrent = true;
-        } else if (StrEq(op.name, "curve_to") && hasCurrent) {
+        } else if (StrEq(op.name, StrL("curve_to")) && hasCurrent) {
             Point to, control;
             if (!shell_materialize_PathPoint(op, 0, bounds, &to) ||
                 !shell_materialize_PathPoint(op, 2, bounds, &control))
@@ -98317,14 +98758,14 @@ static void PaintMaterialPath(PaintCtx* ctx, El* element, void* user) {
                        to.y + (control.y - to.y) * 2.f / 3.f};
             PathCubicTo(path, a.x, a.y, b.x, b.y, to.x, to.y);
             current = to;
-        } else if (StrEq(op.name, "cubic_bezier_to") && hasCurrent) {
+        } else if (StrEq(op.name, StrL("cubic_bezier_to")) && hasCurrent) {
             Point to, a, b;
             if (!shell_materialize_PathPoint(op, 0, bounds, &to) ||
                 !shell_materialize_PathPoint(op, 2, bounds, &a) || !shell_materialize_PathPoint(op, 4, bounds, &b))
                 continue;
             PathCubicTo(path, a.x, a.y, b.x, b.y, to.x, to.y);
             current = to;
-        } else if (StrEq(op.name, "arc_to") && hasCurrent) {
+        } else if (StrEq(op.name, StrL("arc_to")) && hasCurrent) {
             float rx = 0, ry = 0;
             Point to;
             if (!PathCoordinate(Arg(op, 0), 0, bounds.w, &rx) ||
@@ -98334,7 +98775,7 @@ static void PaintMaterialPath(PaintCtx* ctx, El* element, void* user) {
             PathEllipticalArc(path, current, to, rx, ry, AsNumber(op, 2),
                               AsBool(op, 3), AsBool(op, 4));
             current = to;
-        } else if (StrEq(op.name, "close") && hasCurrent) {
+        } else if (StrEq(op.name, StrL("close")) && hasCurrent) {
             PathClose(path);
             current = start;
         }
@@ -98355,11 +98796,12 @@ static void PaintMaterialPath(PaintCtx* ctx, El* element, void* user) {
 }
 
 static const shell::SpecOp* MotionFor(const shell::SpecNode* node,
-                                      const char* property) {
+                                      Str property) {
     const shell::SpecOp* found = nullptr;
     if (!node) return nullptr;
     for (const shell::SpecOp& op : node->ops) {
-        if ((!StrEq(op.name, "transition") && !StrEq(op.name, "spring")) ||
+        if ((!StrEq(op.name, StrL("transition")) &&
+             !StrEq(op.name, StrL("spring"))) ||
             !StrEq(AsString(op, 0), property))
             continue;
         found = &op;
@@ -98367,34 +98809,35 @@ static const shell::SpecOp* MotionFor(const shell::SpecNode* node,
     return found;
 }
 
-static bool MotionTarget(const shell::SpecNode* node, const char* property,
+static bool MotionTarget(const shell::SpecNode* node, Str property,
                          const Style& style, float* target) {
     bool declared = false;
     for (const shell::SpecOp& op : node->ops) {
-        if ((strcmp(property, "opacity") == 0 && StrEq(op.name, "opacity")) ||
-            (strcmp(property, "width") == 0 &&
-             (StrEq(op.name, "w") || StrEq(op.name, "size"))) ||
-            (strcmp(property, "height") == 0 &&
-             (StrEq(op.name, "h") || StrEq(op.name, "size"))) ||
-            (strcmp(property, "left") == 0 && StrEq(op.name, "left")) ||
-            (strcmp(property, "top") == 0 && StrEq(op.name, "top")))
+        if ((StrEq(property, StrL("opacity")) &&
+             StrEq(op.name, StrL("opacity"))) ||
+            (StrEq(property, StrL("width")) &&
+             (StrEq(op.name, StrL("w")) || StrEq(op.name, StrL("size")))) ||
+            (StrEq(property, StrL("height")) &&
+             (StrEq(op.name, StrL("h")) || StrEq(op.name, StrL("size")))) ||
+            (StrEq(property, StrL("left")) && StrEq(op.name, StrL("left"))) ||
+            (StrEq(property, StrL("top")) && StrEq(op.name, StrL("top"))))
             declared = true;
     }
     if (!declared) return false;
-    if (strcmp(property, "opacity") == 0)
+    if (StrEq(property, StrL("opacity")))
         *target = style.opacity;
-    else if (strcmp(property, "width") == 0) {
+    else if (StrEq(property, StrL("width"))) {
         if (style.width == kAuto || style.width == kFill ||
             style.widthFrac != 0)
             return false;
         *target = style.width;
-    } else if (strcmp(property, "height") == 0) {
+    } else if (StrEq(property, StrL("height"))) {
         if (style.height == kAuto || style.height == kFill) return false;
         *target = style.height;
-    } else if (strcmp(property, "left") == 0) {
+    } else if (StrEq(property, StrL("left"))) {
         if (style.absLeft == kAuto || style.absLeftRel != 0) return false;
         *target = style.absLeft;
-    } else if (strcmp(property, "top") == 0) {
+    } else if (StrEq(property, StrL("top"))) {
         if (style.absTop == kAuto || style.absTopRel != 0) return false;
         *target = style.absTop;
     } else {
@@ -98473,17 +98916,17 @@ static Str MotionIdentity(Ctx* cx, const shell::SpecNode* node,
 static void ApplyMotions(Ctx* cx, const shell::SpecNode* node,
                          shell::SpecId specId, const MaterialBehavior& behavior,
                          El* element) {
-    static const char* properties[] = {"opacity", "width", "height", "left",
-                                       "top"};
+    static const Str properties[] = {StrL("opacity"), StrL("width"),
+                                     StrL("height"), StrL("left"), StrL("top")};
     Str identity = MotionIdentity(cx, node, specId, behavior);
-    for (const char* property : properties) {
+    for (Str property : properties) {
         const shell::SpecOp* op = MotionFor(node, property);
         float target = 0;
         if (!op || !MotionTarget(node, property, element->style, &target))
             continue;
-        uint32_t key = MotionId(identity, Str(property));
+        uint32_t key = MotionId(identity, property);
         float sampled = target;
-        if (StrEq(op->name, "spring")) {
+        if (StrEq(op->name, StrL("spring"))) {
             Spring spring = SpringNew(AsNumber(*op, 1, 250));
             spring.damping = AsNumber(*op, 2, 1);
             spring.epsilon = AsNumber(*op, 3, 0.001f);
@@ -98493,21 +98936,21 @@ static void ApplyMotions(Ctx* cx, const shell::SpecNode* node,
                 motion::Transition::New(AsNumber(*op, 1));
             policy.delayMs = AsNumber(*op, 2);
             Str easing = AsString(*op, 3);
-            if (StrEq(easing, "linear"))
+            if (StrEq(easing, StrL("linear")))
                 policy.easing = Easing::Custom(EaseLinear);
-            else if (StrEq(easing, "ease-in"))
+            else if (StrEq(easing, StrL("ease-in")))
                 policy.easing = Easing::Custom(EaseInCubic);
-            else if (StrEq(easing, "ease-in-out"))
+            else if (StrEq(easing, StrL("ease-in-out")))
                 policy.easing = Easing::Custom(EaseInOutCubic);
             sampled = MotionValue(cx, key, target, policy);
         }
-        if (strcmp(property, "opacity") == 0)
+        if (StrEq(property, StrL("opacity")))
             element->style.opacity = sampled;
-        else if (strcmp(property, "width") == 0)
+        else if (StrEq(property, StrL("width")))
             element->style.width = sampled;
-        else if (strcmp(property, "height") == 0)
+        else if (StrEq(property, StrL("height")))
             element->style.height = sampled;
-        else if (strcmp(property, "left") == 0)
+        else if (StrEq(property, StrL("left")))
             element->style.absLeft = sampled;
         else
             element->style.absTop = sampled;
@@ -98661,9 +99104,9 @@ static El* WireDockCommands(Ctx* cx, El* element,
         }
         const DockTabGroup* group = frame->group;
         const DockCtx* region = frame->dockCtx;
-        if (StrEq(op.name, "select_tab") && group) {
+        if (StrEq(op.name, StrL("select_tab")) && group) {
             element = DockBindTab(group, (int)AsNumber(op, 2, -1), element);
-        } else if (StrEq(op.name, "close_panel") && group) {
+        } else if (StrEq(op.name, StrL("close_panel")) && group) {
 
             const shell::Bridged* value = Arg(op, 2);
             double id = value && value->kind == shell::BridgedKind::Number
@@ -98678,18 +99121,18 @@ static El* WireDockCommands(Ctx* cx, El* element,
                 }
             }
             if (at >= 0) element = DockBindClose(group, at, element);
-        } else if (StrEq(op.name, "toggle_zoom") && group) {
+        } else if (StrEq(op.name, StrL("toggle_zoom")) && group) {
             int active = DockGroupActiveIx(group);
             if (active >= 0) element = DockBindZoom(group, active, element);
-        } else if (StrEq(op.name, "drag_tab") && group) {
+        } else if (StrEq(op.name, StrL("drag_tab")) && group) {
             element =
                 DockBindTitleDrag(group, (int)AsNumber(op, 2, -1), element);
-        } else if (StrEq(op.name, "drop_tab") && group) {
+        } else if (StrEq(op.name, StrL("drop_tab")) && group) {
 
             float at = AsNumber(op, 2, -1);
             element = at < 0 ? DockBindTabRest(group, element)
                              : DockBindTab(group, (int)at, element);
-        } else if (StrEq(op.name, "toggle_dock") && (group || region)) {
+        } else if (StrEq(op.name, StrL("toggle_dock")) && (group || region)) {
             DockPlacement placement = DockPlacementOfName(AsString(op, 1));
             if (group) {
                 element = DockBindToggle(group, placement, element);
@@ -98700,7 +99143,7 @@ static El* WireDockCommands(Ctx* cx, El* element,
                                        (intptr_t)placement));
                 element->TabStop(false);
             }
-        } else if (StrEq(op.name, "resize_dock") && region) {
+        } else if (StrEq(op.name, StrL("resize_dock")) && region) {
             element = DockBindResizeStrip(region, element);
         } else {
             logf(
@@ -99090,11 +99533,12 @@ static El* MaterializeNode(Ctx* cx, ShellRuntime* runtime,
                                  (intptr_t)(uint32_t)retained->id);
         Str nativeId = StrDup(cx->a, fmt("gpui-shell-otp-%u", retained->id));
         element = OtpInput::New(cx, nativeId, retained->otp);
-        const shell::SpecNode* cellStyle = StateNode(specs, node, "cell_style");
+        const shell::SpecNode* cellStyle =
+            StateNode(specs, node, StrL("cell_style"));
         const shell::SpecNode* activeStyle =
-            StateNode(specs, node, "cell_active_style");
+            StateNode(specs, node, StrL("cell_active_style"));
         const shell::SpecNode* caretStyle =
-            StateNode(specs, node, "caret_style");
+            StateNode(specs, node, StrL("caret_style"));
         bool focused =
             !behavior.disabled && FocusHandleIsFocused(cx->win, state->focus);
         int active = focused
@@ -99394,7 +99838,8 @@ static El* MaterializeNode(Ctx* cx, ShellRuntime* runtime,
             retained && retained->kind == shell::RetainedKind::Slider
                 ? retained->slider
                 : nullptr;
-        const shell::SpecNode* range = StateNode(specs, node, "range_style");
+        const shell::SpecNode* range =
+            StateNode(specs, node, StrL("range_style"));
         if (state && range) {
             El* fill = Div(cx->a)->Absolute();
             uint32_t ignored = 0;
@@ -99710,55 +100155,12 @@ static Str Join(Arena* arena, Str left, Str right) {
     return StrBuilderTakeStr(arena, path);
 }
 
-static bool ReadBoundedFile(Str path, int limit, Str* out) {
-    *out = {};
-    if (!path || path.len >= kMaxPath) return false;
-    char name[kMaxPath];
-    memcpy(name, path.s, (size_t)path.len);
-    name[path.len] = 0;
-    FILE* file = fopen(name, "rb");
-    if (!file) return false;
-    Vec<char> bytes;
-    char block[16384];
-    bool ok = true;
-    for (;;) {
-        size_t read = fread(block, 1, sizeof(block), file);
-        if (read > 0) {
-            if (bytes.len > limit - (int)read) {
-                ok = false;
-                break;
-            }
-            memcpy(VecAppendBlanks(bytes, (int)read), block, read);
-        }
-        if (read != sizeof(block)) {
-            if (ferror(file)) ok = false;
-            break;
-        }
-    }
-    fclose(file);
-    if (ok) {
-        int size = bytes.len;
-        char* data = bytes.els;
-        bytes.els = nullptr;
-        bytes.len = 0;
-        bytes.cap = 0;
-        *out = Str(data, size);
-    }
-    VecReset(bytes);
-    return ok;
-}
-
 static const char* JsonTypeName(const JsonValue* value) {
     if (!value) return "missing";
-    switch (value->kind) {
-        case JsonKind::Null: return "null";
-        case JsonKind::Bool: return "a boolean";
-        case JsonKind::Number: return "a number";
-        case JsonKind::String: return "a string";
-        case JsonKind::Array: return "an array";
-        case JsonKind::Object: return "an object";
-    }
-    return "a value";
+    static const char names[] =
+        "null\0a boolean\0a number\0a string\0an array\0an object\0";
+    Str name = SeqStrByIndex(names, (int)value->kind);
+    return name ? name.s : "a value";
 }
 
 static bool HasOnly(const JsonValue* object, const char* const* names,
@@ -99773,25 +100175,23 @@ static bool HasOnly(const JsonValue* object, const char* const* names,
         for (int i = 0; i < count; i++)
             if (StrEq(field->key, names[i])) known = true;
         if (!known) {
-            shell_plugin_SetError(error,
-                     fmt("unknown field `%s` in %s", field->key, where));
+            shell_plugin_SetError(error, fmt("unknown field `%s` in %s", field->key, where));
             return false;
         }
     }
     return true;
 }
 
-static bool RequiredString(const JsonValue* object, const char* field,
-                           Str* out, ShellError* error) {
+static bool RequiredString(const JsonValue* object, const char* field, Str* out,
+                           ShellError* error) {
     const JsonValue* value = JsonGet(object, field);
     if (!value || value->kind == JsonKind::Null) {
         shell_plugin_SetError(error, fmt("missing field `%s`", Str(field)));
         return false;
     }
     if (value->kind != JsonKind::String) {
-        shell_plugin_SetError(error,
-                 fmt("field `%s` must be a string, found %s", Str(field),
-                     Str(JsonTypeName(value))));
+        shell_plugin_SetError(error, fmt("field `%s` must be a string, found %s", Str(field),
+                            Str(JsonTypeName(value))));
         return false;
     }
     if (value->str.len == 0) {
@@ -99826,8 +100226,7 @@ static bool ParseSemver(Str value, int* major, int* minor, int* patch) {
         if (value.s[at] != '-' && value.s[at] != '+') return false;
         for (; at < value.len; at++) {
             char ch = value.s[at];
-            if (!((ch >= 'a' && ch <= 'z') ||
-                  (ch >= 'A' && ch <= 'Z') ||
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
                   (ch >= '0' && ch <= '9') || ch == '-' || ch == '.' ||
                   ch == '+'))
                 return false;
@@ -99843,9 +100242,8 @@ static bool ValidId(Str id) {
     if (!id) return false;
     for (int i = 0; i < id.len; i++) {
         char ch = id.s[i];
-        if (!((ch >= 'a' && ch <= 'z') ||
-              (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' ||
-              ch == '_'))
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+              ch == '.' || ch == '-' || ch == '_'))
             return false;
     }
     char first = id.s[0];
@@ -99862,8 +100260,7 @@ static bool ValidEntry(Str entry) {
         return false;
     int start = 0;
     for (int i = 0; i <= entry.len; i++) {
-        if (i < entry.len && entry.s[i] != '/' && entry.s[i] != '\\')
-            continue;
+        if (i < entry.len && entry.s[i] != '/' && entry.s[i] != '\\') continue;
         if (i - start == 2 && entry.s[start] == '.' &&
             entry.s[start + 1] == '.')
             return false;
@@ -99906,10 +100303,10 @@ static bool ValidatePlaceholders(const Vec<Str>& paths, Str field,
                 return false;
             }
             Str placeholder(value.s + i, end - i + 1);
-            if (!StrEq(placeholder, "${pluginDir}") &&
-                !StrEq(placeholder, "${dataDir}")) {
-                shell_plugin_SetError(error, fmt("unknown placeholder `%s` in %s", placeholder,
-                                    field));
+            if (!StrEq(placeholder, StrL("${pluginDir}")) &&
+                !StrEq(placeholder, StrL("${dataDir}"))) {
+                shell_plugin_SetError(error, fmt("unknown placeholder `%s` in %s",
+                                    placeholder, field));
                 return false;
             }
             i = end;
@@ -99927,7 +100324,7 @@ static Str shell_plugin_TrimAscii(Str value) {
 }
 
 static bool ValidGitRefName(Str reference) {
-    if (!reference || StrEq(reference, "@")) return false;
+    if (!reference || StrEq(reference, StrL("@"))) return false;
     char first = reference.s[0];
     char last = reference.s[reference.len - 1];
     if (first == '.' || first == '/' || last == '.' || last == '/')
@@ -99955,7 +100352,8 @@ static bool ValidGitRefName(Str reference) {
 }
 
 static bool ValidGitHubComponent(Str component) {
-    if (component.len == 0 || StrEq(component, ".") || StrEq(component, ".."))
+    if (component.len == 0 || StrEq(component, StrL(".")) ||
+        StrEq(component, StrL("..")))
         return false;
     for (int i = 0; i < component.len; i++) {
         char c = component.s[i];
@@ -99997,10 +100395,10 @@ static bool ParseGitDependencyString(Arena* arena, Str source, Str* git,
             return false;
         }
         if (!ValidGitRefName(fragment)) {
-            *detail = StrDup(arena,
-                             fmt("string dependency selector `%s` is not a "
-                                 "valid Git ref",
-                                 fragment));
+            *detail =
+                StrDup(arena, fmt("string dependency selector `%s` is not a "
+                                  "valid Git ref",
+                                  fragment));
             return false;
         }
     }
@@ -100026,8 +100424,10 @@ static bool ParseGitDependencyString(Arena* arena, Str source, Str* git,
     for (int i = 0; i <= remote.len; i++) {
         if (i < remote.len && remote.s[i] != '/') continue;
         Str component(remote.s + start, i - start);
-        if (components == 0) owner = component;
-        else if (components == 1) repository = component;
+        if (components == 0)
+            owner = component;
+        else if (components == 1)
+            repository = component;
         components++;
         start = i + 1;
     }
@@ -100051,7 +100451,7 @@ static bool ValidBareModuleName(Str name) {
     for (int i = 0; i <= name.len; i++) {
         if (i < name.len && name.s[i] != '/') continue;
         Str part(name.s + start, i - start);
-        if (part.len == 0 || StrEq(part, "..")) return false;
+        if (part.len == 0 || StrEq(part, StrL(".."))) return false;
         start = i + 1;
     }
     return true;
@@ -100109,9 +100509,9 @@ static bool ValidateDependency(const GitDependency& dependency,
     }
     Str reference = hasBranch ? dependency.branch : dependency.tag;
     if (!ValidGitRefName(reference)) {
-        SetDependencyError(error,
-                           fmt("`%s` selector `%s` is not a valid Git ref name",
-                               name, reference));
+        SetDependencyError(
+            error, fmt("`%s` selector `%s` is not a valid Git ref name", name,
+                       reference));
         return false;
     }
     if (!ValidEntry(dependency.entry)) {
@@ -100196,9 +100596,8 @@ static bool ParseDependencies(const JsonValue* value, PluginManifest* out,
                                    ? StrDup(out->arena, entry->str)
                                    : Str(kGitDependencyDefaultEntry);
         } else {
-            SetDependencyError(
-                error,
-                fmt("`%s` must be a string or an object", dependency.name));
+            SetDependencyError(error, fmt("`%s` must be a string or an object",
+                                          dependency.name));
             return false;
         }
         if (!ValidateDependency(dependency, error)) return false;
@@ -100233,21 +100632,20 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
     if (fs && fs->kind != JsonKind::Null) {
         static const char* fsFields[] = {"read", "write", "execute"};
         if (!HasOnly(fs, fsFields, 3, StrL("capabilities.fs"), error) ||
-            !ParseStringArray(out->arena, JsonGet(fs, "read"),
-                              &out->readRoots,
+            !ParseStringArray(out->arena, JsonGet(fs, "read"), &out->readRoots,
                               StrL("capabilities.fs.read"), error) ||
             !ParseStringArray(out->arena, JsonGet(fs, "write"),
-                              &out->writeRoots,
-                              StrL("capabilities.fs.write"), error))
+                              &out->writeRoots, StrL("capabilities.fs.write"),
+                              error))
             return false;
-        if (!ValidatePlaceholders(out->readRoots,
-                                  StrL("capabilities.fs.read"), error) ||
+        if (!ValidatePlaceholders(out->readRoots, StrL("capabilities.fs.read"),
+                                  error) ||
             !ValidatePlaceholders(out->writeRoots,
                                   StrL("capabilities.fs.write"), error))
             return false;
         const JsonValue* execute = JsonGet(fs, "execute");
         if (execute && execute->kind == JsonKind::String &&
-            StrEq(execute->str, "*")) {
+            StrEq(execute->str, StrL("*"))) {
             out->executeUnrestricted = true;
         } else if (execute &&
                    !ParseStringArray(out->arena, execute, &out->execute,
@@ -100258,8 +100656,8 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
     const JsonValue* network = JsonGet(value, "network");
     if (network && network->kind != JsonKind::Null) {
         static const char* networkFields[] = {"hosts", "http"};
-        if (!HasOnly(network, networkFields, 2,
-                     StrL("capabilities.network"), error) ||
+        if (!HasOnly(network, networkFields, 2, StrL("capabilities.network"),
+                     error) ||
             !ParseStringArray(out->arena, JsonGet(network, "hosts"),
                               &out->networkHosts,
                               StrL("capabilities.network.hosts"), error))
@@ -100268,7 +100666,9 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
             Str host = out->networkHosts[i];
             if (!host || StrFind(host, StrL("://")) >= 0 ||
                 StrFind(host, StrL("/")) >= 0) {
-                shell_plugin_SetError(error, fmt("network host `%s` must be a hostname without a scheme or path", host));
+                shell_plugin_SetError(error, fmt("network host `%s` must be a hostname "
+                                    "without a scheme or path",
+                                    host));
                 return false;
             }
         }
@@ -100280,54 +100680,58 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
         for (const JsonValue* rule = http ? http->first : nullptr; rule;
              rule = rule->next) {
             static const char* httpFields[] = {
-                "scheme", "host", "port", "methods", "paths",
-                "path_prefixes"};
+                "scheme", "host", "port", "methods", "paths", "path_prefixes"};
             if (!HasOnly(rule, httpFields, 6,
                          StrL("capabilities.network.http entry"), error))
                 return false;
             auto* parsed = ArenaNew<PluginHttpGrant>(out->arena);
             const JsonValue* scheme = JsonGet(rule, "scheme");
-            parsed->scheme = StrDup(out->arena,
-                                    scheme && scheme->kind == JsonKind::String
-                                        ? scheme->str
-                                        : StrL("https"));
+            parsed->scheme =
+                StrDup(out->arena, scheme && scheme->kind == JsonKind::String
+                                       ? scheme->str
+                                       : StrL("https"));
             Str host;
             if (!RequiredString(rule, "host", &host, error)) return false;
             parsed->host = StrDup(out->arena, host);
-            if ((!StrEq(parsed->scheme, "http") &&
-                 !StrEq(parsed->scheme, "https")) ||
+            if ((!StrEq(parsed->scheme, StrL("http")) &&
+                 !StrEq(parsed->scheme, StrL("https"))) ||
                 StrFind(host, StrL("://")) >= 0 ||
                 StrFind(host, StrL("/")) >= 0) {
-                shell_plugin_SetError(error, StrL("invalid capabilities.network.http scheme or host"));
+                shell_plugin_SetError(
+                    error,
+                    StrL("invalid capabilities.network.http scheme or host"));
                 return false;
             }
             const JsonValue* port = JsonGet(rule, "port");
             if (port) {
                 if (port->kind != JsonKind::Number || port->num < 1 ||
                     port->num > 65535 || port->num != (int)port->num) {
-                    shell_plugin_SetError(error, StrL("capabilities.network.http port must be 1..65535"));
+                    shell_plugin_SetError(
+                        error,
+                        StrL(
+                            "capabilities.network.http port must be 1..65535"));
                     return false;
                 }
                 parsed->hasPort = true;
                 parsed->port = (uint16_t)port->num;
             }
-            if (!ParseStringArray(out->arena, JsonGet(rule, "methods"),
-                                  &parsed->methods,
-                                  StrL("capabilities.network.http.methods"),
-                                  error, true) ||
+            if (!ParseStringArray(
+                    out->arena, JsonGet(rule, "methods"), &parsed->methods,
+                    StrL("capabilities.network.http.methods"), error, true) ||
                 parsed->methods.len == 0 ||
-                !ParseStringArray(out->arena, JsonGet(rule, "paths"),
-                                  &parsed->paths,
-                                  StrL("capabilities.network.http.paths"), error) ||
-                !ParseStringArray(out->arena,
-                                  JsonGet(rule, "path_prefixes"),
-                                  &parsed->pathPrefixes,
-                                  StrL("capabilities.network.http.path_prefixes"), error))
+                !ParseStringArray(
+                    out->arena, JsonGet(rule, "paths"), &parsed->paths,
+                    StrL("capabilities.network.http.paths"), error) ||
+                !ParseStringArray(
+                    out->arena, JsonGet(rule, "path_prefixes"),
+                    &parsed->pathPrefixes,
+                    StrL("capabilities.network.http.path_prefixes"), error))
                 return false;
             for (int i = 0; i < parsed->methods.len; i++) {
-                if (!StrEq(parsed->methods[i], "GET") &&
-                    !StrEq(parsed->methods[i], "POST")) {
-                    shell_plugin_SetError(error, fmt("invalid HTTP method `%s`", parsed->methods[i]));
+                if (!StrEq(parsed->methods[i], StrL("GET")) &&
+                    !StrEq(parsed->methods[i], StrL("POST"))) {
+                    shell_plugin_SetError(error, fmt("invalid HTTP method `%s`",
+                                        parsed->methods[i]));
                     return false;
                 }
             }
@@ -100335,7 +100739,8 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
                 Vec<Str>& paths = pass ? parsed->pathPrefixes : parsed->paths;
                 for (int i = 0; i < paths.len; i++) {
                     if (!paths[i] || paths[i].s[0] != '/') {
-                        shell_plugin_SetError(error, StrL("HTTP grant paths must start with `/`"));
+                        shell_plugin_SetError(error,
+                                 StrL("HTTP grant paths must start with `/`"));
                         return false;
                     }
                 }
@@ -100362,12 +100767,13 @@ static bool ParseCapabilities(const JsonValue* value, PluginManifest* out,
     const JsonValue* process = JsonGet(value, "process");
     if (process && process->kind != JsonKind::Null) {
         static const char* processFields[] = {"exit"};
-        if (!HasOnly(process, processFields, 1,
-                     StrL("capabilities.process"), error))
+        if (!HasOnly(process, processFields, 1, StrL("capabilities.process"),
+                     error))
             return false;
         const JsonValue* exit = JsonGet(process, "exit");
         if (exit && exit->kind != JsonKind::Bool) {
-            shell_plugin_SetError(error, StrL("capabilities.process.exit must be a boolean"));
+            shell_plugin_SetError(error,
+                     StrL("capabilities.process.exit must be a boolean"));
             return false;
         }
         out->exit = exit && exit->b;
@@ -100403,9 +100809,9 @@ bool PluginManifestParse(Str source, PluginManifest* out, ShellError* error) {
         shell_plugin_SetError(error, StrL("the manifest is not valid JSON"));
         return false;
     }
-    static const char* fields[] = {"id",    "name",         "version",
-                                   "shell-version", "entry", "dependencies",
-                                   "capabilities"};
+    static const char* fields[] = {
+        "id",    "name",         "version",     "shell-version",
+        "entry", "dependencies", "capabilities"};
     if (!HasOnly(root, fields, 7, StrL("the manifest"), error)) return false;
     Str id, name, entry;
     if (!RequiredString(root, "id", &id, error) ||
@@ -100413,11 +100819,16 @@ bool PluginManifestParse(Str source, PluginManifest* out, ShellError* error) {
         !RequiredString(root, "entry", &entry, error))
         return false;
     if (!ValidId(id)) {
-        shell_plugin_SetError(error, fmt("invalid `id` `%s`: use lowercase letters, digits, `.`, `-` and `_`, beginning and ending with a letter or digit", id));
+        shell_plugin_SetError(error,
+                 fmt("invalid `id` `%s`: use lowercase letters, digits, `.`, "
+                     "`-` and `_`, beginning and ending with a letter or digit",
+                     id));
         return false;
     }
     if (!ValidEntry(entry)) {
-        shell_plugin_SetError(error, fmt("invalid `entry` `%s`: expected a path inside the plugin directory", entry));
+        shell_plugin_SetError(error, fmt("invalid `entry` `%s`: expected a path inside the "
+                            "plugin directory",
+                            entry));
         return false;
     }
     const JsonValue* version = JsonGet(root, "version");
@@ -100425,9 +100836,11 @@ bool PluginManifestParse(Str source, PluginManifest* out, ShellError* error) {
                           ? JsonString(version)
                           : StrL("unknown");
     if ((version && version->kind != JsonKind::Null && !versionText) ||
-        (versionText && !StrEq(versionText, "unknown") &&
+        (versionText && !StrEq(versionText, StrL("unknown")) &&
          !ParseSemver(versionText, nullptr, nullptr, nullptr))) {
-        shell_plugin_SetError(error, fmt("invalid `version` `%s`: expected a semantic version", versionText));
+        shell_plugin_SetError(error,
+                 fmt("invalid `version` `%s`: expected a semantic version",
+                     versionText));
         return false;
     }
     const JsonValue* shellVersion = JsonGet(root, "shell-version");
@@ -100436,10 +100849,12 @@ bool PluginManifestParse(Str source, PluginManifest* out, ShellError* error) {
                        : Str(kShellVersion);
     int requiredMajor = 0, requiredMinor = 0, requiredPatch = 0;
     int runtimeMajor = 0, runtimeMinor = 0, runtimePatch = 0;
-    if (!required ||
-        !ParseSemver(required, &requiredMajor, &requiredMinor,
-                     &requiredPatch)) {
-        shell_plugin_SetError(error, fmt("invalid `shell-version` `%s`: expected a semantic version", required));
+    if (!required || !ParseSemver(required, &requiredMajor, &requiredMinor,
+                                  &requiredPatch)) {
+        shell_plugin_SetError(
+            error,
+            fmt("invalid `shell-version` `%s`: expected a semantic version",
+                required));
         return false;
     }
     ParseSemver(Str(kShellVersion), &runtimeMajor, &runtimeMinor,
@@ -100447,13 +100862,15 @@ bool PluginManifestParse(Str source, PluginManifest* out, ShellError* error) {
     bool line = requiredMajor == 0
                     ? runtimeMajor == 0 && runtimeMinor == requiredMinor
                     : runtimeMajor == requiredMajor;
-    bool oldEnough = runtimeMajor > requiredMajor ||
-                     (runtimeMajor == requiredMajor &&
-                      (runtimeMinor > requiredMinor ||
-                       (runtimeMinor == requiredMinor &&
-                        runtimePatch >= requiredPatch)));
+    bool oldEnough =
+        runtimeMajor > requiredMajor ||
+        (runtimeMajor == requiredMajor &&
+         (runtimeMinor > requiredMinor ||
+          (runtimeMinor == requiredMinor && runtimePatch >= requiredPatch)));
     if (!line || !oldEnough) {
-        shell_plugin_SetError(error, fmt("this application requires gpui-shell %s, but this runtime is %s and is not compatible", required, Str(kShellVersion)));
+        shell_plugin_SetError(error, fmt("this application requires gpui-shell %s, but this "
+                            "runtime is %s and is not compatible",
+                            required, Str(kShellVersion)));
         return false;
     }
     out->id = StrDup(out->arena, id);
@@ -100466,12 +100883,11 @@ bool PluginManifestParse(Str source, PluginManifest* out, ShellError* error) {
     return ParseCapabilities(JsonGet(root, "capabilities"), out, error);
 }
 
-bool PluginManifestRead(Str directory, PluginManifest* out,
-                        ShellError* error) {
+bool PluginManifestRead(Str directory, PluginManifest* out, ShellError* error) {
     Arena* scratch = ArenaNew();
     Str path = Join(scratch, directory, Str(kShellManifestFile));
-    Str source;
-    if (!ReadBoundedFile(path, kShellMaxManifestBytes, &source)) {
+    TempStr source = ReadBoundedFileTemp(path, kShellMaxManifestBytes);
+    if (!source.s) {
         shell_plugin_SetError(error, fmt("%s: cannot read the manifest", path));
         ArenaDelete(scratch);
         return false;
@@ -100482,7 +100898,6 @@ bool PluginManifestRead(Str directory, PluginManifest* out,
         error->message = StrDup(fmt("%s: %s", path, old));
         StrFree(old);
     }
-    StrFree(source);
     ArenaDelete(scratch);
     return ok;
 }
@@ -100491,10 +100906,14 @@ void PluginManifestSchema(StrBuilder* out) {
     out->Append(StrL(
         "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\","
         "\"title\":\"gpui-shell application manifest\",\"type\":\"object\","
-        "\"additionalProperties\":false,\"required\":[\"id\",\"name\",\"entry\"],"
-        "\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},"
-        "\"version\":{\"type\":\"string\"},\"shell-version\":{\"type\":\"string\"},"
-        "\"entry\":{\"type\":\"string\"},\"dependencies\":{\"type\":\"object\"},"
+        "\"additionalProperties\":false,\"required\":[\"id\",\"name\","
+        "\"entry\"],"
+        "\"properties\":{\"id\":{\"type\":\"string\"},\"name\":{\"type\":"
+        "\"string\"},"
+        "\"version\":{\"type\":\"string\"},\"shell-version\":{\"type\":"
+        "\"string\"},"
+        "\"entry\":{\"type\":\"string\"},\"dependencies\":{\"type\":\"object\"}"
+        ","
         "\"capabilities\":{\"type\":\"object\"}}}"));
 }
 
@@ -100509,11 +100928,11 @@ static Str ExpandPath(Str raw, Str plugin, Str data) {
     StrBuilder out;
     for (int i = 0; i < raw.len;) {
         if (i + 12 <= raw.len &&
-            StrEq(Str(raw.s + i, 12), "${pluginDir}")) {
+            StrEq(Str(raw.s + i, 12), StrL("${pluginDir}"))) {
             out.Append(plugin);
             i += 12;
         } else if (i + 10 <= raw.len &&
-                   StrEq(Str(raw.s + i, 10), "${dataDir}")) {
+                   StrEq(Str(raw.s + i, 10), StrL("${dataDir}"))) {
             out.Append(data);
             i += 10;
         } else {
@@ -100560,8 +100979,7 @@ Capabilities PluginManifest::Grant(Str pluginDirectory,
         if (file->hasPort) grant.Port(file->port);
         for (int j = 0; j < file->methods.len; j++)
             grant.AddMethod(file->methods[j]);
-        for (int j = 0; j < file->paths.len; j++)
-            grant.AddPath(file->paths[j]);
+        for (int j = 0; j < file->paths.len; j++) grant.AddPath(file->paths[j]);
         for (int j = 0; j < file->pathPrefixes.len; j++)
             grant.AddPathPrefix(file->pathPrefixes[j]);
         result.AddHttpRequest(grant);
@@ -100575,9 +100993,7 @@ Capabilities PluginManifest::Grant(Str pluginDirectory,
 static int ComparePaths(const void* left, const void* right) {
     const Str* a = (const Str*)left;
     const Str* b = (const Str*)right;
-    int n = a->len < b->len ? a->len : b->len;
-    int compared = n ? memcmp(a->s, b->s, (size_t)n) : 0;
-    return compared ? compared : a->len - b->len;
+    return StrCmp(*a, *b);
 }
 
 Str ShellDataHome() {
@@ -100588,10 +101004,12 @@ Str ShellDataHome() {
     if (appData && *appData) return StrDup(Str(appData));
 #endif
     const char* user = getenv(GPUI_OS_WINDOWS ? "USERPROFILE" : "HOME");
-    char cwd[kMaxPath] = {};
+    TempStr cwd;
     if (!user || !*user) {
-        PlatGetCwd(cwd, kMaxPath);
-        user = cwd;
+        cwd = AllocStrTemp(kMaxPath - 1);
+        cwd.s[0] = 0;
+        PlatGetCwd(cwd.s, cwd.len + 1);
+        user = cwd.s;
     }
     StrBuilder path;
     path.Append(Str(user));
@@ -100612,8 +101030,7 @@ Str ShellBundleIdForPath(Str root) {
         hash *= 0x100000001b3ull;
     }
     int start = root.len;
-    while (start > 0 && root.s[start - 1] != '/' &&
-           root.s[start - 1] != '\\')
+    while (start > 0 && root.s[start - 1] != '/' && root.s[start - 1] != '\\')
         start--;
     Str name(root.s + start, root.len - start);
     StrBuilder safe;
@@ -100621,16 +101038,15 @@ Str ShellBundleIdForPath(Str root) {
     for (int i = 0; i < name.len; i++) {
         char ch = name.s[i];
         if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + ('a' - 'A'));
-        bool allowed = (ch >= 'a' && ch <= 'z') ||
-                       (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' ||
-                       ch == '_';
+        bool allowed = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+                       ch == '.' || ch == '-' || ch == '_';
         if (!allowed) ch = '-';
         if (ch == '.' && previousDot) ch = '-';
         safe.AppendChar(ch);
         previousDot = ch == '.';
     }
-    while (safe.len > 0 && (safe.els[0] == '.' || safe.els[0] == '-' ||
-                            safe.els[0] == '_')) {
+    while (safe.len > 0 &&
+           (safe.els[0] == '.' || safe.els[0] == '-' || safe.els[0] == '_')) {
         memmove(safe.els, safe.els + 1, (size_t)--safe.len);
     }
     while (safe.len > 0 &&
@@ -100638,10 +101054,7 @@ Str ShellBundleIdForPath(Str root) {
             safe.els[safe.len - 1] == '_'))
         safe.len--;
     if (safe.len == 0) safe.Append(StrL("app"));
-    char digest[24];
-    snprintf(digest, sizeof(digest), "-%016llx",
-             (unsigned long long)hash);
-    safe.Append(Str(digest));
+    safe.Append(fmt("-%016llx", (unsigned long long)hash));
     return safe.TakeStr();
 }
 
@@ -100681,8 +101094,7 @@ static void FreePlugin(Plugin* plugin, App* app) {
 }
 
 PluginManager::~PluginManager() {
-    for (int i = 0; i < loaded.len; i++)
-        FreePlugin(loaded[i], loaded[i]->app);
+    for (int i = 0; i < loaded.len; i++) FreePlugin(loaded[i], loaded[i]->app);
     VecReset(loaded);
     ClearCatalog();
     for (int i = 0; i < directories.len; i++) StrFree(directories[i]);
@@ -100715,10 +101127,8 @@ static bool ManifestAt(Str root) {
     Str manifest = Join(arena, root, Str(kShellManifestFile));
     bool found = false;
     if (manifest.len < kMaxPath) {
-        char path[kMaxPath];
-        memcpy(path, manifest.s, (size_t)manifest.len);
-        path[manifest.len] = 0;
-        found = PlatFileExists(path);
+        TempStr path = StrDupTemp(manifest);
+        found = PlatFileExists(path.s);
     }
     ArenaDelete(arena);
     return found;
@@ -100734,11 +101144,9 @@ const Vec<PluginDiscovery>& PluginManager::Discover() {
             continue;
         }
         if (directories[d].len >= kMaxPath) continue;
-        char directory[kMaxPath];
-        memcpy(directory, directories[d].s, (size_t)directories[d].len);
-        directory[directories[d].len] = 0;
+        TempStr directory = StrDupTemp(directories[d]);
         DirEntry* entries = AllocArray<DirEntry>(4096);
-        int count = entries ? PlatListDir(directory, entries, 4096) : 0;
+        int count = entries ? PlatListDir(directory.s, entries, 4096) : 0;
         Vec<Str> directoryRoots;
         for (int i = 0; i < count; i++) {
             if (!entries[i].isDir || entries[i].isSymlink) continue;
@@ -100771,7 +101179,8 @@ const Vec<PluginDiscovery>& PluginManager::Discover() {
             for (int j = 0; j < catalog.len; j++) {
                 if (catalog[j].manifest &&
                     StrEq(catalog[j].manifest->id, manifest->id)) {
-                    found.error = StrDup(fmt("`%s` is already provided by %s", manifest->id, catalog[j].root));
+                    found.error = StrDup(fmt("`%s` is already provided by %s",
+                                             manifest->id, catalog[j].root));
                     delete manifest;
                     manifest = nullptr;
                     break;
@@ -100797,7 +101206,8 @@ bool PluginManager::Load(ShellRuntime* runtime, Str id,
                          Window* window, App* app, ShellError* error) {
     ShellErrorClear(error);
     if (!discovered) {
-        shell_plugin_SetError(error, StrL("plugin discovery has not run; call Discover first"));
+        shell_plugin_SetError(error,
+                 StrL("plugin discovery has not run; call Discover first"));
         return false;
     }
     if (Loaded(id)) {
@@ -100813,7 +101223,8 @@ bool PluginManager::Load(ShellRuntime* runtime, Str id,
         return false;
     }
     if (authorize && !authorize(selected->manifest, authorizeData)) {
-        shell_plugin_SetError(error, fmt("capabilities for plugin `%s` were not approved", id));
+        shell_plugin_SetError(error,
+                 fmt("capabilities for plugin `%s` were not approved", id));
         return false;
     }
     Arena* scratch = ArenaNew();
@@ -100835,13 +101246,12 @@ bool PluginManager::Load(ShellRuntime* runtime, Str id,
     if (capabilities.HasStorage()) {
         Str storageError;
         if (!PolicySetStoragePath(policy, store, &storageError)) {
-            log(fmt("storage is unavailable for `%s`: %s", id,
-                    storageError));
+            log(fmt("storage is unavailable for `%s`: %s", id, storageError));
             StrFree(storageError);
         }
     }
-    ViewType* type = runtime->LoadApp(selected->root,
-                                      selected->manifest->entry, policy, error);
+    ViewType* type = runtime->LoadApp(selected->root, selected->manifest->entry,
+                                      policy, error);
     if (!type) {
         PolicyRelease(policy);
         ArenaDelete(scratch);
@@ -100850,8 +101260,8 @@ bool PluginManager::Load(ShellRuntime* runtime, Str id,
     Entity<ScriptView> view = ScriptView::New(app, runtime, type, policy);
     ViewTypeRelease(type);
     ScriptView* state = view.Get(app);
-    state->object = runtime->Instantiate(state->type, window, app, policy,
-                                         error, view.id);
+    state->object =
+        runtime->Instantiate(state->type, window, app, policy, error, view.id);
     if (!state->object) {
         EntityDrop(app, view.id);
         PolicyRelease(policy);
@@ -100895,9 +101305,8 @@ const Plugin* PluginManager::Loaded(Str id) const {
 }
 
 Entity<ShellRoot> ShellLoadApplication(ShellRuntime* runtime, Str directory,
-                                       Window* window, App* app,
-                                       Policy* policy, ShellError* error,
-                                       Str* resolvedEntry) {
+                                       Window* window, App* app, Policy* policy,
+                                       ShellError* error, Str* resolvedEntry) {
     ShellErrorClear(error);
     Str entry = StrL("main.js");
     PluginManifest manifest;
@@ -100928,8 +101337,8 @@ Entity<ShellRoot> ShellLoadApplication(ShellRuntime* runtime, Str directory,
 Str ShellCheckApplication(Arena* arena, ShellRuntime* runtime, Str directory,
                           Window* window, App* app, Policy* policy,
                           ShellError* error) {
-    Entity<ShellRoot> root = ShellLoadApplication(runtime, directory, window,
-                                                   app, policy, error);
+    Entity<ShellRoot> root =
+        ShellLoadApplication(runtime, directory, window, app, policy, error);
     if (!root.IsValid()) return {};
     ShellRoot* shellRoot = root.Get(app);
     ScriptView* view = shellRoot && shellRoot->content.IsValid()
@@ -101431,13 +101840,9 @@ static ShellRootWindowState* RootWindowState(Window* window) {
 }
 
 const char* ToastLevelName(ToastLevel level) {
-    switch (level) {
-        case ToastLevel::Info: return "info";
-        case ToastLevel::Success: return "success";
-        case ToastLevel::Warning: return "warning";
-        case ToastLevel::Error: return "error";
-    }
-    return "info";
+    static const char names[] = "info\0success\0warning\0error\0";
+    Str name = SeqStrByIndex(names, (int)level);
+    return name ? name.s : names;
 }
 
 static const char kFpsAnchorNames[] =
@@ -101449,21 +101854,21 @@ SeqStrings FpsAnchorNames() {
 }
 
 bool FpsAnchorFromName(Str name, FpsAnchor* out) {
-    if (StrEq(name, "top_left"))
+    if (StrEq(name, StrL("top_left")))
         *out = FpsAnchor::TopLeft;
-    else if (StrEq(name, "top_right"))
+    else if (StrEq(name, StrL("top_right")))
         *out = FpsAnchor::TopRight;
-    else if (StrEq(name, "bottom_left"))
+    else if (StrEq(name, StrL("bottom_left")))
         *out = FpsAnchor::BottomLeft;
-    else if (StrEq(name, "bottom_right"))
+    else if (StrEq(name, StrL("bottom_right")))
         *out = FpsAnchor::BottomRight;
-    else if (StrEq(name, "top_center"))
+    else if (StrEq(name, StrL("top_center")))
         *out = FpsAnchor::TopCenter;
-    else if (StrEq(name, "bottom_center"))
+    else if (StrEq(name, StrL("bottom_center")))
         *out = FpsAnchor::BottomCenter;
-    else if (StrEq(name, "left_center"))
+    else if (StrEq(name, StrL("left_center")))
         *out = FpsAnchor::LeftCenter;
-    else if (StrEq(name, "right_center"))
+    else if (StrEq(name, StrL("right_center")))
         *out = FpsAnchor::RightCenter;
     else
         return false;
@@ -101471,11 +101876,16 @@ bool FpsAnchorFromName(Str name, FpsAnchor* out) {
 }
 
 bool ToastLevelFromName(Str name, ToastLevel* out) {
-    if (StrEq(name, "info")) *out = ToastLevel::Info;
-    else if (StrEq(name, "success")) *out = ToastLevel::Success;
-    else if (StrEq(name, "warning")) *out = ToastLevel::Warning;
-    else if (StrEq(name, "error")) *out = ToastLevel::Error;
-    else return false;
+    if (StrEq(name, StrL("info")))
+        *out = ToastLevel::Info;
+    else if (StrEq(name, StrL("success")))
+        *out = ToastLevel::Success;
+    else if (StrEq(name, StrL("warning")))
+        *out = ToastLevel::Warning;
+    else if (StrEq(name, StrL("error")))
+        *out = ToastLevel::Error;
+    else
+        return false;
     return true;
 }
 
@@ -101573,8 +101983,8 @@ struct ShellDialogLayer {
             return;
         WindowLayers* layers = WindowLayersOf(cx->win);
         bool topmost = layers && layers->dialogs.len > 0 &&
-                       layers->dialogs[layers->dialogs.len - 1].view ==
-                           cx->self;
+                       layers->dialogs[layers->dialogs.len - 1]
+                               .view == cx->self;
         if (!topmost) return;
         WindowStopPropagation(cx);
         Close(self, cx, event);
@@ -101585,18 +101995,19 @@ struct ShellDialogLayer {
         const Theme& theme = ThemeNow(cx->app);
         WindowLayers* layers = WindowLayersOf(cx->win);
         bool topmost = layers && layers->dialogs.len > 0 &&
-                       layers->dialogs[layers->dialogs.len - 1].view ==
-                           cx->self;
+                       layers->dialogs[layers->dialogs.len - 1]
+                               .view == cx->self;
         El* backdrop = nullptr;
         if (topmost) {
-            backdrop = DialogBackdrop::New(cx)
-                           ->Bg(Rgba8(0, 0, 0, 128))
-                           ->OnMouseDown(Listen(cx, &ShellDialogLayer::OnBackdrop));
+            backdrop =
+                DialogBackdrop::New(cx)
+                    ->Bg(Rgba8(0, 0, 0, 128))
+                    ->OnMouseDown(Listen(cx, &ShellDialogLayer::OnBackdrop));
         }
-        El* child = self->content.IsValid()
-                        ? EntityRender(cx->app, cx->win, cx->a,
-                                       self->content.id)
-                        : nullptr;
+        El* child =
+            self->content.IsValid()
+                ? EntityRender(cx->app, cx->win, cx->a, self->content.id)
+                : nullptr;
         El* surface = Div(cx->a)
                           ->FlexCol()
                           ->Bg(theme.popover)
@@ -101648,7 +102059,8 @@ bool ShellRootCloseDialog(Ctx* cx) {
     if (!cx || !ShellRootOf(cx->win, cx->app)) return false;
     WindowLayers* layers = WindowLayersOf(cx->win);
     if (!layers || layers->dialogs.len == 0) return false;
-    Entity<ShellDialogLayer> layer{layers->dialogs[layers->dialogs.len - 1].view};
+    Entity<ShellDialogLayer> layer{layers->dialogs[layers->dialogs.len - 1]
+                                       .view};
     ShellDialogLayer* state = layer.Get(cx);
     FocusHandle restore = state ? state->restore : FocusHandle{};
     WindowCloseDialog(cx);
@@ -101661,8 +102073,8 @@ int ShellRootCloseAllDialogs(Ctx* cx) {
     WindowLayers* layers = WindowLayersOf(cx->win);
     int count = layers ? layers->dialogs.len : 0;
     if (count == 0) return 0;
-    ShellDialogLayer* first =
-        Entity<ShellDialogLayer>{layers->dialogs[0].view}.Get(cx);
+    ShellDialogLayer* first = Entity<ShellDialogLayer>{layers->dialogs[0].view}
+                                  .Get(cx);
     FocusHandle restore = first ? first->restore : FocusHandle{};
     WindowCloseAllDialogs(cx);
     RestoreOverlayFocus(cx, restore);
@@ -101694,10 +102106,10 @@ struct ShellSheetLayer {
     static El* Render(ShellSheetLayer* self, Ctx* cx) {
         RebuildScriptOverlay(cx, self->content);
         const Theme& theme = ThemeNow(cx->app);
-        El* child = self->content.IsValid()
-                        ? EntityRender(cx->app, cx->win, cx->a,
-                                       self->content.id)
-                        : nullptr;
+        El* child =
+            self->content.IsValid()
+                ? EntityRender(cx->app, cx->win, cx->a, self->content.id)
+                : nullptr;
         WinSize size = WindowSize(cx->win);
         El* surface = Div(cx->a)
                           ->FlexCol()
@@ -101723,8 +102135,13 @@ struct ShellSheetLayer {
         }
         return Sheet::New(cx)
             ->Trap(StrL("shell-sheet"))
-            ->Overlay(Div(cx->a)->Absolute()->Top(0)->Left(0)->Right(0)->Bottom(0)->Bg(
-                Rgba8(0, 0, 0, 128)))
+            ->Overlay(Div(cx->a)
+                          ->Absolute()
+                          ->Top(0)
+                          ->Left(0)
+                          ->Right(0)
+                          ->Bottom(0)
+                          ->Bg(Rgba8(0, 0, 0, 128)))
             ->Surface(surface)
             ->RequestClose(Listen(cx, &ShellSheetLayer::Close))
             ->IntoEl()
@@ -101739,8 +102156,8 @@ bool ShellRootOpenSheet(Ctx* cx, Entity<ScriptView> content,
     FocusHandle restore = WindowFocused(cx->win);
     WindowLayers* layers = WindowLayersOf(cx->win);
     if (layers && layers->hasSheet) {
-        ShellSheetLayer* current =
-            Entity<ShellSheetLayer>{layers->sheet.view}.Get(cx);
+        ShellSheetLayer* current = Entity<ShellSheetLayer>{layers->sheet.view}
+                                       .Get(cx);
         if (current) restore = current->restore;
     }
     Entity<ShellSheetLayer> layer = EntityNew<ShellSheetLayer>(cx->app);
@@ -101765,8 +102182,8 @@ bool ShellRootCloseSheet(Ctx* cx) {
     if (!cx || !ShellRootOf(cx->win, cx->app)) return false;
     WindowLayers* layers = WindowLayersOf(cx->win);
     if (!layers || !layers->hasSheet) return false;
-    ShellSheetLayer* state =
-        Entity<ShellSheetLayer>{layers->sheet.view}.Get(cx);
+    ShellSheetLayer* state = Entity<ShellSheetLayer>{layers->sheet.view}
+                                 .Get(cx);
     FocusHandle restore = state ? state->restore : FocusHandle{};
     WindowCloseSheet(cx);
     RestoreOverlayFocus(cx, restore);
@@ -101779,10 +102196,14 @@ bool ShellRootHasSheet(Ctx* cx) {
 
 static component::NotificationType NotificationTypeFor(ToastLevel level) {
     switch (level) {
-        case ToastLevel::Info: return component::NotificationType::Info;
-        case ToastLevel::Success: return component::NotificationType::Success;
-        case ToastLevel::Warning: return component::NotificationType::Warning;
-        case ToastLevel::Error: return component::NotificationType::Error;
+        case ToastLevel::Info:
+            return component::NotificationType::Info;
+        case ToastLevel::Success:
+            return component::NotificationType::Success;
+        case ToastLevel::Warning:
+            return component::NotificationType::Warning;
+        case ToastLevel::Error:
+            return component::NotificationType::Error;
     }
     return component::NotificationType::Info;
 }
@@ -101815,8 +102236,7 @@ bool ShellRootPushToast(Ctx* cx, const ToastRequest& request) {
     Str id = request.id;
     if (!request.hasId) {
         root->nextToastOrdinal++;
-        id = StrDup(cx->a,
-                    fmt("shell-toast-%llu", root->nextToastOrdinal));
+        id = StrDup(cx->a, fmt("shell-toast-%llu", root->nextToastOrdinal));
     }
     component::Notification toast = component::Notification::New();
     toast.Id1<ShellRoot>(id)
@@ -101845,8 +102265,7 @@ bool ShellRootRemoveToast(Ctx* cx, Str id) {
             break;
         }
     }
-    if (found)
-        WindowRemoveNotification1<ShellRoot>(cx, key);
+    if (found) WindowRemoveNotification1<ShellRoot>(cx, key);
     return found;
 }
 
@@ -101855,9 +102274,8 @@ void ShellRootClearToasts(Ctx* cx) {
 }
 
 int ShellRootToastCount(Ctx* cx) {
-    return cx && ShellRootOf(cx->win, cx->app)
-               ? WindowNotificationCount(cx)
-               : 0;
+    return cx && ShellRootOf(cx->win, cx->app) ? WindowNotificationCount(cx)
+                                               : 0;
 }
 
 }
@@ -102958,58 +103376,26 @@ static bool Await(ShellRuntimeImpl* impl, JSValueConst value,
     return true;
 }
 
-static bool ReadFileBounded(Str path, Str* source, ShellError* error) {
-    if (source) *source = {};
-    char name[kMaxPath] = {};
+static TempStr ReadModuleFileTemp(Str path, ShellError* error) {
     if (path.len <= 0 || path.len >= kMaxPath) {
         shell_runtime_SetError(error, StrL("module path is empty or too long"));
-        return false;
+        return {};
     }
-    memcpy(name, path.s, (size_t)path.len);
-    FILE* file = fopen(name, "rb");
-    if (!file) {
+    TempStr source = ReadBoundedFileTemp(path, (int)kMaxModuleBytes);
+    if (!source.s) {
         shell_runtime_SetError(error, fmt("reading module `%s` failed", path));
-        return false;
     }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        shell_runtime_SetError(error, fmt("reading module `%s` failed", path));
-        return false;
-    }
-    long size = ftell(file);
-    if (size < 0 || (uint64_t)size > kMaxModuleBytes ||
-        fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        shell_runtime_SetError(error, fmt("module `%s` is over the 8 MiB limit", path));
-        return false;
-    }
-    char* bytes = (char*)Alloc(nullptr, (int)size + 1);
-    if (!bytes) {
-        fclose(file);
-        shell_runtime_SetError(error, fmt("allocating %ld bytes for module `%s` failed",
-                            size + 1, path));
-        return false;
-    }
-    size_t got = fread(bytes, 1, (size_t)size, file);
-    fclose(file);
-    if (got != (size_t)size) {
-        Free(nullptr, bytes);
-        shell_runtime_SetError(error, fmt("reading module `%s` failed", path));
-        return false;
-    }
-    bytes[size] = 0;
-    if (source) *source = Str(bytes, (int)size);
-    return true;
+    return source;
 }
 
-static bool IsBuiltin(const char* name) {
-    return strcmp(name, "gpui") == 0 || strcmp(name, "gpui-base") == 0 ||
-           strcmp(name, "gpui-shell") == 0 || strcmp(name, "gpui-fps") == 0 ||
-           strcmp(name, "buffer") == 0 || strcmp(name, "console") == 0 ||
-           strcmp(name, "crypto") == 0 || strcmp(name, "fs/promises") == 0 ||
-           strcmp(name, "os") == 0 || strcmp(name, "path") == 0 ||
-           strcmp(name, "process") == 0 || strcmp(name, "url") == 0 ||
-           strcmp(name, "zlib") == 0;
+static bool IsBuiltin(Str name) {
+    return StrEq(name, StrL("gpui")) || StrEq(name, StrL("gpui-base")) ||
+           StrEq(name, StrL("gpui-shell")) || StrEq(name, StrL("gpui-fps")) ||
+           StrEq(name, StrL("buffer")) || StrEq(name, StrL("console")) ||
+           StrEq(name, StrL("crypto")) || StrEq(name, StrL("fs/promises")) ||
+           StrEq(name, StrL("os")) || StrEq(name, StrL("path")) ||
+           StrEq(name, StrL("process")) || StrEq(name, StrL("url")) ||
+           StrEq(name, StrL("zlib"));
 }
 
 static const char* const kGpuiExports[] = {
@@ -103052,77 +103438,76 @@ static const char* const kUrlExports[] = {"default", "URL", "URLSearchParams",
 static const char* const kZlibExports[] = {
     "default", "deflateSync", "inflateSync", "gzipSync", "gunzipSync"};
 
-static void ModuleExports(const char* name, const char* const** values,
-                          int* count) {
+static void ModuleExports(Str name, const char* const** values, int* count) {
     *values = nullptr;
     *count = 0;
-    if (strcmp(name, "gpui") == 0) {
+    if (StrEq(name, StrL("gpui"))) {
         *values = kGpuiExports;
         *count = (int)(sizeof(kGpuiExports) / sizeof(kGpuiExports[0]));
-    } else if (strcmp(name, "gpui-base") == 0) {
+    } else if (StrEq(name, StrL("gpui-base"))) {
         *values = kBaseExports;
         *count = (int)(sizeof(kBaseExports) / sizeof(kBaseExports[0]));
-    } else if (strcmp(name, "gpui-fps") == 0) {
+    } else if (StrEq(name, StrL("gpui-fps"))) {
         *values = kFpsExports;
         *count = (int)(sizeof(kFpsExports) / sizeof(kFpsExports[0]));
-    } else if (strcmp(name, "buffer") == 0) {
+    } else if (StrEq(name, StrL("buffer"))) {
         *values = kBufferExports;
         *count = (int)(sizeof(kBufferExports) / sizeof(kBufferExports[0]));
-    } else if (strcmp(name, "console") == 0) {
+    } else if (StrEq(name, StrL("console"))) {
         *values = kConsoleExports;
         *count = (int)(sizeof(kConsoleExports) / sizeof(kConsoleExports[0]));
-    } else if (strcmp(name, "crypto") == 0) {
+    } else if (StrEq(name, StrL("crypto"))) {
         *values = kCryptoExports;
         *count = (int)(sizeof(kCryptoExports) / sizeof(kCryptoExports[0]));
-    } else if (strcmp(name, "fs/promises") == 0) {
+    } else if (StrEq(name, StrL("fs/promises"))) {
         *values = kFsExports;
         *count = (int)(sizeof(kFsExports) / sizeof(kFsExports[0]));
-    } else if (strcmp(name, "os") == 0) {
+    } else if (StrEq(name, StrL("os"))) {
         *values = kOsExports;
         *count = (int)(sizeof(kOsExports) / sizeof(kOsExports[0]));
-    } else if (strcmp(name, "path") == 0) {
+    } else if (StrEq(name, StrL("path"))) {
         *values = kPathExports;
         *count = (int)(sizeof(kPathExports) / sizeof(kPathExports[0]));
-    } else if (strcmp(name, "process") == 0) {
+    } else if (StrEq(name, StrL("process"))) {
         *values = kProcessExports;
         *count = (int)(sizeof(kProcessExports) / sizeof(kProcessExports[0]));
-    } else if (strcmp(name, "url") == 0) {
+    } else if (StrEq(name, StrL("url"))) {
         *values = kUrlExports;
         *count = (int)(sizeof(kUrlExports) / sizeof(kUrlExports[0]));
-    } else if (strcmp(name, "zlib") == 0) {
+    } else if (StrEq(name, StrL("zlib"))) {
         *values = kZlibExports;
         *count = (int)(sizeof(kZlibExports) / sizeof(kZlibExports[0]));
     }
 }
 
-static const char* BuiltinObject(const char* name) {
-    if (strcmp(name, "gpui") == 0 || strcmp(name, "gpui-base") == 0 ||
-        strcmp(name, "gpui-shell") == 0 || strcmp(name, "gpui-fps") == 0)
+static const char* BuiltinObject(Str name) {
+    if (StrEq(name, StrL("gpui")) || StrEq(name, StrL("gpui-base")) ||
+        StrEq(name, StrL("gpui-shell")) || StrEq(name, StrL("gpui-fps")))
         return "__gpui";
-    if (strcmp(name, "buffer") == 0) return "__shell_buffer";
-    if (strcmp(name, "console") == 0) return "console";
-    if (strcmp(name, "crypto") == 0) return "__shell_crypto";
-    if (strcmp(name, "fs/promises") == 0) return "__shell_fs";
-    if (strcmp(name, "os") == 0) return "__shell_os";
-    if (strcmp(name, "path") == 0) return "__shell_path";
-    if (strcmp(name, "process") == 0) return "process";
-    if (strcmp(name, "url") == 0) return "__shell_url";
-    if (strcmp(name, "zlib") == 0) return "__shell_zlib";
+    if (StrEq(name, StrL("buffer"))) return "__shell_buffer";
+    if (StrEq(name, StrL("console"))) return "console";
+    if (StrEq(name, StrL("crypto"))) return "__shell_crypto";
+    if (StrEq(name, StrL("fs/promises"))) return "__shell_fs";
+    if (StrEq(name, StrL("os"))) return "__shell_os";
+    if (StrEq(name, StrL("path"))) return "__shell_path";
+    if (StrEq(name, StrL("process"))) return "process";
+    if (StrEq(name, StrL("url"))) return "__shell_url";
+    if (StrEq(name, StrL("zlib"))) return "__shell_zlib";
     return "__gpui";
 }
 
 static int InitBuiltinModule(JSContext* ctx, JSModuleDef* module) {
     JSAtom atom = JS_GetModuleName(ctx, module);
     const char* name = JS_AtomToCString(ctx, atom);
+    Str moduleName = name ? Str(name) : Str{};
     const char* const* exports = nullptr;
     int count = 0;
-    ModuleExports(name ? name : "", &exports, &count);
+    ModuleExports(moduleName, &exports, &count);
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue api =
-        JS_GetPropertyStr(ctx, global, BuiltinObject(name ? name : ""));
+    JSValue api = JS_GetPropertyStr(ctx, global, BuiltinObject(moduleName));
     int result = 0;
     for (int i = 0; i < count; i++) {
-        JSValue value = strcmp(exports[i], "default") == 0
+        JSValue value = StrEq(Str(exports[i]), StrL("default"))
                             ? JS_DupValue(ctx, api)
                             : JS_GetPropertyStr(ctx, api, exports[i]);
         if (JS_IsException(value) ||
@@ -103139,13 +103524,21 @@ static int InitBuiltinModule(JSContext* ctx, JSModuleDef* module) {
     return result;
 }
 
-static AppModule* ApplicationForBase(ShellRuntimeImpl* impl, const char* base) {
-    const char* tag = strrchr(base, '?');
-    if (!tag || strncmp(tag, "?v=", 3) != 0) return nullptr;
+static int LastByte(Str value, char needle) {
+    for (int i = value.len - 1; i >= 0; i--) {
+        if (value.s[i] == needle) return i;
+    }
+    return -1;
+}
+
+static AppModule* ApplicationForBase(ShellRuntimeImpl* impl, Str base) {
+    int tag = LastByte(base, '?');
+    if (tag < 0 || !StrStartsWith(Str(base.s + tag, base.len - tag), "?v="))
+        return nullptr;
     uint32_t generation = 0;
-    for (const char* at = tag + 3; *at; at++) {
-        if (*at < '0' || *at > '9') return nullptr;
-        generation = generation * 10u + (uint32_t)(*at - '0');
+    for (int at = tag + 3; at < base.len; at++) {
+        if (base.s[at] < '0' || base.s[at] > '9') return nullptr;
+        generation = generation * 10u + (uint32_t)(base.s[at] - '0');
     }
     for (int i = impl->modules.len - 1; i >= 0; i--) {
         if (impl->modules[i]->generation == generation) return impl->modules[i];
@@ -103153,22 +103546,24 @@ static AppModule* ApplicationForBase(ShellRuntimeImpl* impl, const char* base) {
     return nullptr;
 }
 
-static void Untag(const char* name, char* out, int cap) {
-    const char* tag = strrchr(name, '?');
-    int len = tag && strncmp(tag, "?v=", 3) == 0 ? (int)(tag - name)
-                                                 : (int)strlen(name);
-    if (len >= cap) len = cap - 1;
-    memcpy(out, name, (size_t)len);
-    out[len] = 0;
+static TempStr UntagTemp(Str name) {
+    int tag = LastByte(name, '?');
+    int len =
+        tag >= 0 && StrStartsWith(Str(name.s + tag, name.len - tag), "?v=")
+            ? tag
+            : name.len;
+    if (len >= kMaxPath) len = kMaxPath - 1;
+    return StrDupTemp(Str(name.s, len));
 }
 
-static void DirectoryName(char* path) {
-    int len = (int)strlen(path);
-    while (len > 0 && path[len - 1] != '/' && path[len - 1] != '\\') {
-        path[--len] = 0;
+static void DirectoryName(Str* path) {
+    while (path->len > 0 && path->s[path->len - 1] != '/' &&
+           path->s[path->len - 1] != '\\') {
+        path->s[--path->len] = 0;
     }
-    while (len > 1 && (path[len - 1] == '/' || path[len - 1] == '\\')) {
-        path[--len] = 0;
+    while (path->len > 1 &&
+           (path->s[path->len - 1] == '/' || path->s[path->len - 1] == '\\')) {
+        path->s[--path->len] = 0;
     }
 }
 
@@ -103177,7 +103572,7 @@ static bool WithinRoot(Str root, Str path) {
 #if GPUI_OS_WINDOWS
     if (StrCmpNI(root.s, path.s, root.len) != 0) return false;
 #else
-    if (memcmp(root.s, path.s, (size_t)root.len) != 0) return false;
+    if (!StrEq(root, Str(path.s, root.len))) return false;
 #endif
     return path.len == root.len || path.s[root.len] == '/';
 }
@@ -103185,10 +103580,11 @@ static bool WithinRoot(Str root, Str path) {
 static char* ModuleNormalize(JSContext* ctx, const char* base, const char* name,
                              void* opaque) {
     ShellRuntimeImpl* impl = (ShellRuntimeImpl*)opaque;
-    if (IsBuiltin(name)) {
-        size_t len = strlen(name);
-        char* out = (char*)js_malloc(ctx, len + 1);
-        if (out) memcpy(out, name, len + 1);
+    Str baseName = Str(base);
+    Str moduleName = Str(name);
+    if (IsBuiltin(moduleName)) {
+        char* out = (char*)js_malloc(ctx, (size_t)moduleName.len + 1);
+        if (out) memcpy(out, moduleName.s, (size_t)moduleName.len + 1);
         return out;
     }
     if (name[0] != '.' && name[0] != '/' && name[0] != '\\') {
@@ -103199,21 +103595,22 @@ static char* ModuleNormalize(JSContext* ctx, const char* base, const char* name,
             release = true;
         }
         HostModules* modules = PolicyHostModules(policy);
-        HostModule* found = HostModulesGet(modules, Str(name));
+        HostModule* found = HostModulesGet(modules, moduleName);
         uint64_t generation = HostModulesGeneration(modules);
         HostModulesRelease(modules);
         if (release) PolicyRelease(policy);
         if (found) {
-            int n = snprintf(nullptr, 0, "host:%s?m=%llu", name,
-                             (unsigned long long)generation);
-            char* out = n > 0 ? (char*)js_malloc(ctx, (size_t)n + 1) : nullptr;
-            if (out)
-                snprintf(out, (size_t)n + 1, "host:%s?m=%llu", name,
-                         (unsigned long long)generation);
+            TempStr tagged = fmt("host:%s?m=%llu", moduleName,
+                                 (unsigned long long)generation);
+            char* out = tagged ? (char*)js_malloc(ctx, (size_t)tagged.len + 1)
+                               : nullptr;
+            if (out) {
+                memcpy(out, tagged.s, (size_t)tagged.len + 1);
+            }
             return out;
         }
     }
-    AppModule* application = ApplicationForBase(impl, base);
+    AppModule* application = ApplicationForBase(impl, baseName);
     if (!application) {
         JS_ThrowReferenceError(
             ctx, "cannot identify the application importing `%s` from `%s`",
@@ -103221,21 +103618,21 @@ static char* ModuleNormalize(JSContext* ctx, const char* base, const char* name,
         return nullptr;
     }
 
-    char basePath[kMaxPath] = {};
-    Untag(base, basePath, kMaxPath);
+    TempStr basePath = UntagTemp(baseName);
     const shell::MaterializedDependency* importing = nullptr;
     for (int i = 0; i < application->dependencies.items.len; i++) {
         const shell::MaterializedDependency& dependency =
             application->dependencies.items[i];
-        if (WithinRoot(dependency.root, Str(basePath))) importing = &dependency;
+        if (WithinRoot(dependency.root, basePath)) importing = &dependency;
     }
-    char start[kMaxPath] = {};
-    char candidate[kMaxPath] = {};
+    TempStr start;
+    TempStr candidate = AllocStrTemp(kMaxPath - 1);
+    candidate.s[0] = 0;
     Str boundary = application->root;
-    const char* tail = name;
+    Str tail = moduleName;
     if (name[0] == '.') {
-        StrCopyZ(start, kMaxPath, basePath);
-        DirectoryName(start);
+        start = StrDupTemp(basePath);
+        DirectoryName(&start);
         if (importing) boundary = importing->root;
     } else {
         const shell::MaterializedDependency* named = nullptr;
@@ -103243,86 +103640,85 @@ static char* ModuleNormalize(JSContext* ctx, const char* base, const char* name,
             const shell::MaterializedDependency& dependency =
                 application->dependencies.items[i];
             Str dependencyName = dependency.name;
-            if (!StrStartsWith(Str(name), dependencyName)) continue;
-            char after = name[dependencyName.len];
+            if (!StrStartsWith(moduleName, dependencyName)) continue;
+            char after = dependencyName.len < moduleName.len
+                             ? moduleName.s[dependencyName.len]
+                             : 0;
             if (after != 0 && after != '/') continue;
             if (!named || dependencyName.len > named->name.len)
                 named = &dependency;
         }
         if (named) {
-            if (name[named->name.len] == 0) {
+            if (moduleName.len == named->name.len) {
 
-                StrCopyZ(candidate, kMaxPath, named->entry.s);
-                char entryTagged[kMaxPath + 32] = {};
-                int entryLen =
-                    snprintf(entryTagged, sizeof(entryTagged), "%s?v=%u",
-                             candidate, application->generation);
-                if (entryLen <= 0 || entryLen >= (int)sizeof(entryTagged))
+                TempStr entryTagged =
+                    fmt("%s?v=%u", named->entry, application->generation);
+                if (!entryTagged || entryTagged.len >= kMaxPath + 32)
                     return nullptr;
-                char* out = (char*)js_malloc(ctx, (size_t)entryLen + 1);
-                if (out) memcpy(out, entryTagged, (size_t)entryLen + 1);
+                char* out = (char*)js_malloc(ctx, (size_t)entryTagged.len + 1);
+                if (out)
+                    memcpy(out, entryTagged.s, (size_t)entryTagged.len + 1);
                 return out;
             }
-            StrCopyZ(start, kMaxPath, named->root.s);
+            start = StrDupTemp(named->root);
             boundary = named->root;
-            tail = name + named->name.len + 1;
+            tail = Str(moduleName.s + named->name.len + 1,
+                       moduleName.len - named->name.len - 1);
         } else if (importing) {
 
             JS_ThrowReferenceError(ctx, "cannot resolve module `%s` from `%s`",
                                    name, base);
             return nullptr;
         } else {
-            StrCopyZ(start, kMaxPath, application->root.s);
+            start = StrDupTemp(application->root);
         }
     }
-    char joined[kMaxPath] = {};
-    int written = snprintf(joined, sizeof(joined), "%s/%s", start, tail);
-    if (written <= 0 || written >= kMaxPath) {
+    TempStr joined = fmt("%s/%s", start, tail);
+    if (!joined || joined.len >= kMaxPath) {
         JS_ThrowReferenceError(ctx, "module path `%s` is too long", name);
         return nullptr;
     }
-    bool found = PlatCanonicalPath(joined, candidate, kMaxPath) &&
-                 PlatFileExists(candidate);
+    bool found = PlatCanonicalPath(joined.s, candidate.s, candidate.len + 1) &&
+                 PlatFileExists(candidate.s);
     if (!found) {
-        int n = snprintf(joined, sizeof(joined), "%s/%s.js", start, tail);
-        found = n > 0 && n < kMaxPath &&
-                PlatCanonicalPath(joined, candidate, kMaxPath) &&
-                PlatFileExists(candidate);
+        joined = fmt("%s/%s.js", start, tail);
+        found = joined && joined.len < kMaxPath &&
+                PlatCanonicalPath(joined.s, candidate.s, candidate.len + 1) &&
+                PlatFileExists(candidate.s);
     }
     if (!found) {
         JS_ThrowReferenceError(ctx, "cannot resolve module `%s` from `%s`",
                                name, base);
         return nullptr;
     }
-    Str canonical(candidate);
+    Str canonical(candidate.s);
     if (!WithinRoot(boundary, canonical)) {
         JS_ThrowReferenceError(
             ctx, "module `%s` resolves outside the application directory `%s`",
             name, boundary.s);
         return nullptr;
     }
-    char tagged[kMaxPath + 32] = {};
-    int n = snprintf(tagged, sizeof(tagged), "%s?v=%u", candidate,
-                     application->generation);
-    if (n <= 0 || n >= (int)sizeof(tagged)) return nullptr;
-    char* out = (char*)js_malloc(ctx, (size_t)n + 1);
-    if (out) memcpy(out, tagged, (size_t)n + 1);
+    TempStr tagged = fmt("%s?v=%u", canonical, application->generation);
+    if (!tagged || tagged.len >= kMaxPath + 32) return nullptr;
+    char* out = (char*)js_malloc(ctx, (size_t)tagged.len + 1);
+    if (out) memcpy(out, tagged.s, (size_t)tagged.len + 1);
     return out;
 }
 
-static bool HostModuleTag(const char* tagged, Str* module,
-                          uint64_t* generation) {
-    if (!tagged || strncmp(tagged, "host:", 5) != 0) return false;
-    const char* tag = strrchr(tagged + 5, '?');
-    if (!tag || strncmp(tag, "?m=", 3) != 0 || tag == tagged + 5) return false;
+static bool HostModuleTag(Str tagged, Str* module, uint64_t* generation) {
+    if (!StrStartsWith(tagged, "host:")) return false;
+    int tag = LastByte(tagged, '?');
+    if (tag < 0 || tag == 5 ||
+        !StrStartsWith(Str(tagged.s + tag, tagged.len - tag), "?m="))
+        return false;
     uint64_t value = 0;
-    for (const char* at = tag + 3; *at; at++) {
-        if (*at < '0' || *at > '9' ||
-            value > (UINT64_MAX - (uint64_t)(*at - '0')) / 10)
+    for (int at = tag + 3; at < tagged.len; at++) {
+        if (tagged.s[at] < '0' || tagged.s[at] > '9' ||
+            value > (UINT64_MAX - (uint64_t)(tagged.s[at] - '0')) / 10)
             return false;
-        value = value * 10 + (uint64_t)(*at - '0');
+        value = value * 10 + (uint64_t)(tagged.s[at] - '0');
     }
-    if (module) *module = Str(tagged + 5, (int)(tag - tagged - 5));
+    if (module) *module = Str(tagged.s + 5, tag - 5);
     if (generation) *generation = value;
     return true;
 }
@@ -103351,7 +103747,7 @@ static void AppendJsQuoted(StrBuilder* out, Str value) {
     out->AppendChar('"');
 }
 
-static JSModuleDef* LoadHostModule(JSContext* ctx, const char* name) {
+static JSModuleDef* LoadHostModule(JSContext* ctx, Str name) {
     Str moduleName;
     uint64_t generation = 0;
     if (!HostModuleTag(name, &moduleName, &generation)) return nullptr;
@@ -103400,7 +103796,7 @@ static JSModuleDef* LoadHostModule(JSContext* ctx, const char* name) {
     if (release) PolicyRelease(policy);
     Str script = source.TakeStr();
     JSValue value =
-        JS_Eval(ctx, script.s ? script.s : "", (size_t)script.len, name,
+        JS_Eval(ctx, script.s ? script.s : "", (size_t)script.len, name.s,
                 JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     StrFree(script);
     if (JS_IsException(value)) return nullptr;
@@ -103410,23 +103806,24 @@ static JSModuleDef* LoadHostModule(JSContext* ctx, const char* name) {
 }
 
 static JSModuleDef* ModuleLoad(JSContext* ctx, const char* name, void*) {
-    if (IsBuiltin(name)) {
+    Str moduleName = Str(name);
+    if (IsBuiltin(moduleName)) {
         JSModuleDef* module = JS_NewCModule(ctx, name, InitBuiltinModule);
         if (!module) return nullptr;
         const char* const* exports = nullptr;
         int count = 0;
-        ModuleExports(name, &exports, &count);
+        ModuleExports(moduleName, &exports, &count);
         for (int i = 0; i < count; i++) {
             if (JS_AddModuleExport(ctx, module, exports[i]) < 0) return nullptr;
         }
         return module;
     }
-    if (strncmp(name, "host:", 5) == 0) return LoadHostModule(ctx, name);
-    char path[kMaxPath] = {};
-    Untag(name, path, kMaxPath);
-    Str source = {};
+    if (StrStartsWith(moduleName, "host:"))
+        return LoadHostModule(ctx, moduleName);
+    TempStr path = UntagTemp(moduleName);
     ShellError error = {};
-    if (!ReadFileBounded(Str(path), &source, &error)) {
+    TempStr source = ReadModuleFileTemp(path, &error);
+    if (!source.s) {
         JS_ThrowReferenceError(
             ctx, "%.*s", error.message.len,
             error.message.s ? error.message.s : "module load failed");
@@ -103435,7 +103832,6 @@ static JSModuleDef* ModuleLoad(JSContext* ctx, const char* name, void*) {
     }
     JSValue value = JS_Eval(ctx, source.s, (size_t)source.len, name,
                             JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    Free(nullptr, source.s);
     if (JS_IsException(value)) return nullptr;
     JSModuleDef* module = (JSModuleDef*)JS_VALUE_GET_PTR(value);
     JS_FreeValue(ctx, value);
@@ -103569,11 +103965,10 @@ static bool JsArrayString(JSContext* ctx, JSValueConst array, uint32_t index,
 
 static bool ParseFiniteText(Str text, float* out) {
     if (!text.s || text.len <= 0 || text.len >= 64) return false;
-    char buf[64] = {};
-    memcpy(buf, text.s, (size_t)text.len);
+    TempStr buf = StrDupTemp(text);
     char* end = nullptr;
-    double value = strtod(buf, &end);
-    if (!end || end == buf || *end || !isfinite(value)) return false;
+    double value = strtod(buf.s, &end);
+    if (!end || end == buf.s || *end || !isfinite(value)) return false;
     *out = (float)value;
     return true;
 }
@@ -103615,11 +104010,11 @@ static JSValue NativePath(JSContext* ctx, JSValueConst, int argc,
     component.background.opacity = (float)opacity;
     component.background.colorSpace = colorSpace;
     bool valid = true;
-    if (StrEq(kind, "solid")) {
+    if (StrEq(kind, StrL("solid"))) {
         component.background.kind = shell::BackgroundKind::Solid;
         valid = count64 >= 1;
         if (valid) component.background.color = values[0];
-    } else if (StrEq(kind, "linear-gradient")) {
+    } else if (StrEq(kind, StrL("linear-gradient"))) {
         component.background.kind = shell::BackgroundKind::LinearGradient;
         valid =
             count64 >= 5 &&
@@ -103630,13 +104025,13 @@ static JSValue NativePath(JSContext* ctx, JSValueConst, int argc,
             component.background.fromColor = values[1];
             component.background.toColor = values[3];
         }
-    } else if (StrEq(kind, "pattern-slash")) {
+    } else if (StrEq(kind, StrL("pattern-slash"))) {
         component.background.kind = shell::BackgroundKind::PatternSlash;
         valid = count64 >= 3 &&
                 ParseFiniteText(values[1], &component.background.width) &&
                 ParseFiniteText(values[2], &component.background.interval);
         if (valid) component.background.color = values[0];
-    } else if (StrEq(kind, "checkerboard")) {
+    } else if (StrEq(kind, StrL("checkerboard"))) {
         component.background.kind = shell::BackgroundKind::Checkerboard;
         valid = count64 >= 2 &&
                 ParseFiniteText(values[1], &component.background.size);
@@ -103770,14 +104165,14 @@ static bool IsDockCommand(Str name) {
 }
 
 static const char* MouseButtonCallbackName(Str method, Str button) {
-    bool down = StrEq(method, "on_mouse_down");
-    if (StrEq(button, "left")) {
+    bool down = StrEq(method, StrL("on_mouse_down"));
+    if (StrEq(button, StrL("left"))) {
         return down ? "on_mouse_down_left" : "on_mouse_up_left";
     }
-    if (StrEq(button, "right")) {
+    if (StrEq(button, StrL("right"))) {
         return down ? "on_mouse_down_right" : "on_mouse_up_right";
     }
-    if (StrEq(button, "middle")) {
+    if (StrEq(button, StrL("middle"))) {
         return down ? "on_mouse_down_middle" : "on_mouse_up_middle";
     }
     return nullptr;
@@ -104188,9 +104583,9 @@ static JSValue NativeApply(JSContext* ctx, JSValueConst, int argc,
     shell::SpecOp op = {};
     op.name = name;
 
-    bool actionCallback = StrEq(name, "on_action");
+    bool actionCallback = StrEq(name, StrL("on_action"));
     bool buttonCallback =
-        StrEq(name, "on_mouse_down") || StrEq(name, "on_mouse_up");
+        StrEq(name, StrL("on_mouse_down")) || StrEq(name, StrL("on_mouse_up"));
     if (actionCallback || buttonCallback) {
         if (shell::ScopeCurrentPhase() == ScopePhase::Layout) {
             JSValue thrown = JS_ThrowTypeError(
@@ -104383,7 +104778,7 @@ static JSValue NativeApply(JSContext* ctx, JSValueConst, int argc,
                 return thrown;
             }
         }
-        if (StrEq(name, "role")) {
+        if (StrEq(name, StrL("role"))) {
             if (argCount != 1 || op.args[0]
                                          .kind != shell::BridgedKind::String) {
                 ArenaDelete(arena);
@@ -104391,7 +104786,7 @@ static JSValue NativeApply(JSContext* ctx, JSValueConst, int argc,
                     ctx, "role(name) expects one snake_case role string");
             }
             Str roleName = op.args[0].string;
-            if (StrEq(roleName, "generic_container")) {
+            if (StrEq(roleName, StrL("generic_container"))) {
                 ArenaDelete(arena);
                 return JS_ThrowRangeError(
                     ctx,
@@ -104786,9 +105181,10 @@ static bool KnownOptions(JSContext* ctx, JSValueConst object,
     bool ok = true;
     for (uint32_t i = 0; i < count && ok; i++) {
         const char* name = JS_AtomToCString(ctx, properties[i].atom);
+        Str optionName = name ? Str(name) : Str{};
         bool found = false;
         for (int j = 0; name && j < knownCount; j++)
-            if (strcmp(name, known[j]) == 0) found = true;
+            if (StrEq(optionName, known[j])) found = true;
         if (!found) {
             JS_ThrowTypeError(ctx, "unknown option `%s` for %s",
                               name ? name : "<symbol>", api);
@@ -104897,13 +105293,13 @@ static bool SheetPlacementFromJs(JSContext* ctx, JSValueConst value,
     Str name;
     bool ok = JsString(ctx, value, arena, &name);
     if (ok) {
-        if (StrEq(name, "left"))
+        if (StrEq(name, StrL("left")))
             *out = component::SheetPlacement::Left;
-        else if (StrEq(name, "right"))
+        else if (StrEq(name, StrL("right")))
             *out = component::SheetPlacement::Right;
-        else if (StrEq(name, "top"))
+        else if (StrEq(name, StrL("top")))
             *out = component::SheetPlacement::Top;
-        else if (StrEq(name, "bottom"))
+        else if (StrEq(name, StrL("bottom")))
             *out = component::SheetPlacement::Bottom;
         else {
             JS_ThrowTypeError(ctx,
@@ -105432,12 +105828,12 @@ static JSValue NativeSliderStateNew(JSContext* ctx, JSValueConst, int argc,
               JS_ToFloat64(ctx, &step, argv[2]) == 0 &&
               JsString(ctx, argv[3], arena, &scale) &&
               ReadSliderValue(ctx, argv[4], &value);
-    SliderScale nativeScale = StrEq(scale, "logarithmic")
+    SliderScale nativeScale = StrEq(scale, StrL("logarithmic"))
                                   ? SliderScale::Logarithmic
                                   : SliderScale::Linear;
     ok = ok && isfinite(min) && isfinite(max) && isfinite(step) && max > min &&
          step > 0 && (nativeScale == SliderScale::Linear || min > 0) &&
-         (StrEq(scale, "linear") || StrEq(scale, "logarithmic"));
+         (StrEq(scale, StrL("linear")) || StrEq(scale, StrL("logarithmic")));
     if (!ok && !JS_HasException(ctx)) {
         JS_ThrowTypeError(ctx,
                           "SliderState.new needs a finite min below max, a "
@@ -105641,22 +106037,22 @@ static bool RetainedEventOf(shell::RetainedKind kind, Str name,
     *replace = false;
     if (kind == shell::RetainedKind::Input ||
         kind == shell::RetainedKind::Textarea) {
-        if (StrEq(name, "change"))
+        if (StrEq(name, StrL("change")))
             *event = shell::RetainedEvent::InputChange;
-        else if (StrEq(name, "submit"))
+        else if (StrEq(name, StrL("submit")))
             *event = shell::RetainedEvent::InputSubmit;
-        else if (StrEq(name, "focus"))
+        else if (StrEq(name, StrL("focus")))
             *event = shell::RetainedEvent::InputFocus;
-        else if (StrEq(name, "blur"))
+        else if (StrEq(name, StrL("blur")))
             *event = shell::RetainedEvent::InputBlur;
         else
             return false;
         return true;
     }
     if (kind == shell::RetainedKind::Slider) {
-        if (StrEq(name, "change"))
+        if (StrEq(name, StrL("change")))
             *event = shell::RetainedEvent::SliderChange;
-        else if (StrEq(name, "release"))
+        else if (StrEq(name, StrL("release")))
             *event = shell::RetainedEvent::SliderRelease;
         else
             return false;
@@ -105664,13 +106060,13 @@ static bool RetainedEventOf(shell::RetainedKind kind, Str name,
     }
     if (kind == shell::RetainedKind::Otp) {
         *replace = true;
-        if (StrEq(name, "change"))
+        if (StrEq(name, StrL("change")))
             *event = shell::RetainedEvent::OtpChange;
-        else if (StrEq(name, "complete"))
+        else if (StrEq(name, StrL("complete")))
             *event = shell::RetainedEvent::OtpComplete;
-        else if (StrEq(name, "focus"))
+        else if (StrEq(name, StrL("focus")))
             *event = shell::RetainedEvent::OtpFocus;
-        else if (StrEq(name, "blur"))
+        else if (StrEq(name, StrL("blur")))
             *event = shell::RetainedEvent::OtpBlur;
         else
             return false;
@@ -105854,9 +106250,11 @@ static JSValue NativeVirtualScrollOp(JSContext* ctx, JSValueConst, int argc,
     Str strategy;
     bool ok = OptionalJsString(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, arena,
                                &strategy);
-    ScrollStrategy native = StrEq(strategy, "center") ? ScrollStrategy::Center
-                                                      : ScrollStrategy::Top;
-    if (strategy && !StrEq(strategy, "top") && !StrEq(strategy, "center")) {
+    ScrollStrategy native = StrEq(strategy, StrL("center"))
+                                ? ScrollStrategy::Center
+                                : ScrollStrategy::Top;
+    if (strategy && !StrEq(strategy, StrL("top")) &&
+        !StrEq(strategy, StrL("center"))) {
         ok = false;
         JS_ThrowTypeError(ctx, "scroll strategy must be top or center");
     }
@@ -106049,39 +106447,39 @@ static bool ThemeRequiredProperty(JSContext* ctx, JSValueConst object,
 }
 
 static bool SetThemeColor(ColorTokens* colors, Str name, Rgba value) {
-    if (StrEq(name, "background"))
+    if (StrEq(name, StrL("background")))
         colors->background = value;
-    else if (StrEq(name, "foreground"))
+    else if (StrEq(name, StrL("foreground")))
         colors->foreground = value;
-    else if (StrEq(name, "surface"))
+    else if (StrEq(name, StrL("surface")))
         colors->surface = value;
-    else if (StrEq(name, "surface_foreground"))
+    else if (StrEq(name, StrL("surface_foreground")))
         colors->surfaceForeground = value;
-    else if (StrEq(name, "primary"))
+    else if (StrEq(name, StrL("primary")))
         colors->primary = value;
-    else if (StrEq(name, "primary_foreground"))
+    else if (StrEq(name, StrL("primary_foreground")))
         colors->primaryForeground = value;
-    else if (StrEq(name, "secondary"))
+    else if (StrEq(name, StrL("secondary")))
         colors->secondary = value;
-    else if (StrEq(name, "secondary_foreground"))
+    else if (StrEq(name, StrL("secondary_foreground")))
         colors->secondaryForeground = value;
-    else if (StrEq(name, "muted"))
+    else if (StrEq(name, StrL("muted")))
         colors->muted = value;
-    else if (StrEq(name, "muted_foreground"))
+    else if (StrEq(name, StrL("muted_foreground")))
         colors->mutedForeground = value;
-    else if (StrEq(name, "accent"))
+    else if (StrEq(name, StrL("accent")))
         colors->accent = value;
-    else if (StrEq(name, "accent_foreground"))
+    else if (StrEq(name, StrL("accent_foreground")))
         colors->accentForeground = value;
-    else if (StrEq(name, "destructive"))
+    else if (StrEq(name, StrL("destructive")))
         colors->destructive = value;
-    else if (StrEq(name, "destructive_foreground"))
+    else if (StrEq(name, StrL("destructive_foreground")))
         colors->destructiveForeground = value;
-    else if (StrEq(name, "border"))
+    else if (StrEq(name, StrL("border")))
         colors->border = value;
-    else if (StrEq(name, "input"))
+    else if (StrEq(name, StrL("input")))
         colors->input = value;
-    else if (StrEq(name, "ring"))
+    else if (StrEq(name, StrL("ring")))
         colors->ring = value;
     else
         return false;
@@ -106089,19 +106487,19 @@ static bool SetThemeColor(ColorTokens* colors, Str name, Rgba value) {
 }
 
 static bool SetThemeSpacing(SpacingTokens* spacing, Str name, float value) {
-    if (StrEq(name, "xxs"))
+    if (StrEq(name, StrL("xxs")))
         spacing->xxs = value;
-    else if (StrEq(name, "xs"))
+    else if (StrEq(name, StrL("xs")))
         spacing->xs = value;
-    else if (StrEq(name, "sm"))
+    else if (StrEq(name, StrL("sm")))
         spacing->sm = value;
-    else if (StrEq(name, "md"))
+    else if (StrEq(name, StrL("md")))
         spacing->md = value;
-    else if (StrEq(name, "lg"))
+    else if (StrEq(name, StrL("lg")))
         spacing->lg = value;
-    else if (StrEq(name, "xl"))
+    else if (StrEq(name, StrL("xl")))
         spacing->xl = value;
-    else if (StrEq(name, "xxl"))
+    else if (StrEq(name, StrL("xxl")))
         spacing->xxl = value;
     else
         return false;
@@ -106109,17 +106507,17 @@ static bool SetThemeSpacing(SpacingTokens* spacing, Str name, float value) {
 }
 
 static bool SetThemeRadius(RadiusTokens* radius, Str name, float value) {
-    if (StrEq(name, "none"))
+    if (StrEq(name, StrL("none")))
         radius->none = value;
-    else if (StrEq(name, "sm"))
+    else if (StrEq(name, StrL("sm")))
         radius->sm = value;
-    else if (StrEq(name, "md"))
+    else if (StrEq(name, StrL("md")))
         radius->md = value;
-    else if (StrEq(name, "lg"))
+    else if (StrEq(name, StrL("lg")))
         radius->lg = value;
-    else if (StrEq(name, "xl"))
+    else if (StrEq(name, StrL("xl")))
         radius->xl = value;
-    else if (StrEq(name, "full"))
+    else if (StrEq(name, StrL("full")))
         radius->full = value;
     else
         return false;
@@ -107472,8 +107870,8 @@ static JSValue NativeHostAsyncCall(JSContext* ctx, JSValueConst, int argc,
     return promise;
 }
 
-static bool ObjectOnlyOption(JSContext* ctx, JSValueConst object,
-                             const char* allowed, const char* what) {
+static bool ObjectOnlyOption(JSContext* ctx, JSValueConst object, Str allowed,
+                             const char* what) {
     JSPropertyEnum* properties = nullptr;
     uint32_t count = 0;
     if (JS_GetOwnPropertyNames(ctx, &properties, &count, object,
@@ -107483,10 +107881,10 @@ static bool ObjectOnlyOption(JSContext* ctx, JSValueConst object,
     bool ok = true;
     for (uint32_t i = 0; i < count; i++) {
         const char* name = JS_AtomToCString(ctx, properties[i].atom);
-        bool matches = name && strcmp(name, allowed) == 0;
+        bool matches = name && StrEq(Str(name), allowed);
         if (!matches) {
             JS_ThrowTypeError(ctx, "unknown option `%s` for %s; expected %s",
-                              name ? name : "<symbol>", what, allowed);
+                              name ? name : "<symbol>", what, allowed.s);
             ok = false;
         }
         if (name) JS_FreeCString(ctx, name);
@@ -107504,7 +107902,8 @@ static bool FsReadTextOption(JSContext* ctx, JSValueConst value, Arena* arena,
     if (JS_IsString(value)) {
         encoding = JS_DupValue(ctx, value);
     } else if (JS_IsObject(value)) {
-        if (!ObjectOnlyOption(ctx, value, "encoding", "fs.readFile options"))
+        if (!ObjectOnlyOption(ctx, value, StrL("encoding"),
+                              "fs.readFile options"))
             return false;
         encoding = JS_GetPropertyStr(ctx, value, "encoding");
     } else {
@@ -107534,7 +107933,7 @@ static bool FsBoolOption(JSContext* ctx, JSValueConst value, const char* key,
         JS_ThrowTypeError(ctx, "%s expects an options object", what);
         return false;
     }
-    if (!ObjectOnlyOption(ctx, value, key, what)) return false;
+    if (!ObjectOnlyOption(ctx, value, Str(key), what)) return false;
     JSValue option = JS_GetPropertyStr(ctx, value, key);
     if (JS_IsException(option)) return false;
     if (!JS_IsUndefined(option) && !JS_IsBool(option)) {
@@ -109714,10 +110113,8 @@ static JSValue JsDate(JSContext* ctx, LocalDate date) {
     if (date.year == 0 || date.month == 0 || date.day == 0) {
         return JS_NULL;
     }
-    char text[16] = {};
-    snprintf(text, sizeof(text), "%04d-%02d-%02d", date.year, date.month,
-             date.day);
-    return JS_NewString(ctx, text);
+    TempStr text = fmt("%04d-%02d-%02d", date.year, date.month, date.day);
+    return JS_NewString(ctx, text.s);
 }
 
 static bool JsToDate(Str text, LocalDate* out) {
@@ -109909,7 +110306,7 @@ static JSValue NativeCalendarOn(JSContext* ctx, JSValueConst, int argc,
     Arena* arena = ArenaNew();
     Str name;
     bool named = JsString(ctx, argv[1], arena, &name);
-    bool isChange = named && StrEq(name, "change");
+    bool isChange = named && StrEq(name, StrL("change"));
     ArenaDelete(arena);
     if (!named) return JS_EXCEPTION;
     if (!isChange) {
@@ -110141,9 +110538,9 @@ static Str ShellRegisterPanelClass(ShellRuntimeImpl* impl, JSContext* ctx,
 }
 
 static DockPlacement DockPlacementOf(Str name) {
-    if (StrEq(name, "left")) return DockPlacement::Left;
-    if (StrEq(name, "right")) return DockPlacement::Right;
-    if (StrEq(name, "bottom")) return DockPlacement::Bottom;
+    if (StrEq(name, StrL("left"))) return DockPlacement::Left;
+    if (StrEq(name, StrL("right"))) return DockPlacement::Right;
+    if (StrEq(name, StrL("bottom"))) return DockPlacement::Bottom;
     return DockPlacement::Center;
 }
 
@@ -110580,7 +110977,7 @@ static JSValue NativeDockOn(JSContext* ctx, JSValueConst, int argc,
     Arena* arena = ArenaNew();
     Str name;
     bool named = JsString(ctx, argv[1], arena, &name);
-    bool isLayout = named && StrEq(name, "layout_changed");
+    bool isLayout = named && StrEq(name, StrL("layout_changed"));
     ArenaDelete(arena);
     if (!named) return JS_EXCEPTION;
     if (!isLayout) {
@@ -111219,29 +111616,32 @@ ViewType* ShellRuntime::ReloadApp(Str directory, Str entry, Policy* policy,
                                   const shell::MaterializedDependencies* reuse,
                                   ShellError* error) {
     ShellErrorClear(error);
-    char dir[kMaxPath] = {};
     if (directory.len <= 0 || directory.len >= kMaxPath) {
         shell_runtime_SetError(error, StrL("application directory is empty or too long"));
         return nullptr;
     }
-    char input[kMaxPath] = {};
-    memcpy(input, directory.s, (size_t)directory.len);
-    if (!PlatCanonicalPath(input, dir, kMaxPath) || !PlatDirExists(dir)) {
+    TempStr input = StrDupTemp(directory);
+    TempStr dir = AllocStrTemp(kMaxPath - 1);
+    dir.s[0] = 0;
+    if (!PlatCanonicalPath(input.s, dir.s, dir.len + 1) ||
+        !PlatDirExists(dir.s)) {
         shell_runtime_SetError(error,
                  fmt("application directory `%s` does not exist", directory));
         return nullptr;
     }
-    char entryPath[kMaxPath] = {};
-    int n = snprintf(entryPath, sizeof(entryPath), "%s/%.*s", dir, entry.len,
-                     entry.s);
-    char canonical[kMaxPath] = {};
-    if (n <= 0 || n >= kMaxPath ||
-        !PlatCanonicalPath(entryPath, canonical, kMaxPath) ||
-        !PlatFileExists(canonical) || !WithinRoot(Str(dir), Str(canonical))) {
+    dir.len = (int)strlen(dir.s);
+    TempStr entryPath = fmt("%s/%s", dir, entry);
+    TempStr canonical = AllocStrTemp(kMaxPath - 1);
+    canonical.s[0] = 0;
+    if (!entryPath || entryPath.len >= kMaxPath ||
+        !PlatCanonicalPath(entryPath.s, canonical.s, canonical.len + 1) ||
+        !PlatFileExists(canonical.s) ||
+        !WithinRoot(Str(dir.s), Str(canonical.s))) {
         shell_runtime_SetError(error, fmt("entry module `%s` is not a file inside `%s`",
                             entry, directory));
         return nullptr;
     }
+    canonical.len = (int)strlen(canonical.s);
 
     shell::MaterializedDependencies dependencies;
     if (reuse) {
@@ -111253,10 +111653,10 @@ ViewType* ShellRuntime::ReloadApp(Str directory, Str entry, Policy* policy,
         }
     }
     Str manifestPath =
-        StrDup(fmt("%s/%s", Str(dir), Str(shell::kShellManifestFile)));
+        StrDup(fmt("%s/%s", dir, Str(shell::kShellManifestFile)));
     if (!reuse && PlatFileExists(manifestPath.s)) {
         shell::PluginManifest manifest;
-        if (!shell::PluginManifestRead(Str(dir), &manifest, error)) {
+        if (!shell::PluginManifestRead(dir, &manifest, error)) {
             StrFree(manifestPath);
             return nullptr;
         }
@@ -111277,7 +111677,7 @@ ViewType* ShellRuntime::ReloadApp(Str directory, Str entry, Policy* policy,
     StrFree(manifestPath);
 
     AppModule* application = new AppModule();
-    application->root = StrDup(Str(dir));
+    application->root = StrDup(dir);
     application->dependencies = dependencies;
     application->generation = impl->nextModuleGeneration++;
     if (application->generation == 0) {
@@ -111285,14 +111685,12 @@ ViewType* ShellRuntime::ReloadApp(Str directory, Str entry, Policy* policy,
     }
     VecAppend(impl->modules, application);
 
-    Str source = {};
-    if (!ReadFileBounded(Str(canonical), &source, error)) return nullptr;
-    Str tagged =
-        StrDup(fmt("%s?v=%u", Str(canonical), application->generation));
+    TempStr source = ReadModuleFileTemp(canonical, error);
+    if (!source.s) return nullptr;
+    Str tagged = StrDup(fmt("%s?v=%u", canonical, application->generation));
     ViewType* result =
         LoadModule(this, tagged, source, application, policy, error);
     StrFree(tagged);
-    Free(nullptr, source.s);
     return result;
 }
 
@@ -111880,27 +112278,31 @@ static void RetainedCallbackIds(const shell::RetainedEntry* entry,
                                 shell::RetainedEvent event,
                                 Vec<shell::CallbackId>* out);
 
-static int ShellUtf8(uint32_t cp, char* out) {
+static TempStr ShellUtf8Temp(uint32_t cp) {
+    TempStr out = AllocStrTemp(4);
     if (cp < 0x80) {
-        out[0] = (char)cp;
-        return 1;
+        out.s[0] = (char)cp;
+        out.len = 1;
+        return out;
     }
     if (cp < 0x800) {
-        out[0] = (char)(0xC0 | (cp >> 6));
-        out[1] = (char)(0x80 | (cp & 0x3F));
-        return 2;
+        out.s[0] = (char)(0xC0 | (cp >> 6));
+        out.s[1] = (char)(0x80 | (cp & 0x3F));
+        out.len = 2;
+        return out;
     }
     if (cp < 0x10000) {
-        out[0] = (char)(0xE0 | (cp >> 12));
-        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        out[2] = (char)(0x80 | (cp & 0x3F));
-        return 3;
+        out.s[0] = (char)(0xE0 | (cp >> 12));
+        out.s[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out.s[2] = (char)(0x80 | (cp & 0x3F));
+        out.len = 3;
+        return out;
     }
-    out[0] = (char)(0xF0 | (cp >> 18));
-    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-    out[3] = (char)(0x80 | (cp & 0x3F));
-    return 4;
+    out.s[0] = (char)(0xF0 | (cp >> 18));
+    out.s[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out.s[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out.s[3] = (char)(0x80 | (cp & 0x3F));
+    return out;
 }
 
 static const float kShellWheelNotch = 48.f;
@@ -111916,9 +112318,7 @@ static Str ScriptKeystroke(Arena* arena, const KeyEvent& event) {
     if (key) {
         StrBuilderAppend(arena, out, key);
     } else if (event.ch) {
-        char utf8[8] = {};
-        int n = ShellUtf8(event.ch, utf8);
-        StrBuilderAppend(arena, out, Str(utf8, n));
+        StrBuilderAppend(arena, out, ShellUtf8Temp(event.ch));
     }
     return StrBuilderTakeStr(arena, out);
 }
@@ -111960,10 +112360,10 @@ void ShellRuntime::DispatchKey(shell::CallbackId callback,
         impl->context, payload, "keystroke",
         JS_NewStringLen(impl->context, keystroke.s, (size_t)keystroke.len));
     if (event.ch) {
-        char utf8[8] = {};
-        int n = ShellUtf8(event.ch, utf8);
-        JS_SetPropertyStr(impl->context, payload, "key_char",
-                          JS_NewStringLen(impl->context, utf8, (size_t)n));
+        TempStr utf8 = ShellUtf8Temp(event.ch);
+        JS_SetPropertyStr(
+            impl->context, payload, "key_char",
+            JS_NewStringLen(impl->context, utf8.s, (size_t)utf8.len));
     } else {
         JS_SetPropertyStr(impl->context, payload, "key_char", JS_UNDEFINED);
     }
@@ -114284,39 +114684,39 @@ uint32_t ThemeTokensRevision() {
 }
 
 static bool ColorOf(const ColorTokens& colors, Str name, Rgba* out) {
-    if (StrEq(name, "background"))
+    if (StrEq(name, StrL("background")))
         *out = colors.background;
-    else if (StrEq(name, "foreground"))
+    else if (StrEq(name, StrL("foreground")))
         *out = colors.foreground;
-    else if (StrEq(name, "surface"))
+    else if (StrEq(name, StrL("surface")))
         *out = colors.surface;
-    else if (StrEq(name, "surface_foreground"))
+    else if (StrEq(name, StrL("surface_foreground")))
         *out = colors.surfaceForeground;
-    else if (StrEq(name, "primary"))
+    else if (StrEq(name, StrL("primary")))
         *out = colors.primary;
-    else if (StrEq(name, "primary_foreground"))
+    else if (StrEq(name, StrL("primary_foreground")))
         *out = colors.primaryForeground;
-    else if (StrEq(name, "secondary"))
+    else if (StrEq(name, StrL("secondary")))
         *out = colors.secondary;
-    else if (StrEq(name, "secondary_foreground"))
+    else if (StrEq(name, StrL("secondary_foreground")))
         *out = colors.secondaryForeground;
-    else if (StrEq(name, "muted"))
+    else if (StrEq(name, StrL("muted")))
         *out = colors.muted;
-    else if (StrEq(name, "muted_foreground"))
+    else if (StrEq(name, StrL("muted_foreground")))
         *out = colors.mutedForeground;
-    else if (StrEq(name, "accent"))
+    else if (StrEq(name, StrL("accent")))
         *out = colors.accent;
-    else if (StrEq(name, "accent_foreground"))
+    else if (StrEq(name, StrL("accent_foreground")))
         *out = colors.accentForeground;
-    else if (StrEq(name, "destructive"))
+    else if (StrEq(name, StrL("destructive")))
         *out = colors.destructive;
-    else if (StrEq(name, "destructive_foreground"))
+    else if (StrEq(name, StrL("destructive_foreground")))
         *out = colors.destructiveForeground;
-    else if (StrEq(name, "border"))
+    else if (StrEq(name, StrL("border")))
         *out = colors.border;
-    else if (StrEq(name, "input"))
+    else if (StrEq(name, StrL("input")))
         *out = colors.input;
-    else if (StrEq(name, "ring"))
+    else if (StrEq(name, StrL("ring")))
         *out = colors.ring;
     else
         return false;
@@ -114341,19 +114741,19 @@ bool ThemeTokenSpacing(Str name, float* out) {
     if (!out || !gThemeCache.valid) {
         return false;
     }
-    if (StrEq(name, "xxs"))
+    if (StrEq(name, StrL("xxs")))
         *out = gThemeCache.spacing.xxs;
-    else if (StrEq(name, "xs"))
+    else if (StrEq(name, StrL("xs")))
         *out = gThemeCache.spacing.xs;
-    else if (StrEq(name, "sm"))
+    else if (StrEq(name, StrL("sm")))
         *out = gThemeCache.spacing.sm;
-    else if (StrEq(name, "md"))
+    else if (StrEq(name, StrL("md")))
         *out = gThemeCache.spacing.md;
-    else if (StrEq(name, "lg"))
+    else if (StrEq(name, StrL("lg")))
         *out = gThemeCache.spacing.lg;
-    else if (StrEq(name, "xl"))
+    else if (StrEq(name, StrL("xl")))
         *out = gThemeCache.spacing.xl;
-    else if (StrEq(name, "xxl"))
+    else if (StrEq(name, StrL("xxl")))
         *out = gThemeCache.spacing.xxl;
     else
         return false;
@@ -114365,17 +114765,17 @@ bool ThemeTokenRadius(Str name, float* out) {
     if (!out || !gThemeCache.valid) {
         return false;
     }
-    if (StrEq(name, "none"))
+    if (StrEq(name, StrL("none")))
         *out = gThemeCache.radius.none;
-    else if (StrEq(name, "sm"))
+    else if (StrEq(name, StrL("sm")))
         *out = gThemeCache.radius.sm;
-    else if (StrEq(name, "md"))
+    else if (StrEq(name, StrL("md")))
         *out = gThemeCache.radius.md;
-    else if (StrEq(name, "lg"))
+    else if (StrEq(name, StrL("lg")))
         *out = gThemeCache.radius.lg;
-    else if (StrEq(name, "xl"))
+    else if (StrEq(name, StrL("xl")))
         *out = gThemeCache.radius.xl;
-    else if (StrEq(name, "full"))
+    else if (StrEq(name, StrL("full")))
         *out = gThemeCache.radius.full;
     else
         return false;
@@ -136605,82 +137005,35 @@ struct TypesDirectory {
     int depth = 0;
 };
 
-static bool shell_typings_JoinPath(char* out, int cap, Str directory, Str name) {
-    if (!out || cap <= 0 || !directory || !name) return false;
+static TempStr shell_typings_JoinPathTemp(Str directory, Str name) {
+    if (!directory || !name) return {};
     bool separator = directory.s[directory.len - 1] != '/' &&
                      directory.s[directory.len - 1] != '\\';
     int len = directory.len + (separator ? 1 : 0) + name.len;
-    if (len >= cap) return false;
-    memcpy(out, directory.s, (size_t)directory.len);
-    int at = directory.len;
-    if (separator) out[at++] = GPUI_OS_WINDOWS ? '\\' : '/';
-    memcpy(out + at, name.s, (size_t)name.len);
-    out[len] = 0;
-    return true;
-}
-
-static bool shell_typings_ReadBounded(Str path, int limit, Str* out) {
-    *out = {};
-    if (!path || path.len >= kMaxPath) return false;
-    char name[kMaxPath];
-    memcpy(name, path.s, (size_t)path.len);
-    name[path.len] = 0;
-    FILE* file = fopen(name, "rb");
-    if (!file) return false;
-    Vec<char> bytes;
-    char block[16384];
-    bool ok = true;
-    for (;;) {
-        size_t count = fread(block, 1, sizeof(block), file);
-        if (count > 0) {
-            char* destination = VecAppendBlanks(bytes, (int)count);
-            if (bytes.len > limit || !destination) {
-                ok = false;
-                break;
-            }
-            memcpy(destination, block, count);
-        }
-        if (count != sizeof(block)) {
-            if (ferror(file)) ok = false;
-            break;
-        }
-    }
-    fclose(file);
-    if (!ok) {
-        VecReset(bytes);
-        return false;
-    }
-    int len = bytes.len;
-    char* data = bytes.els;
-    bytes.els = nullptr;
-    bytes.len = bytes.cap = 0;
-    *out = Str(data, len);
-    return true;
+    if (len >= kMaxPath) return {};
+    if (!separator) return fmt("%s%s", directory, name);
+    return fmt("%s%c%s", directory, GPUI_OS_WINDOWS ? '\\' : '/', name);
 }
 
 static bool SourceImportsBuiltins(Str source) {
     static const char* specifiers[] = {"gpui", "gpui-base", "gpui-shell",
                                        "gpui-fps"};
-    char quoted[32];
     for (int i = 0; i < 4; i++) {
-        snprintf(quoted, sizeof(quoted), "\"%s\"", specifiers[i]);
-        if (StrContains(source, Str(quoted))) return true;
-        snprintf(quoted, sizeof(quoted), "'%s'", specifiers[i]);
-        if (StrContains(source, Str(quoted))) return true;
+        TempStr quoted = fmt("\"%s\"", Str(specifiers[i]));
+        if (StrContains(source, quoted)) return true;
+        quoted = fmt("'%s'", Str(specifiers[i]));
+        if (StrContains(source, quoted)) return true;
     }
     return false;
 }
 
-static bool IsScript(const char* name) {
-    if (!name) return false;
-    int len = (int)strlen(name);
-    return (len > 3 && strcmp(name + len - 3, ".js") == 0) ||
-           (len > 4 && strcmp(name + len - 4, ".mjs") == 0);
+static bool IsScript(Str name) {
+    return StrEndsWith(name, ".js") || StrEndsWith(name, ".mjs");
 }
 
-static bool shell_typings_SkipDirectory(const char* name) {
-    return !name || name[0] == '.' || strcmp(name, "node_modules") == 0 ||
-           strcmp(name, "target") == 0;
+static bool shell_typings_SkipDirectory(Str name) {
+    return !name || name.s[0] == '.' || StrEq(name, StrL("node_modules")) ||
+           StrEq(name, StrL("target"));
 }
 
 static bool AppendDirectory(Vec<TypesDirectory>* directories, Str path,
@@ -136721,9 +137074,8 @@ static void AppendReindented(StrBuilder* out, Str declarations) {
         while (lineEnd < declarations.len && declarations.s[lineEnd] != '\n')
             lineEnd++;
         int end = lineEnd;
-        while (end > at &&
-               (declarations.s[end - 1] == ' ' ||
-                declarations.s[end - 1] == '\t'))
+        while (end > at && (declarations.s[end - 1] == ' ' ||
+                            declarations.s[end - 1] == '\t'))
             end--;
         if (end == at) {
             out->AppendChar('\n');
@@ -136811,26 +137163,24 @@ static const char* const kEditorConfig =
 
 static bool WriteEditorConfig(Str directory, bool* wrote, ShellError* error) {
     if (wrote) *wrote = false;
-    char path[kMaxPath];
-    char existing[kMaxPath];
-    if (!shell_typings_JoinPath(path, sizeof(path), directory, Str(kShellConfigFile)) ||
-        !shell_typings_JoinPath(existing, sizeof(existing), directory,
-                  Str(kShellTypeScriptConfigFile))) {
+    TempStr path = shell_typings_JoinPathTemp(directory, Str(kShellConfigFile));
+    TempStr existing = shell_typings_JoinPathTemp(directory, Str(kShellTypeScriptConfigFile));
+    if (!path || !existing) {
         ShellErrorSet(error, StrL("editor configuration path is too long"));
         return false;
     }
-    if (PlatFileExists(path) || PlatDirExists(path) ||
-        PlatFileExists(existing) || PlatDirExists(existing))
+    if (PlatFileExists(path.s) || PlatDirExists(path.s) ||
+        PlatFileExists(existing.s) || PlatDirExists(existing.s))
         return true;
     Str contents(kEditorConfig);
-    FILE* file = fopen(path, "wb");
+    FILE* file = fopen(path.s, "wb");
     if (!file) {
-        ShellErrorSet(error, fmt("cannot write `%s`", Str(path)));
+        ShellErrorSet(error, fmt("cannot write `%s`", path));
         return false;
     }
     size_t count = fwrite(contents.s, 1, (size_t)contents.len, file);
     if (count != (size_t)contents.len || fclose(file) != 0) {
-        ShellErrorSet(error, fmt("cannot write `%s`", Str(path)));
+        ShellErrorSet(error, fmt("cannot write `%s`", path));
         return false;
     }
     if (wrote) *wrote = true;
@@ -136847,11 +137197,10 @@ static bool HasSymlinkDeclaration(Str directory, DirEntry* entries,
         return true;
     }
     for (int i = 0; i < count; i++) {
-        if (strcmp(entries[i].name, kShellTypesFile) == 0 &&
-            entries[i].isSymlink) {
-            ShellErrorSet(error,
-                          fmt("refusing to replace symlink `%s/%s`", directory,
-                              Str(kShellTypesFile)));
+        if (StrEq(Str(entries[i].name), kShellTypesFile) && entries[i]
+                                                                .isSymlink) {
+            ShellErrorSet(error, fmt("refusing to replace symlink `%s/%s`",
+                                     directory, Str(kShellTypesFile)));
             return true;
         }
     }
@@ -136862,27 +137211,24 @@ static bool RefreshTypes(Str directory, Str declarations, DirEntry* entries,
                          bool* changed, ShellError* error) {
     if (changed) *changed = false;
     if (HasSymlinkDeclaration(directory, entries, error)) return false;
-    char path[kMaxPath];
-    if (!shell_typings_JoinPath(path, sizeof(path), directory, Str(kShellTypesFile))) {
+    TempStr path = shell_typings_JoinPathTemp(directory, Str(kShellTypesFile));
+    if (!path) {
         ShellErrorSet(error, StrL("type declaration path is too long"));
         return false;
     }
-    Str current;
-    if (shell_typings_ReadBounded(Str(path), kTypesMaxDeclarationBytes, &current) &&
-        StrEq(current, declarations)) {
-        StrFree(current);
+    TempStr current = ReadBoundedFileTemp(path, kTypesMaxDeclarationBytes);
+    if (current.s && StrEq(current, declarations)) {
         return true;
     }
-    StrFree(current);
-    FILE* file = fopen(path, "wb");
+    FILE* file = fopen(path.s, "wb");
     if (!file) {
-        ShellErrorSet(error, fmt("cannot write `%s`", Str(path)));
+        ShellErrorSet(error, fmt("cannot write `%s`", path));
         return false;
     }
     size_t count = fwrite(declarations.s, 1, (size_t)declarations.len, file);
     bool ok = count == (size_t)declarations.len && fclose(file) == 0;
     if (!ok) {
-        ShellErrorSet(error, fmt("cannot write `%s`", Str(path)));
+        ShellErrorSet(error, fmt("cannot write `%s`", path));
         return false;
     }
     if (changed) *changed = true;
@@ -136894,15 +137240,16 @@ bool ShellWriteTypeDeclarations(Str root, const HostModules* modules,
     ShellErrorClear(error);
     if (written) *written = 0;
     if (!root || root.len >= kMaxPath) {
-        ShellErrorSet(error, StrL("application directory is empty or too long"));
+        ShellErrorSet(error,
+                      StrL("application directory is empty or too long"));
         return false;
     }
     TypesDirectory rootDirectory;
     memcpy(rootDirectory.path, root.s, (size_t)root.len);
     rootDirectory.path[root.len] = 0;
     if (!PlatDirExists(rootDirectory.path)) {
-        ShellErrorSet(error, fmt("application directory `%s` does not exist",
-                                 root));
+        ShellErrorSet(error,
+                      fmt("application directory `%s` does not exist", root));
         return false;
     }
 
@@ -136940,33 +137287,32 @@ bool ShellWriteTypeDeclarations(Str root, const HostModules* modules,
             if (item.isSymlink || item.name[0] == '.') continue;
             if (item.isDir) {
                 if (directory.depth >= kShellTypesMaxDepth ||
-                    shell_typings_SkipDirectory(item.name))
+                    shell_typings_SkipDirectory(Str(item.name)))
                     continue;
-                char child[kMaxPath];
-                if (!shell_typings_JoinPath(child, sizeof(child), Str(directory.path),
-                              Str(item.name)) ||
-                    !AppendDirectory(&pending, Str(child),
-                                     directory.depth + 1)) {
+                TempStr child =
+                    shell_typings_JoinPathTemp(Str(directory.path), Str(item.name));
+                if (!child ||
+                    !AppendDirectory(&pending, child, directory.depth + 1)) {
                     ok = false;
                     break;
                 }
             } else if (item.isFile) {
                 files++;
-                if (imports || !IsScript(item.name)) continue;
-                char sourcePath[kMaxPath];
-                Str source;
-                if (shell_typings_JoinPath(sourcePath, sizeof(sourcePath),
-                             Str(directory.path), Str(item.name)) &&
-                    shell_typings_ReadBounded(Str(sourcePath), kTypesMaxSourceBytes,
-                                &source)) {
+                if (imports || !IsScript(Str(item.name))) continue;
+                TempStr sourcePath =
+                    shell_typings_JoinPathTemp(Str(directory.path), Str(item.name));
+                TempStr source =
+                    sourcePath
+                        ? ReadBoundedFileTemp(sourcePath, kTypesMaxSourceBytes)
+                        : TempStr{};
+                if (source.s) {
                     imports = SourceImportsBuiltins(source);
                 }
-                StrFree(source);
             }
         }
         if (imports && !StrEq(Str(directory.path), root))
-            ok = AppendDirectory(&targets, Str(directory.path),
-                                 directory.depth);
+            ok =
+                AppendDirectory(&targets, Str(directory.path), directory.depth);
     }
 
     for (int i = 0; ok && i < targets.len; i++) {
@@ -137543,16 +137889,13 @@ struct PendingDirectory {
     int depth = 0;
 };
 
-static bool IsSource(const char* name) {
-    if (!name) return false;
-    int len = (int)strlen(name);
-    return (len > 3 && strcmp(name + len - 3, ".js") == 0) ||
-           (len > 4 && strcmp(name + len - 4, ".mjs") == 0);
+static bool IsSource(Str name) {
+    return StrEndsWith(name, ".js") || StrEndsWith(name, ".mjs");
 }
 
-static bool shell_watch_SkipDirectory(const char* name) {
-    return !name || name[0] == '.' || strcmp(name, "node_modules") == 0 ||
-           strcmp(name, "target") == 0;
+static bool shell_watch_SkipDirectory(Str name) {
+    return !name || name.s[0] == '.' || StrEq(name, StrL("node_modules")) ||
+           StrEq(name, StrL("target"));
 }
 
 bool ScanSourceTree(Str directory, SourceTreeStamp* stamp, ShellError* error,
@@ -137561,7 +137904,8 @@ bool ScanSourceTree(Str directory, SourceTreeStamp* stamp, ShellError* error,
     if (stamp) *stamp = {};
     if (!directory.s || directory.len <= 0 || directory.len >= kMaxPath ||
         maxFiles < 0) {
-        ShellErrorSet(error, StrL("source watch directory is empty or too long"));
+        ShellErrorSet(error,
+                      StrL("source watch directory is empty or too long"));
         return false;
     }
 
@@ -137588,9 +137932,9 @@ bool ScanSourceTree(Str directory, SourceTreeStamp* stamp, ShellError* error,
         pending.len--;
         int count = PlatListDir(dir.path, entries, kMaxEntriesPerDirectory);
         if (count >= kMaxEntriesPerDirectory) {
-            ShellErrorSet(error,
-                          fmt("source watch for `%s` exceeds the %d-entry per-directory limit",
-                              directory, kSourceWatchMaxFiles));
+            ShellErrorSet(error, fmt("source watch for `%s` exceeds the "
+                                     "%d-entry per-directory limit",
+                                     directory, kSourceWatchMaxFiles));
             ok = false;
             break;
         }
@@ -137599,40 +137943,48 @@ bool ScanSourceTree(Str directory, SourceTreeStamp* stamp, ShellError* error,
             if (item.isSymlink || item.name[0] == '.') continue;
             if (item.isDir) {
                 if (dir.depth >= kSourceWatchMaxDepth ||
-                    shell_watch_SkipDirectory(item.name)) {
+                    shell_watch_SkipDirectory(Str(item.name))) {
                     continue;
                 }
                 if (pending.len >= kSourceWatchMaxFiles) {
-                    ShellErrorSet(error,
-                                  fmt("source watch for `%s` exceeds the %d-directory limit",
-                                      directory, kSourceWatchMaxFiles));
+                    ShellErrorSet(error, fmt("source watch for `%s` exceeds "
+                                             "the %d-directory limit",
+                                             directory, kSourceWatchMaxFiles));
                     ok = false;
                     break;
                 }
                 PendingDirectory child;
                 child.depth = dir.depth + 1;
-                int n = snprintf(child.path, sizeof(child.path), "%s/%s",
-                                 dir.path, item.name);
-                if (n <= 0 || n >= (int)sizeof(child.path) ||
-                    !VecAppend(pending, child)) {
-                    ShellErrorSet(error,
-                                  StrL("source path is too long or could not be recorded"));
+                TempStr childPath = fmt("%s/%s", Str(dir.path), Str(item.name));
+                if (!childPath || childPath.len >= (int)sizeof(child.path)) {
+                    ShellErrorSet(error, StrL("source path is too long or "
+                                              "could not be recorded"));
+                    ok = false;
+                    break;
+                }
+                memcpy(child.path, childPath.s, (size_t)childPath.len + 1);
+                if (!VecAppend(pending, child)) {
+                    ShellErrorSet(error, StrL("source path is too long or "
+                                              "could not be recorded"));
                     ok = false;
                     break;
                 }
                 continue;
             }
-            if (!item.isFile || !IsSource(item.name)) continue;
+            if (!item.isFile || !IsSource(Str(item.name))) continue;
             if (found.files >= (uint32_t)maxFiles) {
-                ShellErrorSet(error,
-                              fmt("source watch for `%s` exceeds the %d-file limit",
-                                  directory, maxFiles));
+                ShellErrorSet(
+                    error,
+                    fmt("source watch for `%s` exceeds the %d-file limit",
+                        directory, maxFiles));
                 ok = false;
                 break;
             }
             found.files++;
-            if (UINT64_MAX - found.bytes < item.size) found.bytes = UINT64_MAX;
-            else found.bytes += item.size;
+            if (UINT64_MAX - found.bytes < item.size)
+                found.bytes = UINT64_MAX;
+            else
+                found.bytes += item.size;
             if (found.newest < item.modified) found.newest = item.modified;
         }
     }
@@ -137747,8 +138099,8 @@ static void SourceScanDone(SourceScanJob* job) {
     watcher->source.Observe(job->stamp, TimeNow(), &changed);
     delete job;
     if (!changed) return;
-    ScriptView* view = (ScriptView*)EntityGet(watcher->window->app,
-                                              watcher->view);
+    ScriptView* view =
+        (ScriptView*)EntityGet(watcher->window->app, watcher->view);
     if (!view) {
         if (watcher->timer) {
             WindowCancelTimer(watcher->window, watcher->timer);
@@ -137784,16 +138136,15 @@ ShellWatcher::~ShellWatcher() {
 }
 
 Entity<ShellWatcher> ShellWatcher::Start(ShellRuntime* runtime,
-                                         Entity<ScriptView> view,
-                                         Str directory, Str entry,
-                                         Window* window, App* app,
+                                         Entity<ScriptView> view, Str directory,
+                                         Str entry, Window* window, App* app,
                                          ShellError* error) {
     ShellErrorClear(error);
     ScriptView* target = view.Get(app);
     if (!runtime || !target || target->runtime != runtime || !window ||
         window->app != app) {
-        ShellErrorSet(error,
-                      StrL("source watch needs a live ScriptView from this runtime and window"));
+        ShellErrorSet(error, StrL("source watch needs a live ScriptView from "
+                                  "this runtime and window"));
         return {};
     }
     Entity<ShellWatcher> entity = EntityNewState<ShellWatcher>(app);
@@ -137813,8 +138164,8 @@ Entity<ShellWatcher> ShellWatcher::Start(ShellRuntime* runtime,
         EntityDrop(app, entity.id);
         return {};
     }
-    watcher->timer = WindowSetInterval(
-        window, shell::kSourceWatchPollMs, ListenTo(entity, &ShellWatcher::OnPoll));
+    watcher->timer = WindowSetInterval(window, shell::kSourceWatchPollMs,
+                                       ListenTo(entity, &ShellWatcher::OnPoll));
     if (!watcher->timer) {
         ShellErrorSet(error, StrL("could not arm source watcher timer"));
         EntityDrop(app, entity.id);
@@ -137836,8 +138187,8 @@ void ShellWatcher::OnPoll(ShellWatcher* self, Ctx* cx, const TickEvent*) {
                       StrL("out of memory while scheduling source scan"));
         return;
     }
-    int task = ExecSpawn(MkFunc0(SourceScanWork, job),
-                         MkFunc0(SourceScanDone, job));
+    int task =
+        ExecSpawn(MkFunc0(SourceScanWork, job), MkFunc0(SourceScanDone, job));
     if (!task) {
         delete job;
         ShellErrorSet(&self->error,
@@ -147160,19 +147511,12 @@ static void PrintNode(TaffyTree* tree, NodeId node, bool hasSibling,
     if (depth >= kMaxDepth) {
         return;
     }
-    char lines[kMaxDepth * 4 + 8];
-    int n = (int)strlen(linesString);
-    if (n > (int)sizeof(lines) - 8) {
-        n = (int)sizeof(lines) - 8;
-    }
-    memcpy(lines, linesString, (size_t)n);
     const char* bar = hasSibling ? "│   " : "    ";
-    memcpy(lines + n, bar, strlen(bar));
-    lines[n + (int)strlen(bar)] = 0;
+    base::TempStr lines = base::fmt("%s%s", Str(linesString), Str(bar));
 
     int count = tree->ChildCount(node);
     for (int i = 0; i < count; i++) {
-        PrintNode(tree, tree->GetChildId(node, i), i < count - 1, lines,
+        PrintNode(tree, tree->GetChildId(node, i), i < count - 1, lines.s,
                   depth + 1);
     }
 }
@@ -147782,10 +148126,8 @@ static void PutHeaderString(DbusWriter* fields, uint8_t code,
     PutByte(fields, code);
     PutSignature(fields, signature);
     if (signature[0] == 'g') {
-        char copy[256] = {};
-        int n = std::min(value.len, (int)sizeof(copy) - 1);
-        memcpy(copy, value.s, (size_t)n);
-        PutSignature(fields, copy);
+        TempStr copy = StrDupTemp(Str(value.s, std::min(value.len, 255)));
+        PutSignature(fields, copy.s);
     } else {
         PutString(fields, value);
     }
@@ -147970,44 +148312,42 @@ static bool ParseUnixAddress(Str address, sockaddr_un* out, socklen_t* outLen) {
     if (!address.s || !out || !outLen) {
         return false;
     }
-    char copy[512] = {};
-    int copyLen = std::min(address.len, (int)sizeof(copy) - 1);
-    memcpy(copy, address.s, (size_t)copyLen);
-    const char* key = strstr(copy, "unix:path=");
+    int copyLen = std::min(address.len, 511);
+    TempStr copy = StrDupTemp(Str(address.s, copyLen));
+    int key = StrFind(copy, "unix:path=");
     bool abstract = false;
-    if (!key) {
-        key = strstr(copy, "unix:abstract=");
+    if (key < 0) {
+        key = StrFind(copy, "unix:abstract=");
         abstract = true;
     }
-    if (!key) {
+    if (key < 0) {
         return false;
     }
     key += abstract ? 14 : 10;
-    const char* end = key;
-    while (end < copy + copyLen && *end != ',' && *end != ';') {
+    int end = key;
+    while (end < copyLen && copy.s[end] != ',' && copy.s[end] != ';') {
         end++;
     }
     memset(out, 0, sizeof(*out));
     out->sun_family = AF_UNIX;
     int at = abstract ? 1 : 0;
-    for (const char* p = key; p < end && at < (int)sizeof(out->sun_path) - 1;
-         p++) {
-        if (*p == '%' && p + 2 < end) {
+    for (int p = key; p < end && at < (int)sizeof(out->sun_path) - 1; p++) {
+        if (copy.s[p] == '%' && p + 2 < end) {
             auto hex = [](char ch) -> int {
                 if (ch >= '0' && ch <= '9') return ch - '0';
                 if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
                 if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
                 return -1;
             };
-            int hi = hex(p[1]);
-            int lo = hex(p[2]);
+            int hi = hex(copy.s[p + 1]);
+            int lo = hex(copy.s[p + 2]);
             if (hi >= 0 && lo >= 0) {
                 out->sun_path[at++] = (char)((hi << 4) | lo);
                 p += 2;
                 continue;
             }
         }
-        out->sun_path[at++] = *p;
+        out->sun_path[at++] = copy.s[p];
     }
     *outLen =
         (socklen_t)(offsetof(sockaddr_un, sun_path) + at + (abstract ? 0 : 1));
@@ -148015,37 +148355,39 @@ static bool ParseUnixAddress(Str address, sockaddr_un* out, socklen_t* outLen) {
 }
 
 static bool Authenticate() {
-    char uid[32] = {};
-    snprintf(uid, sizeof(uid), "%u", (unsigned)getuid());
-    char auth[160] = {};
+    TempStr uid = fmt("%u", (unsigned)getuid());
+    TempStr auth = AllocStrTemp(159);
+    memset(auth.s, 0, (size_t)auth.len);
     int at = 0;
-    auth[at++] = 0;
-    memcpy(auth + at, "AUTH EXTERNAL ", 14);
+    auth.s[at++] = 0;
+    memcpy(auth.s + at, "AUTH EXTERNAL ", 14);
     at += 14;
-    for (const char* p = uid; *p && at + 4 < (int)sizeof(auth); p++) {
+    for (const char* p = uid.s; *p && at + 4 < auth.len; p++) {
         static const char hex[] = "0123456789abcdef";
-        auth[at++] = hex[((uint8_t)*p) >> 4];
-        auth[at++] = hex[((uint8_t)*p) & 15];
+        auth.s[at++] = hex[((uint8_t)*p) >> 4];
+        auth.s[at++] = hex[((uint8_t)*p) & 15];
     }
-    auth[at++] = '\r';
-    auth[at++] = '\n';
-    if (!SendAll((const uint8_t*)auth, at)) {
+    auth.s[at++] = '\r';
+    auth.s[at++] = '\n';
+    if (!SendAll((const uint8_t*)auth.s, at)) {
         return false;
     }
-    char reply[256] = {};
+    TempStr reply = AllocStrTemp(255);
+    reply.s[0] = 0;
     int n = 0;
-    while (n < (int)sizeof(reply) - 1) {
-        ssize_t got = recv(gA11y.fd, reply + n, sizeof(reply) - 1 - n, 0);
+    while (n < reply.len) {
+        ssize_t got = recv(gA11y.fd, reply.s + n, (size_t)(reply.len - n), 0);
         if (got <= 0) {
             return false;
         }
         n += (int)got;
-        reply[n] = 0;
-        if (strstr(reply, "\r\n")) {
+        reply.s[n] = 0;
+        Str received = Str(reply.s, n);
+        if (StrContains(received, StrL("\r\n"))) {
             break;
         }
     }
-    if (strncmp(reply, "OK ", 3) != 0) {
+    if (!StrStartsWith(Str(reply.s, n), "OK ")) {
         return false;
     }
     return SendAll((const uint8_t*)"BEGIN\r\n", 7);
@@ -148064,14 +148406,10 @@ static LinuxAccessible AccessibleForPath(Str path) {
         result.root = true;
         return result;
     }
-    char value[128] = {};
-    int n = std::min(path.len, (int)sizeof(value) - 1);
-    if (n > 0) {
-        memcpy(value, path.s, (size_t)n);
-    }
+    TempStr value = StrDupTemp(Str(path.s, std::min(path.len, 127)));
     int windowIndex = -1;
     unsigned nodeId = 0;
-    if (sscanf(value, "/org/a11y/atspi/accessible/w%d/n%u", &windowIndex,
+    if (sscanf(value.s, "/org/a11y/atspi/accessible/w%d/n%u", &windowIndex,
                &nodeId) != 2 ||
         !gA11y.app || windowIndex < 0 ||
         windowIndex >= gA11y.app->windows.len) {
@@ -148092,7 +148430,7 @@ static LinuxAccessible AccessibleForPath(Str path) {
     return result;
 }
 
-static TempStr gpui_accessibility_linux_PathFor(int windowIndex, uint32_t nodeId) {
+static TempStr PathForTemp(int windowIndex, uint32_t nodeId) {
     return fmt("/org/a11y/atspi/accessible/w%d/n%u", windowIndex, nodeId);
 }
 
@@ -148601,8 +148939,9 @@ static void PutParent(DbusWriter* body, const LinuxAccessible& object) {
     if (node.parent < 0) {
         PutObjectRef(body, Str(kRootPath));
     } else {
-        PutObjectRef(body, gpui_accessibility_linux_PathFor(object.windowIndex,
-                                   object.win->accessibility[node.parent].id));
+        PutObjectRef(body,
+                     PathForTemp(object.windowIndex,
+                                 object.win->accessibility[node.parent].id));
     }
 }
 
@@ -148887,7 +149226,7 @@ static bool HandleAccessible(const Incoming& in,
         if (ChildAt(object, wanted, &wi, &ni)) {
             PutObjectRef(
                 &body,
-                gpui_accessibility_linux_PathFor(wi, gA11y.app->windows[wi]->accessibility[ni].id));
+                PathForTemp(wi, gA11y.app->windows[wi]->accessibility[ni].id));
         } else {
             PutNullObjectRef(&body);
         }
@@ -148900,9 +149239,9 @@ static bool HandleAccessible(const Incoming& in,
             int wi = -1;
             int ni = -1;
             if (ChildAt(object, i, &wi, &ni)) {
-                PutObjectRef(
-                    &body,
-                    gpui_accessibility_linux_PathFor(wi, gA11y.app->windows[wi]->accessibility[ni].id));
+                PutObjectRef(&body, PathForTemp(wi, gA11y.app->windows[wi]
+                                                        ->accessibility[ni]
+                                                        .id));
             }
         }
         ArrayEnd(&body, lengthAt, contentsAt);
@@ -149055,8 +149394,9 @@ static bool HandleComponent(const Incoming& in, const LinuxAccessible& object) {
         int found = NodeAtPoint(object.win, object.nodeIndex, (int)point.x,
                                 (int)point.y);
         if (found >= 0) {
-            PutObjectRef(&body, gpui_accessibility_linux_PathFor(object.windowIndex,
-                                        object.win->accessibility[found].id));
+            PutObjectRef(&body,
+                         PathForTemp(object.windowIndex,
+                                     object.win->accessibility[found].id));
         } else {
             PutNullObjectRef(&body);
         }
@@ -149579,8 +149919,8 @@ static bool HandleSelection(const Incoming& in, const LinuxAccessible& object) {
             SelectedAt(object, (int)ReadU32(in.body, in.bodyLen, &at));
         if (selected >= 0) {
             PutObjectRef(&body,
-                         gpui_accessibility_linux_PathFor(object.windowIndex,
-                                 object.win->accessibility[selected].id));
+                         PathForTemp(object.windowIndex,
+                                     object.win->accessibility[selected].id));
         } else {
             PutNullObjectRef(&body);
         }
@@ -149771,7 +150111,7 @@ static void SendEvent(Window* win, uint32_t nodeId, const char* member,
         }
     }
     if (wi < 0) return;
-    Str path = nodeId ? (Str)gpui_accessibility_linux_PathFor(wi, nodeId) : Str(kRootPath);
+    Str path = nodeId ? (Str)PathForTemp(wi, nodeId) : Str(kRootPath);
     DbusWriter fields;
     DbusWriter body;
     PutHeaderString(&fields, 1, "o", path);
@@ -152106,7 +152446,7 @@ bool AccessibilityWinSmokeTest(Window* win, uint32_t nodeId) {
         {UIA_ValuePatternId, AccessibilityTextRole(expected->info.role)},
         {UIA_RangeValuePatternId, expected->slider && expected->info
                                                           .hasNumericValue},
-        {UIA_ExpandCollapsePatternId, expected->info.hasExpanded},
+        {UIA_ExpandCollapsePatternId, expected->info.hasExpanded != 0},
         {UIA_SelectionPatternId,
          AccessibilitySelectionContainerRole(expected->info.role)},
         {UIA_SelectionItemPatternId,
@@ -155389,13 +155729,13 @@ bool WinPaintOptionsTakeArg(Str arg) {
     const Str msaa = StrL("__msaa=");
     if (base::StrStartsWith(arg, msaa)) {
         Str value(arg.s + msaa.len, arg.len - msaa.len);
-        if (base::StrEq(value, "1")) {
+        if (base::StrEq(value, StrL("1"))) {
             gWinPaintOptions.msaa = WinPaintMsaa::X1;
-        } else if (base::StrEq(value, "2")) {
+        } else if (base::StrEq(value, StrL("2"))) {
             gWinPaintOptions.msaa = WinPaintMsaa::X2;
-        } else if (base::StrEq(value, "4")) {
+        } else if (base::StrEq(value, StrL("4"))) {
             gWinPaintOptions.msaa = WinPaintMsaa::X4;
-        } else if (base::StrEq(value, "8")) {
+        } else if (base::StrEq(value, StrL("8"))) {
             gWinPaintOptions.msaa = WinPaintMsaa::X8;
         }
         return true;
@@ -156620,8 +156960,9 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
                 if (targetW == 0) targetW = 1;
             }
             if (SUCCEEDED(wic->CreateBitmapScaler(&scaler))) {
-                if (SUCCEEDED(scaler->Initialize(conv, targetW, targetH,
-                                                 WICBitmapInterpolationModeFant))) {
+                if (SUCCEEDED(
+                        scaler->Initialize(conv, targetW, targetH,
+                                           WICBitmapInterpolationModeFant))) {
                     source = scaler;
                     w = targetW;
                     h = targetH;
@@ -160815,23 +161156,22 @@ static void PreeditDraw(XIC, XPointer client, XPointer call) {
     }
     PlatWindow* pw = win->plat;
 
-    char ins[512];
+    TempStr ins = AllocStrTemp(511);
     int insLen = 0;
     if (d->text && d->text->length > 0) {
         if (d->text->encoding_is_wchar) {
             const wchar_t* w = d->text->string.wide_char;
-            for (int i = 0;
-                 w && i < d->text->length && insLen < (int)sizeof(ins) - 8;
+            for (int i = 0; w && i < d->text->length && insLen < ins.len - 8;
                  i++) {
-                insLen += PreeditUtf8Encode((uint32_t)w[i], ins + insLen);
+                insLen += PreeditUtf8Encode((uint32_t)w[i], ins.s + insLen);
             }
         } else if (d->text->string.multi_byte) {
             const char* m = d->text->string.multi_byte;
             insLen = (int)strlen(m);
-            if (insLen > (int)sizeof(ins)) {
-                insLen = (int)sizeof(ins);
+            if (insLen > ins.len) {
+                insLen = ins.len;
             }
-            memcpy(ins, m, (size_t)insLen);
+            memcpy(ins.s, m, (size_t)insLen);
         }
     }
     int from = Utf8ByteOfChar(pw->preedit, pw->preeditLen, d->chg_first);
@@ -160846,7 +161186,7 @@ static void PreeditDraw(XIC, XPointer client, XPointer call) {
         return;
     }
     memmove(pw->preedit + from + insLen, pw->preedit + to, (size_t)tail);
-    memcpy(pw->preedit + from, ins, (size_t)insLen);
+    memcpy(pw->preedit + from, ins.s, (size_t)insLen);
     pw->preeditLen = from + insLen + tail;
     pw->preeditCaret = d->caret;
     PreeditApply(win);
@@ -160923,9 +161263,10 @@ static void OnKeyRelease(Window* win, XKeyEvent* ke) {
             return;
         }
     }
-    char buf[8] = {};
+    TempStr buf = AllocStrTemp(7);
+    buf.s[0] = 0;
     KeySym ks = 0;
-    XLookupString(ke, buf, (int)sizeof(buf) - 1, &ks, nullptr);
+    XLookupString(ke, buf.s, buf.len, &ks, nullptr);
     int key = KeyFor(ks);
     if (key) {
         WindowKeyUp(win, key, (ke->state & ShiftMask) != 0,
@@ -161160,15 +161501,12 @@ void OpenUrl(Str url) {
     if (!url.s || url.len <= 0) {
         return;
     }
-    char buf[1024];
-    int n = url.len < (int)sizeof(buf) - 1 ? url.len : (int)sizeof(buf) - 1;
-    memcpy(buf, url.s, (size_t)n);
-    buf[n] = 0;
+    TempStr value = StrDupTemp(url.len < 1023 ? url : Str(url.s, 1023));
     pid_t pid = fork();
     if (pid == 0) {
 
         if (fork() == 0) {
-            execlp("xdg-open", "xdg-open", buf, (char*)nullptr);
+            execlp("xdg-open", "xdg-open", value.s, (char*)nullptr);
             _exit(127);
         }
         _exit(0);
@@ -161179,23 +161517,14 @@ void OpenUrl(Str url) {
     }
 }
 
-bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
+TempStr PromptForPathTemp(Window* win, const PathPrompt& opts) {
     (void)win;
-    if (!out || cap <= 0) {
-        return false;
-    }
-    out[0] = 0;
-    char title[256];
-    int tn = opts.title.len < (int)sizeof(title) - 1 ? opts.title.len
-                                                     : (int)sizeof(title) - 1;
-    if (tn > 0) {
-        memcpy(title, opts.title.s, (size_t)tn);
-    }
-    title[tn > 0 ? tn : 0] = 0;
+    TempStr title =
+        StrDupTemp(opts.title.len < 255 ? opts.title : Str(opts.title.s, 255));
     bool dirs = opts.directories && !opts.files;
     int fds[2] = {-1, -1};
     if (pipe(fds) != 0) {
-        return false;
+        return {};
     }
     pid_t pid = fork();
     if (pid == 0) {
@@ -161205,14 +161534,14 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
 
         if (dirs) {
             execlp("zenity", "zenity", "--file-selection", "--directory",
-                   title[0] ? "--title" : (char*)nullptr,
-                   title[0] ? title : (char*)nullptr, (char*)nullptr);
+                   title ? "--title" : (char*)nullptr,
+                   title ? title.s : (char*)nullptr, (char*)nullptr);
             execlp("kdialog", "kdialog", "--getexistingdirectory", ".",
                    (char*)nullptr);
         } else {
             execlp("zenity", "zenity", "--file-selection",
-                   title[0] ? "--title" : (char*)nullptr,
-                   title[0] ? title : (char*)nullptr, (char*)nullptr);
+                   title ? "--title" : (char*)nullptr,
+                   title ? title.s : (char*)nullptr, (char*)nullptr);
             execlp("kdialog", "kdialog", "--getopenfilename", ".",
                    (char*)nullptr);
         }
@@ -161221,16 +161550,23 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
     close(fds[1]);
     if (pid < 0) {
         close(fds[0]);
-        return false;
+        return {};
+    }
+    TempStr result = AllocStrTemp(kMaxPath - 1);
+    if (!result.s) {
+        close(fds[0]);
+        int st = 0;
+        waitpid(pid, &st, 0);
+        return {};
     }
     int n = 0;
     for (;;) {
-        ssize_t got = read(fds[0], out + n, (size_t)(cap - 1 - n));
+        ssize_t got = read(fds[0], result.s + n, (size_t)(result.len - n));
         if (got <= 0) {
             break;
         }
         n += (int)got;
-        if (n >= cap - 1) {
+        if (n >= result.len) {
             break;
         }
     }
@@ -161238,11 +161574,12 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
     int st = 0;
     waitpid(pid, &st, 0);
 
-    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r')) {
+    while (n > 0 && (result.s[n - 1] == '\n' || result.s[n - 1] == '\r')) {
         n--;
     }
-    out[n] = 0;
-    return n > 0;
+    result.s[n] = 0;
+    result.len = n;
+    return result;
 }
 
 void ClipboardSetText(Window* win, Str text) {
@@ -163312,8 +163649,8 @@ static NSImage* MenuIconImage(Window* win, const char* path) {
     return image;
 }
 
-static NSString* KeyEquivalent(const char* key) {
-    if (!key || !key[0]) {
+static NSString* KeyEquivalent(Str key) {
+    if (!key) {
         return @"";
     }
     struct Named {
@@ -163338,17 +163675,18 @@ static NSString* KeyEquivalent(const char* key) {
         {"pagedown", NSPageDownFunctionKey},
     };
     for (size_t i = 0; i < sizeof(kNamed) / sizeof(kNamed[0]); i++) {
-        if (strcmp(kNamed[i].name, key) == 0) {
+        if (StrEq(key, kNamed[i].name)) {
             unichar ch = kNamed[i].ch;
             return [NSString stringWithCharacters:&ch length:1];
         }
     }
 
-    if ((key[0] == 'f' || key[0] == 'F') && key[1] >= '0' && key[1] <= '9') {
-        int n = key[1] - '0';
-        if (key[2] >= '0' && key[2] <= '9' && key[3] == 0) {
-            n = n * 10 + (key[2] - '0');
-        } else if (key[2] != 0) {
+    if ((key.s[0] == 'f' || key.s[0] == 'F') && key.len >= 2 &&
+        key.s[1] >= '0' && key.s[1] <= '9') {
+        int n = key.s[1] - '0';
+        if (key.len == 3 && key.s[2] >= '0' && key.s[2] <= '9') {
+            n = n * 10 + (key.s[2] - '0');
+        } else if (key.len != 2) {
             n = 0;
         }
         if (n >= 1 && n <= 12) {
@@ -163358,8 +163696,9 @@ static NSString* KeyEquivalent(const char* key) {
         return @"";
     }
 
-    if (key[1] == 0) {
-        return [NSString stringWithUTF8String:key];
+    if (key.len == 1) {
+        TempStr keyZ = StrDupTemp(key);
+        return [NSString stringWithUTF8String:keyZ.s];
     }
     return @"";
 }
@@ -163414,7 +163753,7 @@ static NSMenu* BuildMenu(Window* win, const PlatMenuItem* items, int n,
             [item setTag:it.id];
             [item setState:(it.checked ? NSControlStateValueOn
                                        : NSControlStateValueOff)];
-            NSString* equivalent = KeyEquivalent(it.key);
+            NSString* equivalent = KeyEquivalent(Str(it.key));
             if ([equivalent length] > 0) {
                 [item setKeyEquivalent:equivalent];
                 [item
@@ -163546,7 +163885,7 @@ void PlatSetAppMenu(App* app, const PlatMenuItem* items, int n) {
         [row setSubmenu:sub];
         [bar addItem:row];
 
-        if (strcmp(it.label ? it.label : "", "Window") == 0) {
+        if (StrEq(Str(it.label), StrL("Window"))) {
             [NSApp setWindowsMenu:sub];
         }
     }
@@ -163573,12 +163912,8 @@ void OpenUrl(Str url) {
     }
 }
 
-bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
+TempStr PromptForPathTemp(Window* win, const PathPrompt& opts) {
     (void)win;
-    if (!out || cap <= 0) {
-        return false;
-    }
-    out[0] = 0;
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     [panel setCanChooseFiles:opts.files ? YES : NO];
     [panel setCanChooseDirectories:opts.directories ? YES : NO];
@@ -163592,15 +163927,14 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
         }
     }
     if ([panel runModal] != NSModalResponseOK) {
-        return false;
+        return {};
     }
     NSURL* url = [[panel URLs] firstObject];
     const char* path = url ? [[url path] UTF8String] : nullptr;
     if (!path) {
-        return false;
+        return {};
     }
-    StrCopyZ(out, cap, path);
-    return out[0] != 0;
+    return StrDupTemp(Str(path));
 }
 
 void ClipboardSetText(Window* win, Str text) {
@@ -164031,10 +164365,11 @@ static int KeyFor(const EmscriptenKeyboardEvent* e) {
         vk = (int)e->which;
     }
     if (vk == 0) {
-        if (strcmp(e->code, "BracketLeft") == 0) {
+        Str code = Str(e->code);
+        if (StrEq(code, StrL("BracketLeft"))) {
             return KeyLeftBracket;
         }
-        if (strcmp(e->code, "BracketRight") == 0) {
+        if (StrEq(code, StrL("BracketRight"))) {
             return KeyRightBracket;
         }
     }
@@ -164042,13 +164377,13 @@ static int KeyFor(const EmscriptenKeyboardEvent* e) {
 }
 
 static uint32_t CharOf(const EmscriptenKeyboardEvent* e) {
-    const char* k = e->key;
-    if (!k || !k[0]) {
+    Str key = Str(e->key);
+    if (!key) {
         return 0;
     }
-    uint8_t c0 = (uint8_t)k[0];
+    uint8_t c0 = (uint8_t)key.s[0];
     int need = c0 < 0x80 ? 1 : (c0 < 0xe0 ? 2 : (c0 < 0xf0 ? 3 : 4));
-    if ((int)strlen(k) != need) {
+    if (key.len != need) {
 
         return 0;
     }
@@ -164056,13 +164391,14 @@ static uint32_t CharOf(const EmscriptenKeyboardEvent* e) {
     if (need == 1) {
         cp = c0;
     } else if (need == 2) {
-        cp = ((uint32_t)(c0 & 0x1f) << 6) | (uint8_t)(k[1] & 0x3f);
+        cp = ((uint32_t)(c0 & 0x1f) << 6) | (uint8_t)(key.s[1] & 0x3f);
     } else if (need == 3) {
-        cp = ((uint32_t)(c0 & 0x0f) << 12) | ((uint32_t)(k[1] & 0x3f) << 6) |
-             (uint8_t)(k[2] & 0x3f);
+        cp = ((uint32_t)(c0 & 0x0f) << 12) |
+             ((uint32_t)(key.s[1] & 0x3f) << 6) | (uint8_t)(key.s[2] & 0x3f);
     } else {
-        cp = ((uint32_t)(c0 & 0x07) << 18) | ((uint32_t)(k[1] & 0x3f) << 12) |
-             ((uint32_t)(k[2] & 0x3f) << 6) | (uint8_t)(k[3] & 0x3f);
+        cp = ((uint32_t)(c0 & 0x07) << 18) |
+             ((uint32_t)(key.s[1] & 0x3f) << 12) |
+             ((uint32_t)(key.s[2] & 0x3f) << 6) | (uint8_t)(key.s[3] & 0x3f);
     }
     return cp;
 }
@@ -164420,13 +164756,10 @@ void OpenUrl(Str url) {
     }
 }
 
-bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
+TempStr PromptForPathTemp(Window* win, const PathPrompt& opts) {
     (void)win;
     (void)opts;
-    if (out && cap > 0) {
-        out[0] = 0;
-    }
-    return false;
+    return {};
 }
 
 void ClipboardSetText(Window* win, Str text) {
@@ -164632,20 +164965,20 @@ static bool ImeComposition(Window* win, LPARAM lParam) {
     if (!imc) {
         return false;
     }
-    char buf[1024];
+    TempStr buf = AllocStrTemp(1023);
     if (lParam & GCS_RESULTSTR) {
-        int n = ImeStringUtf8(imc, GCS_RESULTSTR, buf, (int)sizeof(buf));
+        int n = ImeStringUtf8(imc, GCS_RESULTSTR, buf.s, buf.len + 1);
         if (n > 0) {
 
-            InputReplaceTextInRange(in, win->app, win, nullptr, Str(buf, n));
+            InputReplaceTextInRange(in, win->app, win, nullptr, Str(buf.s, n));
         } else {
             InputUnmarkText(in, win->app, win);
         }
     }
     if (lParam & GCS_COMPSTR) {
-        int n = ImeStringUtf8(imc, GCS_COMPSTR, buf, (int)sizeof(buf));
+        int n = ImeStringUtf8(imc, GCS_COMPSTR, buf.s, buf.len + 1);
         if (n >= 0) {
-            Str text = Str(buf, n);
+            Str text = Str(buf.s, n);
             LONG caret =
                 ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0);
             Selection sel = {};
@@ -164703,14 +165036,6 @@ static void RenderFrame(Window* win) {
     HWND hwnd = Hwnd(win);
     if (!hwnd || IsIconic(hwnd)) {
         return;
-    }
-    if (!win->active && win->lastDrawTime > 0) {
-        double now = TimeNow();
-        if (now - win->lastDrawTime < kInactiveFrameInterval - 0.020) {
-            win->pendingInvalidate = true;
-            PlatSetTimer(win, WindowTimerMs(win));
-            return;
-        }
     }
     RECT rc = {};
     GetClientRect(hwnd, &rc);
@@ -165171,14 +165496,6 @@ void AppQuit(Window* win) {
 void AppInvalidate(Window* win) {
     if (win) {
         win->invalidations++;
-        if (!win->active && win->lastDrawTime > 0) {
-            double now = TimeNow();
-            if (now - win->lastDrawTime < kInactiveFrameInterval - 0.020) {
-                win->pendingInvalidate = true;
-                PlatSetTimer(win, WindowTimerMs(win));
-                return;
-            }
-        }
     }
     HWND hwnd = Hwnd(win);
     if (hwnd) {
@@ -165509,16 +165826,12 @@ void OpenUrl(Str url) {
                   SW_SHOWNORMAL);
 }
 
-bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
-    if (!out || cap <= 0) {
-        return false;
-    }
-    out[0] = 0;
+TempStr PromptForPathTemp(Window* win, const PathPrompt& opts) {
     IFileOpenDialog* dlg = nullptr;
     HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
                                   CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg));
     if (FAILED(hr) || !dlg) {
-        return false;
+        return {};
     }
     DWORD flags = 0;
     dlg->GetOptions(&flags);
@@ -165534,18 +165847,25 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
     }
     HWND owner = win && win->plat ? win->plat->hwnd : nullptr;
     hr = dlg->Show(owner);
-    bool got = false;
+    TempStr result;
     if (SUCCEEDED(hr)) {
         IShellItem* item = nullptr;
         if (SUCCEEDED(dlg->GetResult(&item)) && item) {
             PWSTR wide = nullptr;
             if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &wide)) &&
                 wide) {
-                int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, out, cap,
+                int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0,
                                             nullptr, nullptr);
-                got = n > 0;
-                if (!got) {
-                    out[0] = 0;
+                if (n > 1) {
+                    result = AllocStrTemp(n - 1);
+                    if (result.s) {
+                        int wrote =
+                            WideCharToMultiByte(CP_UTF8, 0, wide, -1, result.s,
+                                                n, nullptr, nullptr);
+                        if (wrote != n) {
+                            result = {};
+                        }
+                    }
                 }
                 CoTaskMemFree(wide);
             }
@@ -165553,7 +165873,7 @@ bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap) {
         }
     }
     dlg->Release();
-    return got;
+    return result;
 }
 
 void ClipboardSetText(Window* win, Str text) {
@@ -165953,12 +166273,8 @@ static bool ProbeOpenLocked() {
     if (!HasAccelerators()) {
         return false;
     }
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "pid %d,", (int)getpid());
-    if (n <= 0 || n >= (int)sizeof(buf)) {
-        return false;
-    }
-    gProbe.creator = CFStringCreateWithCString(kCFAllocatorDefault, buf,
+    TempStr creator = fmt("pid %d,", (int)getpid());
+    gProbe.creator = CFStringCreateWithCString(kCFAllocatorDefault, creator.s,
                                                kCFStringEncodingUTF8);
     if (!gProbe.creator) {
         return false;
@@ -166117,18 +166433,20 @@ bool GpuAvailable() {
     return available;
 }
 
-static Str EngineOf(const WCHAR* name, char* buf, int cap) {
+static TempStr EngineOfTemp(const WCHAR* name) {
+    int cap = (int)wcslen(name);
+    TempStr buf = AllocStrTemp(cap);
     int n = 0;
-    for (int i = 0; name[i] && n < cap - 1; i++) {
+    for (int i = 0; name[i] && n < cap; i++) {
 
-        buf[n++] = (char)(name[i] < 128 ? name[i] : '?');
+        buf.s[n++] = (char)(name[i] < 128 ? name[i] : '?');
     }
-    buf[n] = 0;
-    Str whole = Str(buf, n);
+    buf.s[n] = 0;
+    buf.len = n;
     int typeLen = (int)strlen(kEngineType);
     for (int i = n - typeLen; i >= 0; i--) {
-        if (StrEq(Str(whole.s + i, typeLen), Str(kEngineType, typeLen))) {
-            return Str(whole.s + i + typeLen, n - i - typeLen);
+        if (StrEq(Str(buf.s + i, typeLen), Str(kEngineType, typeLen))) {
+            return Str(buf.s + i + typeLen, n - i - typeLen);
         }
     }
     return {};
@@ -166161,8 +166479,7 @@ static float GpuUsagePercentLocked() {
     }
 
     static constexpr int kMaxTypes = 16;
-    static constexpr int kNameMax = 256;
-    char names[kMaxTypes][32] = {};
+    Str names[kMaxTypes] = {};
     double busy[kMaxTypes] = {};
     int nTypes = 0;
     bool any = false;
@@ -166171,28 +166488,25 @@ static float GpuUsagePercentLocked() {
         if (!instance) {
             continue;
         }
-        char nameBuf[kNameMax];
-        Str engine = EngineOf(instance, nameBuf, kNameMax);
+        TempStr whole = EngineOfTemp(instance);
+        Str engine = whole;
         if (engine.len == 0) {
             continue;
         }
-        if (strncmp(nameBuf, gProbe.owner, (size_t)gProbe.ownerLen) != 0) {
+        if (!StrStartsWith(whole, Str(gProbe.owner, gProbe.ownerLen))) {
             continue;
         }
         any = true;
         int slot = -1;
         for (int k = 0; k < nTypes; k++) {
-            if (strncmp(names[k], engine.s, (size_t)engine.len) == 0 &&
-                names[k][engine.len] == 0) {
+            if (StrEq(names[k], engine)) {
                 slot = k;
                 break;
             }
         }
         if (slot < 0 && nTypes < kMaxTypes) {
             slot = nTypes++;
-            int n = engine.len < 31 ? engine.len : 31;
-            memcpy(names[slot], engine.s, (size_t)n);
-            names[slot][n] = 0;
+            names[slot] = StrDupTemp(engine);
             busy[slot] = 0;
         }
         if (slot >= 0) {
@@ -167220,11 +167534,10 @@ static LRESULT CALLBACK NotifyWndProc(HWND hwnd, UINT msg, WPARAM wp,
     UINT ev = LOWORD(lp);
     if (ev == NIN_BALLOONUSERCLICK) {
 
-        char tag[kTagCap];
-        StrCopyZ(tag, kTagCap, gNotify.tag);
+        TempStr tag = StrDupTemp(Str(gNotify.tag));
         gNotify.tag[0] = 0;
-        if (gNotify.onResponse.IsValid() && tag[0]) {
-            gNotify.onResponse.Call(Str(tag));
+        if (gNotify.onResponse.IsValid() && tag) {
+            gNotify.onResponse.Call(tag);
         }
     } else if (ev == NIN_BALLOONTIMEOUT || ev == NIN_BALLOONHIDE) {
 
@@ -167320,8 +167633,7 @@ void SysNotifyDismiss(Str tag) {
     if (!gNotify.iconAdded || !gNotify.tag[0]) {
         return;
     }
-    if (!tag.s || (int)strlen(gNotify.tag) != tag.len ||
-        strncmp(gNotify.tag, tag.s, (size_t)tag.len) != 0) {
+    if (!StrEq(Str(gNotify.tag), tag)) {
 
         return;
     }
@@ -167392,27 +167704,16 @@ void SysStateFree(SysState* s) {
     VecReset(s->procs);
 }
 
-static int ReadSmallFile(const char* path, char* buf, int cap) {
-    FILE* f = fopen(path, "rb");
-    if (!f) {
-        return 0;
-    }
-    size_t n = fread(buf, 1, (size_t)cap - 1, f);
-    fclose(f);
-    buf[n] = 0;
-    return (int)n;
-}
-
 static void RefreshCpu(SysState* s) {
-    char buf[512];
-    if (ReadSmallFile("/proc/stat", buf, (int)sizeof(buf)) <= 0) {
+    TempStr buf = ReadBoundedFileTemp(StrL("/proc/stat"), 511);
+    if (!buf) {
         return;
     }
 
     unsigned long long v[10] = {};
-    int n = sscanf(buf, "cpu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu",
-                   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7],
-                   &v[8], &v[9]);
+    int n = sscanf(
+        buf.s, "cpu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0],
+        &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9]);
     if (n < 4) {
         return;
     }
@@ -167438,32 +167739,38 @@ static void RefreshCpu(SysState* s) {
     s->prevCpu = cur;
 }
 
-static uint64_t MeminfoKb(const char* text, const char* key) {
-    const char* p = strstr(text, key);
-    if (!p) {
+static uint64_t MeminfoKb(Str text, Str key) {
+    int at = StrFind(text, key);
+    if (at < 0) {
         return 0;
     }
-    p += strlen(key);
-    while (*p == ' ' || *p == ':' || *p == '\t') {
-        p++;
+    at += key.len;
+    while (at < text.len &&
+           (text.s[at] == ' ' || text.s[at] == ':' || text.s[at] == '\t')) {
+        at++;
     }
-    return strtoull(p, nullptr, 10) * 1024ull;
+    uint64_t value = 0;
+    while (at < text.len && text.s[at] >= '0' && text.s[at] <= '9') {
+        value = value * 10 + (uint64_t)(text.s[at++] - '0');
+    }
+    return value * 1024ull;
 }
 
 static void RefreshMemory(SysState* s) {
-    char buf[4096];
-    if (ReadSmallFile("/proc/meminfo", buf, (int)sizeof(buf)) <= 0) {
+    TempStr buf = ReadBoundedFileTemp(StrL("/proc/meminfo"), 4095);
+    if (!buf) {
         return;
     }
-    uint64_t total = MeminfoKb(buf, "MemTotal");
-    uint64_t avail = MeminfoKb(buf, "MemAvailable");
+    uint64_t total = MeminfoKb(buf, StrL("MemTotal"));
+    uint64_t avail = MeminfoKb(buf, StrL("MemAvailable"));
     if (total == 0) {
         return;
     }
     if (avail == 0) {
 
-        avail = MeminfoKb(buf, "MemFree") + MeminfoKb(buf, "Cached") +
-                MeminfoKb(buf, "Buffers");
+        avail = MeminfoKb(buf, StrL("MemFree")) +
+                MeminfoKb(buf, StrL("Cached")) +
+                MeminfoKb(buf, StrL("Buffers"));
     }
     if (avail > total) {
         avail = total;
@@ -167499,27 +167806,25 @@ static void RefreshBattery(SysState* s) {
         if (ent->d_name[0] == '.') {
             continue;
         }
-        char path[512];
-        char buf[128];
-        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/type",
-                 ent->d_name);
-        if (ReadSmallFile(path, buf, (int)sizeof(buf)) <= 0) {
+        TempStr path = fmt("/sys/class/power_supply/%s/type", Str(ent->d_name));
+        TempStr buf = ReadBoundedFileTemp(path, 127);
+        if (!buf) {
             continue;
         }
-        if (!base::StrStartsWithI(Str(buf), "Battery")) {
+        if (!base::StrStartsWithI(Str(buf.s), "Battery")) {
             continue;
         }
-        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity",
-                 ent->d_name);
-        if (ReadSmallFile(path, buf, (int)sizeof(buf)) <= 0) {
+        path = fmt("/sys/class/power_supply/%s/capacity", Str(ent->d_name));
+        buf = ReadBoundedFileTemp(path, 127);
+        if (!buf) {
             continue;
         }
         s->battery.present = true;
-        s->battery.pct = (float)StrToIntUnchecked(Str(buf));
-        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/status",
-                 ent->d_name);
-        if (ReadSmallFile(path, buf, (int)sizeof(buf)) > 0) {
-            s->battery.charging = base::StrStartsWithI(Str(buf), "Charging");
+        s->battery.pct = (float)StrToIntUnchecked(Str(buf.s));
+        path = fmt("/sys/class/power_supply/%s/status", Str(ent->d_name));
+        buf = ReadBoundedFileTemp(path, 127);
+        if (buf) {
+            s->battery.charging = base::StrStartsWithI(Str(buf.s), "Charging");
         }
         break;
     }
@@ -167606,16 +167911,15 @@ static void RefreshProcesses(SysState* s) {
         if (pid == 0) {
             continue;
         }
-        char path[64];
-        char buf[2048];
-        snprintf(path, sizeof(path), "/proc/%u/stat", pid);
-        if (ReadSmallFile(path, buf, (int)sizeof(buf)) <= 0) {
+        TempStr path = fmt("/proc/%u/stat", pid);
+        TempStr buf = ReadBoundedFileTemp(path, 2047);
+        if (!buf) {
             continue;
         }
         ProcessInfo pi;
         pi.pid = pid;
         uint64_t cpu = 0;
-        if (!ReadProcStat(buf, &pi, &cpu)) {
+        if (!ReadProcStat(buf.s, &pi, &cpu)) {
             continue;
         }
         uint64_t prev = FindPrevCpu(s->prevProcs, pid);
@@ -167647,31 +167951,33 @@ void SysRefresh(SysState* s) {
 }
 
 bool SysSelfPrivateMemory(uint64_t* bytes) {
-    char buf[8192];
-    if (ReadSmallFile("/proc/self/status", buf, sizeof(buf)) <= 0) {
+    TempStr buf = ReadBoundedFileTemp(StrL("/proc/self/status"), 8191);
+    if (!buf) {
         return false;
     }
-    const char* key = "RssAnon:";
-    size_t keyLen = strlen(key);
-    const char* line = buf;
-    while (line && *line) {
-        if (strncmp(line, key, keyLen) == 0) {
-            const char* p = line + keyLen;
-            while (*p == ' ' || *p == '\t') {
-                p++;
+    Str key = StrL("RssAnon:");
+    for (int line = 0; line < buf.len;) {
+        Str remaining = Str(buf.s + line, buf.len - line);
+        if (StrStartsWith(remaining, key)) {
+            int at = line + key.len;
+            while (at < buf.len && (buf.s[at] == ' ' || buf.s[at] == '\t')) {
+                at++;
             }
-            if (*p < '0' || *p > '9') {
+            if (at >= buf.len || buf.s[at] < '0' || buf.s[at] > '9') {
                 return false;
             }
+            uint64_t value = 0;
+            while (at < buf.len && buf.s[at] >= '0' && buf.s[at] <= '9') {
+                value = value * 10 + (uint64_t)(buf.s[at++] - '0');
+            }
             if (bytes) {
-                *bytes = strtoull(p, nullptr, 10) * 1024ull;
+                *bytes = value * 1024ull;
             }
             return true;
         }
-        line = strchr(line, '\n');
-        if (line) {
-            line++;
-        }
+        int newline = StrFind(remaining, "\n");
+        if (newline < 0) break;
+        line += newline + 1;
     }
     return false;
 }
@@ -168525,16 +168831,15 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
     int n = 0;
     struct dirent* ent = nullptr;
     while (n < max && (ent = readdir(d)) != nullptr) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+        Str name = Str(ent->d_name);
+        if (StrEq(name, StrL(".")) || StrEq(name, StrL(".."))) {
             continue;
         }
         DirEntry& e = out[n];
         StrCopyZ(e.name, (int)sizeof(e.name), ent->d_name);
-        char full[kMaxPath];
-        int fullLen = snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
+        TempStr full = fmt("%s/%s", Str(dir), name);
         struct stat st = {};
-        if (fullLen <= 0 || fullLen >= (int)sizeof(full) ||
-            lstat(full, &st) != 0) {
+        if (full.len >= kMaxPath || lstat(full.s, &st) != 0) {
             continue;
         }
         e.isSymlink = S_ISLNK(st.st_mode);
@@ -168896,10 +169201,9 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
     if (!dir || !out || max <= 0) {
         return 0;
     }
-    char pattern[kMaxPath];
-    _snprintf_s(pattern, kMaxPath, _TRUNCATE, "%s\\*", dir);
+    TempStr pattern = fmt("%s\\*", Str(dir));
     WIN32_FIND_DATAW fd = {};
-    HANDLE h = FindFirstFileW(ToCWstrTemp(Str(pattern)), &fd);
+    HANDLE h = FindFirstFileW(ToCWstrTemp(pattern), &fd);
     if (h == INVALID_HANDLE_VALUE) {
         return 0;
     }
@@ -169021,19 +169325,17 @@ bool DependencyMakeDirectories(Str path, Str* error) {
                         StrL("dependency cache path is empty or too long"));
         return false;
     }
-    char buffer[kMaxPath];
-    memcpy(buffer, path.s, (size_t)path.len);
-    buffer[path.len] = 0;
+    TempStr buffer = StrDupTemp(path);
     for (int i = 1; i <= path.len; i++) {
-        if (i < path.len && buffer[i] != '/') continue;
-        char saved = buffer[i];
-        buffer[i] = 0;
-        if (mkdir(buffer, 0700) != 0 && errno != EEXIST) {
-            buffer[i] = saved;
+        if (i < path.len && buffer.s[i] != '/') continue;
+        char saved = buffer.s[i];
+        buffer.s[i] = 0;
+        if (mkdir(buffer.s, 0700) != 0 && errno != EEXIST) {
+            buffer.s[i] = saved;
             DependencyError(error, fmt("creating %s failed", path));
             return false;
         }
-        buffer[i] = saved;
+        buffer.s[i] = saved;
     }
     return true;
 }
@@ -169048,13 +169350,10 @@ static void RemoveTreeAt(const char* path) {
     DIR* dir = opendir(path);
     if (dir) {
         for (struct dirent* entry = readdir(dir); entry; entry = readdir(dir)) {
-            if (strcmp(entry->d_name, ".") == 0 ||
-                strcmp(entry->d_name, "..") == 0)
-                continue;
-            char child[kMaxPath];
-            int n =
-                snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
-            if (n > 0 && n < (int)sizeof(child)) RemoveTreeAt(child);
+            Str name = Str(entry->d_name);
+            if (StrEq(name, StrL(".")) || StrEq(name, StrL(".."))) continue;
+            TempStr child = fmt("%s/%s", Str(path), name);
+            if (child.len < kMaxPath) RemoveTreeAt(child.s);
         }
         closedir(dir);
     }
@@ -169063,10 +169362,8 @@ static void RemoveTreeAt(const char* path) {
 
 void DependencyRemoveTree(Str path) {
     if (!path || path.len >= kMaxPath) return;
-    char buffer[kMaxPath];
-    memcpy(buffer, path.s, (size_t)path.len);
-    buffer[path.len] = 0;
-    RemoveTreeAt(buffer);
+    TempStr buffer = StrDupTemp(path);
+    RemoveTreeAt(buffer.s);
 }
 
 bool DependencyRenameDirectory(Str from, Str to) {
@@ -169126,11 +169423,11 @@ bool DependencyRemoveDirectoryLink(Str link) {
 bool DependencyReadDirectoryLink(Str link, Str* target) {
     if (target) *target = {};
     if (!link) return false;
-    char buffer[kMaxPath];
-    ssize_t n = readlink(link.s, buffer, sizeof(buffer) - 1);
+    TempStr buffer = AllocStrTemp(kMaxPath - 1);
+    ssize_t n = readlink(link.s, buffer.s, (size_t)buffer.len);
     if (n <= 0) return false;
-    buffer[n] = 0;
-    if (target) *target = StrDup(Str(buffer, (int)n));
+    buffer.s[n] = 0;
+    if (target) *target = StrDup(Str(buffer.s, (int)n));
     return true;
 }
 
@@ -169170,22 +169467,20 @@ bool DependencyMakeDirectories(Str path, Str* error) {
                         StrL("dependency cache path is empty or too long"));
         return false;
     }
-    char buffer[kMaxPath];
-    memcpy(buffer, path.s, (size_t)path.len);
-    buffer[path.len] = 0;
+    TempStr buffer = StrDupTemp(path);
     for (int i = 1; i <= path.len; i++) {
-        if (i < path.len && buffer[i] != '/' && buffer[i] != '\\') continue;
-        char saved = buffer[i];
-        buffer[i] = 0;
+        if (i < path.len && buffer.s[i] != '/' && buffer.s[i] != '\\') continue;
+        char saved = buffer.s[i];
+        buffer.s[i] = 0;
 
-        bool root = i == 2 && buffer[1] == ':';
-        if (!root && !CreateDirectoryW(Wide(Str(buffer, i)), nullptr) &&
+        bool root = i == 2 && buffer.s[1] == ':';
+        if (!root && !CreateDirectoryW(Wide(Str(buffer.s, i)), nullptr) &&
             GetLastError() != ERROR_ALREADY_EXISTS) {
-            buffer[i] = saved;
+            buffer.s[i] = saved;
             DependencyError(error, fmt("creating %s failed", path));
             return false;
         }
-        buffer[i] = saved;
+        buffer.s[i] = saved;
     }
     return true;
 }
@@ -169210,11 +169505,11 @@ static void RemoveTreeAt(Str path) {
             if (wcscmp(found.cFileName, L".") == 0 ||
                 wcscmp(found.cFileName, L"..") == 0)
                 continue;
-            char name[kMaxPath];
-            int n = WideCharToMultiByte(CP_UTF8, 0, found.cFileName, -1, name,
-                                        (int)sizeof(name), nullptr, nullptr);
+            TempStr name = AllocStrTemp(kMaxPath - 1);
+            int n = WideCharToMultiByte(CP_UTF8, 0, found.cFileName, -1, name.s,
+                                        name.len + 1, nullptr, nullptr);
             if (n <= 1) continue;
-            RemoveTreeAt(fmt("%s\\%s", path, Str(name, n - 1)));
+            RemoveTreeAt(fmt("%s\\%s", path, Str(name.s, n - 1)));
         } while (FindNextFileW(search, &found));
         FindClose(search);
     }
@@ -169460,9 +169755,9 @@ static int OpenRoot(Str root, bool create, Str* error) {
     return -1;
 }
 
-static bool ValidComponent(const char* value) {
-    return value[0] && strcmp(value, ".") != 0 && strcmp(value, "..") != 0 &&
-           strchr(value, '\\') == nullptr;
+static bool ValidComponent(Str value) {
+    return value && !StrEq(value, StrL(".")) && !StrEq(value, StrL("..")) &&
+           StrFind(value, "\\") < 0;
 }
 
 static int OpenDirectoryAt(int parent, const char* name) {
@@ -169470,37 +169765,40 @@ static int OpenDirectoryAt(int parent, const char* name) {
                   O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
 }
 
-static bool OpenParent(int root, Str relative, int* parent, char leaf[256],
+static bool OpenParent(int root, Str relative, int* parent, TempStr* leaf,
                        Str rootName, Str* error) {
     *parent = -1;
-    leaf[0] = 0;
-    if (StrEq(relative, ".")) {
+    *leaf = {};
+    if (StrEq(relative, StrL("."))) {
         int copy = dup(root);
-        if (copy < 0) SyscallError(error, "open", rootName, relative);
+        if (copy < 0)
+            SyscallError(error, "open", rootName, relative);
         else {
             *parent = copy;
-            strcpy(leaf, ".");
+            *leaf = StrDupTemp(StrL("."));
         }
         return copy >= 0;
     }
-    char* path = StrDup(relative).s;
-    if (!path) {
+    TempStr path = StrDupTemp(relative);
+    if (!path.s) {
         FsError(error, StrL("allocating a filesystem path failed"));
         return false;
     }
     int current = dup(root);
     bool ok = current >= 0;
-    char* at = path;
+    char* at = path.s;
     while (ok) {
         char* slash = strchr(at, '/');
         if (slash) *slash = 0;
-        if (!ValidComponent(at) || strlen(at) >= 256) {
-            FsError(error, fmt("refusing invalid path component in `%s`", relative));
+        Str component = Str(at);
+        if (!ValidComponent(component) || component.len >= 256) {
+            FsError(error,
+                    fmt("refusing invalid path component in `%s`", relative));
             ok = false;
             break;
         }
         if (!slash) {
-            strcpy(leaf, at);
+            *leaf = StrDupTemp(Str(at));
             break;
         }
         int next = OpenDirectoryAt(current, at);
@@ -169513,7 +169811,6 @@ static bool OpenParent(int root, Str relative, int* parent, char leaf[256],
         current = next;
         at = slash + 1;
     }
-    Free(nullptr, path);
     if (!ok) {
         if (current >= 0) close(current);
         return false;
@@ -169523,11 +169820,11 @@ static bool OpenParent(int root, Str relative, int* parent, char leaf[256],
 }
 
 static int OpenDirectory(int root, Str relative, Str rootName, Str* error) {
-    if (StrEq(relative, ".")) return dup(root);
+    if (StrEq(relative, StrL("."))) return dup(root);
     int parent = -1;
-    char leaf[256];
-    if (!OpenParent(root, relative, &parent, leaf, rootName, error)) return -1;
-    int result = OpenDirectoryAt(parent, leaf);
+    TempStr leaf;
+    if (!OpenParent(root, relative, &parent, &leaf, rootName, error)) return -1;
+    int result = OpenDirectoryAt(parent, leaf.s);
     if (result < 0) SyscallError(error, "open directory", rootName, relative);
     close(parent);
     return result;
@@ -169536,9 +169833,10 @@ static int OpenDirectory(int root, Str relative, Str rootName, Str* error) {
 static bool ReadFile(int root, Str rootName, Str relative, FsResult* result,
                      Str* error) {
     int parent = -1;
-    char leaf[256];
-    if (!OpenParent(root, relative, &parent, leaf, rootName, error)) return false;
-    int file = openat(parent, leaf, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    TempStr leaf;
+    if (!OpenParent(root, relative, &parent, &leaf, rootName, error))
+        return false;
+    int file = openat(parent, leaf.s, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     close(parent);
     if (file < 0) {
         SyscallError(error, "read", rootName, relative);
@@ -169551,8 +169849,10 @@ static bool ReadFile(int root, Str rootName, Str relative, FsResult* result,
         return false;
     }
     if (info.st_size > kFsMaxReadBytes) {
-        FsError(error, fmt("`%s/%s` is %lld bytes, over the %d-byte limit for fs.readFile", rootName,
-                           relative, (int64_t)info.st_size, kFsMaxReadBytes));
+        FsError(
+            error,
+            fmt("`%s/%s` is %lld bytes, over the %d-byte limit for fs.readFile",
+                rootName, relative, (int64_t)info.st_size, kFsMaxReadBytes));
         close(file);
         return false;
     }
@@ -169563,14 +169863,16 @@ static bool ReadFile(int root, Str rootName, Str relative, FsResult* result,
         ssize_t count = read(file, bytes, sizeof(bytes));
         if (count > 0) {
             if (output.len > kFsMaxReadBytes - (int)count) {
-                FsError(error, fmt("`%s/%s` grew over the %d-byte limit for fs.readFile",
-                                   rootName, relative, kFsMaxReadBytes));
+                FsError(
+                    error,
+                    fmt("`%s/%s` grew over the %d-byte limit for fs.readFile",
+                        rootName, relative, kFsMaxReadBytes));
                 ok = false;
                 break;
             }
             output.Append(Str(bytes, (int)count));
-        }
-        else if (count == 0) break;
+        } else if (count == 0)
+            break;
         else if (errno != EINTR) {
             SyscallError(error, "read", rootName, relative);
             ok = false;
@@ -169585,11 +169887,12 @@ static bool ReadFile(int root, Str rootName, Str relative, FsResult* result,
 static bool WriteFile(int root, Str rootName, Str relative, Str input,
                       Str* error) {
     int parent = -1;
-    char leaf[256];
-    if (!OpenParent(root, relative, &parent, leaf, rootName, error)) return false;
-    int file = openat(parent, leaf,
-                      O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC,
-                      0666);
+    TempStr leaf;
+    if (!OpenParent(root, relative, &parent, &leaf, rootName, error))
+        return false;
+    int file =
+        openat(parent, leaf.s,
+               O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0666);
     close(parent);
     if (file < 0) {
         SyscallError(error, "write", rootName, relative);
@@ -169597,10 +169900,12 @@ static bool WriteFile(int root, Str rootName, Str relative, Str input,
     }
     int written = 0;
     while (written < input.len) {
-        ssize_t count = write(file, input.s + written,
-                              (size_t)(input.len - written));
-        if (count > 0) written += (int)count;
-        else if (count < 0 && errno == EINTR) continue;
+        ssize_t count =
+            write(file, input.s + written, (size_t)(input.len - written));
+        if (count > 0)
+            written += (int)count;
+        else if (count < 0 && errno == EINTR)
+            continue;
         else {
             SyscallError(error, "write", rootName, relative);
             close(file);
@@ -169617,9 +169922,7 @@ static bool WriteFile(int root, Str rootName, Str relative, Str input,
 static int CompareEntry(const void* left, const void* right) {
     const FsEntry* a = (const FsEntry*)left;
     const FsEntry* b = (const FsEntry*)right;
-    int count = a->name.len < b->name.len ? a->name.len : b->name.len;
-    int compared = memcmp(a->name.s, b->name.s, (size_t)count);
-    return compared ? compared : a->name.len - b->name.len;
+    return StrCmp(a->name, b->name);
 }
 
 static bool ReadDirectory(int root, Str rootName, Str relative,
@@ -169644,21 +169947,23 @@ static bool ReadDirectory(int root, Str rootName, Str relative,
             }
             break;
         }
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) continue;
-        int nameLen = (int)strlen(entry->d_name);
+        Str name = Str(entry->d_name);
+        if (StrEq(name, StrL(".")) || StrEq(name, StrL(".."))) continue;
+        int nameLen = name.len;
         nameBytes += nameLen;
         if (result->entries.len >= kFsMaxDirectoryEntries ||
             nameBytes > kFsMaxDirectoryNameBytes) {
-            FsError(error, fmt("directory exceeded the %d-entry or %d-name-byte fs.readdir limit",
-                               kFsMaxDirectoryEntries, kFsMaxDirectoryNameBytes));
+            FsError(error,
+                    fmt("directory exceeded the %d-entry or %d-name-byte "
+                        "fs.readdir limit",
+                        kFsMaxDirectoryEntries, kFsMaxDirectoryNameBytes));
             ok = false;
             break;
         }
         struct stat info = {};
-        bool directoryEntry =
-            fstatat(dirfd(directory), entry->d_name, &info,
-                    AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(info.st_mode);
+        bool directoryEntry = fstatat(dirfd(directory), entry->d_name, &info,
+                                      AT_SYMLINK_NOFOLLOW) == 0 &&
+                              S_ISDIR(info.st_mode);
         FsEntry value = {StrDup(Str(entry->d_name, nameLen)), directoryEntry};
         if (!value.name.s || !VecAppend(result->entries, value)) {
             StrFree(value.name);
@@ -169669,15 +169974,15 @@ static bool ReadDirectory(int root, Str rootName, Str relative,
     }
     closedir(directory);
     if (ok && result->entries.len > 1) {
-        qsort(result->entries.els, (size_t)result->entries.len,
-              sizeof(FsEntry), CompareEntry);
+        qsort(result->entries.els, (size_t)result->entries.len, sizeof(FsEntry),
+              CompareEntry);
     }
     return ok;
 }
 
 static bool MakeDirectoryRecursive(int root, Str rootName, Str relative,
                                    Str* error) {
-    if (StrEq(relative, ".")) return true;
+    if (StrEq(relative, StrL("."))) return true;
     char* path = StrDup(relative).s;
     if (!path) return false;
     int current = dup(root);
@@ -169686,8 +169991,10 @@ static bool MakeDirectoryRecursive(int root, Str rootName, Str relative,
     while (ok && *at) {
         char* slash = strchr(at, '/');
         if (slash) *slash = 0;
-        if (!ValidComponent(at) || strlen(at) >= 256) {
-            FsError(error, fmt("refusing invalid path component in `%s`", relative));
+        Str component = Str(at);
+        if (!ValidComponent(component) || component.len >= 256) {
+            FsError(error,
+                    fmt("refusing invalid path component in `%s`", relative));
             ok = false;
             break;
         }
@@ -169736,11 +170043,12 @@ bool FsRun(FsOperation operation, Str rootName, Str relative, Str input,
         ok = ReadDirectory(root, rootName, relative, result, error);
     } else if (operation == FsOperation::Exists) {
         int parent = -1;
-        char leaf[256];
-        ok = OpenParent(root, relative, &parent, leaf, rootName, error);
+        TempStr leaf;
+        ok = OpenParent(root, relative, &parent, &leaf, rootName, error);
         if (ok) {
             struct stat info = {};
-            result->exists = fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW) == 0;
+            result->exists =
+                fstatat(parent, leaf.s, &info, AT_SYMLINK_NOFOLLOW) == 0;
             if (!result->exists && errno != ENOENT && errno != ENOTDIR) {
                 SyscallError(error, "inspect", rootName, relative);
                 ok = false;
@@ -169751,15 +170059,17 @@ bool FsRun(FsOperation operation, Str rootName, Str relative, Str input,
         ok = MakeDirectoryRecursive(root, rootName, relative, error);
     } else {
         int parent = -1;
-        char leaf[256];
-        ok = OpenParent(root, relative, &parent, leaf, rootName, error);
+        TempStr leaf;
+        ok = OpenParent(root, relative, &parent, &leaf, rootName, error);
         if (ok) {
             int status = -1;
             const char* verb = "remove";
-            if (operation == FsOperation::RemoveFile) status = unlinkat(parent, leaf, 0);
-            else if (operation == FsOperation::RemoveDirectory) status = unlinkat(parent, leaf, AT_REMOVEDIR);
+            if (operation == FsOperation::RemoveFile)
+                status = unlinkat(parent, leaf.s, 0);
+            else if (operation == FsOperation::RemoveDirectory)
+                status = unlinkat(parent, leaf.s, AT_REMOVEDIR);
             else if (operation == FsOperation::MakeDirectory) {
-                status = mkdirat(parent, leaf, 0777);
+                status = mkdirat(parent, leaf.s, 0777);
                 verb = "create";
             }
             ok = status == 0;
@@ -169778,7 +170088,10 @@ bool FsRun(FsOperation operation, Str rootName, Str relative, Str input,
 namespace gpui::shell {
 bool FsRun(FsOperation, Str root, Str relative, Str, bool, FsResult*,
            Str* error) {
-    if (error) *error = StrDup(fmt("filesystem mutation `%s/%s` is unavailable in a browser", root, relative));
+    if (error)
+        *error = StrDup(
+            fmt("filesystem mutation `%s/%s` is unavailable in a browser", root,
+                relative));
     return false;
 }
 }
@@ -169802,9 +170115,10 @@ namespace gpui::shell {
 #define FILE_OPEN_REPARSE_POINT 0x00200000
 #endif
 
-using NtCreateFileProc = NTSTATUS(NTAPI*)(
-    PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
-    PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+using NtCreateFileProc = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK,
+                                          POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                                          PLARGE_INTEGER, ULONG, ULONG, ULONG,
+                                          ULONG, PVOID, ULONG);
 
 static void FsError(Str* error, Str message) {
     if (!error) return;
@@ -169824,9 +170138,8 @@ static WCHAR* shell_filesystem_win_WideDup(Str value) {
     if (value.len > 0 && count <= 0) return nullptr;
     WCHAR* result = AllocArray<WCHAR>(count + 1);
     if (!result) return nullptr;
-    if (count > 0 &&
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.s, value.len,
-                            result, count) != count) {
+    if (count > 0 && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.s,
+                                         value.len, result, count) != count) {
         Free(nullptr, result);
         return nullptr;
     }
@@ -169857,8 +170170,7 @@ static bool NtSuccess(NTSTATUS status) {
 }
 
 static bool NtMissing(NTSTATUS status) {
-    return status == (NTSTATUS)0xC0000034L ||
-           status == (NTSTATUS)0xC000003AL ||
+    return status == (NTSTATUS)0xC0000034L || status == (NTSTATUS)0xC000003AL ||
            status == (NTSTATUS)0xC000000FL;
 }
 
@@ -169914,8 +170226,9 @@ static bool EnsureAmbientRoot(Str root, Str* error) {
         path[i] = 0;
         if (path[0] && !CreateDirectoryW(path, nullptr) &&
             GetLastError() != ERROR_ALREADY_EXISTS) {
-            FsError(error, fmt("cannot create granted root `%s`: Windows error %u",
-                               root, GetLastError()));
+            FsError(error,
+                    fmt("cannot create granted root `%s`: Windows error %u",
+                        root, GetLastError()));
             Free(nullptr, path);
             return false;
         }
@@ -169938,8 +170251,9 @@ static HANDLE OpenRoot(Str root, bool create, Str* error) {
         return nullptr;
     }
     HANDLE result = CreateFileW(
-        path, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
-                  SYNCHRONIZE,
+        path,
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+            SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     DWORD firstError = result == INVALID_HANDLE_VALUE ? GetLastError() : 0;
@@ -169948,8 +170262,9 @@ static HANDLE OpenRoot(Str root, bool create, Str* error) {
          firstError == ERROR_FILE_NOT_FOUND) &&
         EnsureAmbientRoot(root, error)) {
         result = CreateFileW(
-            path, FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
-                      SYNCHRONIZE,
+            path,
+            FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
+                SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     }
@@ -169981,15 +170296,15 @@ static HANDLE OpenDirectoryAt(HANDLE parent, const WCHAR* name,
     return result;
 }
 
-static bool OpenParent(HANDLE root, Str rootName, Str relative,
-                       HANDLE* parent, WCHAR leaf[256], Str* error) {
+static bool OpenParent(HANDLE root, Str rootName, Str relative, HANDLE* parent,
+                       WCHAR leaf[256], Str* error) {
     *parent = nullptr;
     leaf[0] = 0;
-    if (StrEq(relative, ".")) {
+    if (StrEq(relative, StrL("."))) {
         if (!DuplicateHandle(GetCurrentProcess(), root, GetCurrentProcess(),
                              parent, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
-            FsError(error, fmt("cannot open `%s/%s`: Windows error %u", rootName,
-                               relative, GetLastError()));
+            FsError(error, fmt("cannot open `%s/%s`: Windows error %u",
+                               rootName, relative, GetLastError()));
             return false;
         }
         wcscpy(leaf, L".");
@@ -170008,7 +170323,8 @@ static bool OpenParent(HANDLE root, Str rootName, Str relative,
         WCHAR* slash = wcschr(at, L'/');
         if (slash) *slash = 0;
         if (!ValidComponent(at) || wcslen(at) >= 256) {
-            FsError(error, fmt("refusing invalid path component in `%s`", relative));
+            FsError(error,
+                    fmt("refusing invalid path component in `%s`", relative));
             ok = false;
             break;
         }
@@ -170038,7 +170354,7 @@ static bool OpenParent(HANDLE root, Str rootName, Str relative,
 
 static HANDLE OpenDirectory(HANDLE root, Str rootName, Str relative,
                             Str* error) {
-    if (StrEq(relative, ".")) {
+    if (StrEq(relative, StrL("."))) {
         HANDLE copy = nullptr;
         DuplicateHandle(GetCurrentProcess(), root, GetCurrentProcess(), &copy,
                         0, FALSE, DUPLICATE_SAME_ACCESS);
@@ -170046,7 +170362,8 @@ static HANDLE OpenDirectory(HANDLE root, Str rootName, Str relative,
     }
     HANDLE parent = nullptr;
     WCHAR leaf[256];
-    if (!OpenParent(root, rootName, relative, &parent, leaf, error)) return nullptr;
+    if (!OpenParent(root, rootName, relative, &parent, leaf, error))
+        return nullptr;
     NTSTATUS status = 0;
     HANDLE result = OpenDirectoryAt(parent, leaf, &status);
     if (!result) NtError(error, "open directory", rootName, relative, status);
@@ -170058,7 +170375,8 @@ static bool ReadGrantedFile(HANDLE root, Str rootName, Str relative,
                             FsResult* result, Str* error) {
     HANDLE parent = nullptr;
     WCHAR leaf[256];
-    if (!OpenParent(root, rootName, relative, &parent, leaf, error)) return false;
+    if (!OpenParent(root, rootName, relative, &parent, leaf, error))
+        return false;
     NTSTATUS status = 0;
     HANDLE file = OpenAt(parent, leaf, GENERIC_READ | SYNCHRONIZE, FILE_OPEN,
                          FILE_NON_DIRECTORY_FILE, &status);
@@ -170077,8 +170395,10 @@ static bool ReadGrantedFile(HANDLE root, Str rootName, Str relative,
         return false;
     }
     if (size.QuadPart > kFsMaxReadBytes) {
-        FsError(error, fmt("`%s/%s` is %lld bytes, over the %d-byte limit for fs.readFile",
-                           rootName, relative, size.QuadPart, kFsMaxReadBytes));
+        FsError(
+            error,
+            fmt("`%s/%s` is %lld bytes, over the %d-byte limit for fs.readFile",
+                rootName, relative, size.QuadPart, kFsMaxReadBytes));
         CloseHandle(file);
         return false;
     }
@@ -170088,15 +170408,16 @@ static bool ReadGrantedFile(HANDLE root, Str rootName, Str relative,
         char bytes[8192];
         DWORD count = 0;
         if (!::ReadFile(file, bytes, sizeof(bytes), &count, nullptr)) {
-            FsError(error, fmt("cannot read `%s/%s`: Windows error %u", rootName,
-                               relative, GetLastError()));
+            FsError(error, fmt("cannot read `%s/%s`: Windows error %u",
+                               rootName, relative, GetLastError()));
             ok = false;
             break;
         }
         if (count == 0) break;
         if (output.len > kFsMaxReadBytes - (int)count) {
-            FsError(error, fmt("`%s/%s` grew over the %d-byte limit for fs.readFile",
-                               rootName, relative, kFsMaxReadBytes));
+            FsError(error,
+                    fmt("`%s/%s` grew over the %d-byte limit for fs.readFile",
+                        rootName, relative, kFsMaxReadBytes));
             ok = false;
             break;
         }
@@ -170107,11 +170428,12 @@ static bool ReadGrantedFile(HANDLE root, Str rootName, Str relative,
     return ok;
 }
 
-static bool WriteGrantedFile(HANDLE root, Str rootName, Str relative,
-                             Str input, Str* error) {
+static bool WriteGrantedFile(HANDLE root, Str rootName, Str relative, Str input,
+                             Str* error) {
     HANDLE parent = nullptr;
     WCHAR leaf[256];
-    if (!OpenParent(root, rootName, relative, &parent, leaf, error)) return false;
+    if (!OpenParent(root, rootName, relative, &parent, leaf, error))
+        return false;
     NTSTATUS status = 0;
     HANDLE file = OpenAt(parent, leaf, GENERIC_WRITE | SYNCHRONIZE,
                          FILE_OVERWRITE_IF, FILE_NON_DIRECTORY_FILE, &status);
@@ -170128,8 +170450,8 @@ static bool WriteGrantedFile(HANDLE root, Str rootName, Str relative,
         DWORD wanted = (DWORD)(input.len - written);
         if (!::WriteFile(file, input.s + written, wanted, &count, nullptr) ||
             count == 0) {
-            FsError(error, fmt("cannot write `%s/%s`: Windows error %u", rootName,
-                               relative, GetLastError()));
+            FsError(error, fmt("cannot write `%s/%s`: Windows error %u",
+                               rootName, relative, GetLastError()));
             CloseHandle(file);
             return false;
         }
@@ -170148,9 +170470,7 @@ static bool WriteGrantedFile(HANDLE root, Str rootName, Str relative,
 static int CompareEntry(const void* left, const void* right) {
     const FsEntry* a = (const FsEntry*)left;
     const FsEntry* b = (const FsEntry*)right;
-    int count = a->name.len < b->name.len ? a->name.len : b->name.len;
-    int compared = memcmp(a->name.s, b->name.s, (size_t)count);
-    return compared ? compared : a->name.len - b->name.len;
+    return StrCmp(a->name, b->name);
 }
 
 static bool ReadDirectory(HANDLE root, Str rootName, Str relative,
@@ -170166,8 +170486,8 @@ static bool ReadDirectory(HANDLE root, Str rootName, Str relative,
                                           sizeof(buffer))) {
             DWORD code = GetLastError();
             if (code == ERROR_NO_MORE_FILES) break;
-            FsError(error, fmt("cannot list `%s/%s`: Windows error %u", rootName,
-                               relative, code));
+            FsError(error, fmt("cannot list `%s/%s`: Windows error %u",
+                               rootName, relative, code));
             ok = false;
             break;
         }
@@ -170184,40 +170504,42 @@ static bool ReadDirectory(HANDLE root, Str rootName, Str relative,
                 if (!name.s || result->entries.len >= kFsMaxDirectoryEntries ||
                     nameBytes > kFsMaxDirectoryNameBytes) {
                     StrFree(name);
-                    FsError(error, fmt("directory exceeded the %d-entry or %d-name-byte fs.readdir limit",
+                    FsError(error, fmt("directory exceeded the %d-entry or "
+                                       "%d-name-byte fs.readdir limit",
                                        kFsMaxDirectoryEntries,
                                        kFsMaxDirectoryNameBytes));
                     ok = false;
                     break;
                 }
-                FsEntry value = {
-                    name,
-                    (entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
-                        (entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0};
+                FsEntry value = {name, (entry->FileAttributes &
+                                        FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+                                           (entry->FileAttributes &
+                                            FILE_ATTRIBUTE_REPARSE_POINT) == 0};
                 if (!VecAppend(result->entries, value)) {
                     StrFree(name);
-                    FsError(error, StrL("allocating an fs.readdir result failed"));
+                    FsError(error,
+                            StrL("allocating an fs.readdir result failed"));
                     ok = false;
                     break;
                 }
             }
             if (entry->NextEntryOffset == 0) break;
-            entry = (FILE_ID_BOTH_DIR_INFO*)((char*)entry +
-                                             entry->NextEntryOffset);
+            entry =
+                (FILE_ID_BOTH_DIR_INFO*)((char*)entry + entry->NextEntryOffset);
         }
         if (!ok) break;
     }
     CloseHandle(directory);
     if (ok && result->entries.len > 1) {
-        qsort(result->entries.els, (size_t)result->entries.len,
-              sizeof(FsEntry), CompareEntry);
+        qsort(result->entries.els, (size_t)result->entries.len, sizeof(FsEntry),
+              CompareEntry);
     }
     return ok;
 }
 
 static bool MakeDirectoryRecursive(HANDLE root, Str rootName, Str relative,
                                    Str* error) {
-    if (StrEq(relative, ".")) return true;
+    if (StrEq(relative, StrL("."))) return true;
     WCHAR* path = shell_filesystem_win_WideDup(relative);
     if (!path) return false;
     HANDLE current = nullptr;
@@ -170228,16 +170550,16 @@ static bool MakeDirectoryRecursive(HANDLE root, Str rootName, Str relative,
         WCHAR* slash = wcschr(at, L'/');
         if (slash) *slash = 0;
         if (!ValidComponent(at) || wcslen(at) >= 256) {
-            FsError(error, fmt("refusing invalid path component in `%s`", relative));
+            FsError(error,
+                    fmt("refusing invalid path component in `%s`", relative));
             ok = false;
             break;
         }
         NTSTATUS status = 0;
-        HANDLE next = OpenAt(
-            current, at,
-            FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES |
-                SYNCHRONIZE,
-            FILE_OPEN_IF, FILE_DIRECTORY_FILE, &status);
+        HANDLE next = OpenAt(current, at,
+                             FILE_LIST_DIRECTORY | FILE_TRAVERSE |
+                                 FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                             FILE_OPEN_IF, FILE_DIRECTORY_FILE, &status);
         if (!next || IsReparse(next)) {
             if (next) CloseHandle(next);
             NtError(error, "create", rootName, relative,
@@ -170258,7 +170580,8 @@ static bool MakeDirectoryRecursive(HANDLE root, Str rootName, Str relative,
 static bool DeleteHandle(HANDLE handle, Str root, Str relative, Str* error) {
     FILE_DISPOSITION_INFO disposition = {TRUE};
     if (SetFileInformationByHandle(handle, FileDispositionInfo, &disposition,
-                                   sizeof(disposition))) return true;
+                                   sizeof(disposition)))
+        return true;
     FsError(error, fmt("cannot remove `%s/%s`: Windows error %u", root,
                        relative, GetLastError()));
     return false;
@@ -170295,21 +170618,22 @@ bool FsRun(FsOperation operation, Str rootName, Str relative, Str input,
         if (ok) {
             NTSTATUS status = 0;
             if (operation == FsOperation::Exists) {
-                HANDLE target = OpenAt(parent, leaf,
-                                       FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                                       FILE_OPEN, 0, &status);
+                HANDLE target =
+                    OpenAt(parent, leaf, FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                           FILE_OPEN, 0, &status);
                 result->exists = target != nullptr;
-                if (target) CloseHandle(target);
+                if (target)
+                    CloseHandle(target);
                 else if (!NtMissing(status)) {
                     NtError(error, "inspect", rootName, relative, status);
                     ok = false;
                 }
             } else if (operation == FsOperation::MakeDirectory) {
-                HANDLE target = OpenAt(
-                    parent, leaf,
-                    FILE_LIST_DIRECTORY | FILE_TRAVERSE |
-                        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                    FILE_CREATE, FILE_DIRECTORY_FILE, &status);
+                HANDLE target =
+                    OpenAt(parent, leaf,
+                           FILE_LIST_DIRECTORY | FILE_TRAVERSE |
+                               FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                           FILE_CREATE, FILE_DIRECTORY_FILE, &status);
                 ok = target != nullptr && !IsReparse(target);
                 if (target) CloseHandle(target);
                 if (!ok) NtError(error, "create", rootName, relative, status);
@@ -170317,10 +170641,9 @@ bool FsRun(FsOperation operation, Str rootName, Str relative, Str input,
                 ULONG options = operation == FsOperation::RemoveDirectory
                                     ? FILE_DIRECTORY_FILE
                                     : FILE_NON_DIRECTORY_FILE;
-                HANDLE target = OpenAt(parent, leaf,
-                                       DELETE | FILE_READ_ATTRIBUTES |
-                                           SYNCHRONIZE,
-                                       FILE_OPEN, options, &status);
+                HANDLE target = OpenAt(
+                    parent, leaf, DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                    FILE_OPEN, options, &status);
                 ok = target != nullptr;
                 if (target) {
                     ok = DeleteHandle(target, rootName, relative, error);

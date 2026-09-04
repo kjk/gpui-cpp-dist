@@ -98,7 +98,9 @@ using TempStr = Str;
 
 #define StrL(lit) ::base::Str{(char*)(lit), (int)dimof(lit) - 1}
 
-Str AllocStrTemp(int size);
+TempStr AllocStrTemp(int size);
+TempStr StrDupTemp(Str s);
+TempStr ReadBoundedFileTemp(Str path, int limit);
 
 #if GPUI_OS_WINDOWS
 
@@ -1180,6 +1182,7 @@ inline bool StrEq(Str s1, Str s2) {
     return StrEqRest(s1, s2);
 }
 bool StrEq(Str s1, const char* s2);
+int StrCmp(Str s1, Str s2);
 GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2);
 inline bool StrEqI(Str s1, Str s2) {
     if (s1.len != s2.len) {
@@ -1220,6 +1223,8 @@ bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut = nullptr);
 
 int SeqStrIndex(SeqStrings strs, Str toFind);
 int SeqStrIndexIS(SeqStrings strs, Str toFind);
+
+bool SeqStrContainsI(SeqStrings strs, Str toFind);
 
 Str SeqStrByIndex(SeqStrings strs, int idx);
 
@@ -1397,13 +1402,21 @@ enum {
     kNRules,
 };
 
-enum class SeverityMode : uint8_t { Off = 0, Error = 1, Warning = 2 };
+enum class SeverityMode : uint8_t {
+    Off = 0,
+    Error = 1,
+    Warning = 2
+};
 
 SeverityMode RuleSeverity(int rule);
 
 int RuleIdByName(Str name);
 
-enum class ToggleKind : uint8_t { None, Enable, Disable };
+enum class ToggleKind : uint8_t {
+    None,
+    Enable,
+    Disable
+};
 
 struct Toggle {
     ToggleKind kind = ToggleKind::Enable;
@@ -1478,11 +1491,11 @@ struct Results {
 
 void EmitIgnore(Results* res, Str part);
 
-void EmitText(Results* res, const char* rule, Str part);
+void EmitText(Results* res, Str rule, Str part);
 
 void EmitCodeblock(Results* res, Str part, Str lang, Str code);
 
-void EmitInlineScript(Results* res, const char* rule, Str part);
+void EmitInlineScript(Results* res, Str rule, Str part);
 
 void EmitError(Results* res, Str raw, Str message);
 

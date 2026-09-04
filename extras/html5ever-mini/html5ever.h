@@ -1,5 +1,5 @@
-#ifndef WRY_AMALGAM_H_
-#define WRY_AMALGAM_H_
+#ifndef HTML5EVER_AMALGAM_H_
+#define HTML5EVER_AMALGAM_H_
 #ifndef GPUI_INCLUDE_PRIVATE_API
 #define GPUI_INCLUDE_PRIVATE_API 0
 #endif
@@ -1321,357 +1321,167 @@ inline void logf(const char* format, const TArgs&... args) {
 
 #endif
 
-#line 1 "src/wry/wry.h"
+#line 1 "src/html5ever/html5ever.h"
 
-namespace wry {
+namespace html5ever {
 
+using base::Arena;
+using base::ArenaPtr;
+using base::ArenaPtrGet;
+using base::ArenaStr;
+using base::ArenaStrGet;
+using base::ArenaVec;
 using base::Str;
-using base::Vec;
 
-struct Position {
-    double x = 0;
-    double y = 0;
-    bool logical = true;
+enum class Namespace : uint8_t {
+    Html,
+    MathMl,
+    Svg,
 };
 
-struct Size {
-    double width = 0;
-    double height = 0;
-    bool logical = true;
+enum class NodeKind : uint8_t {
+    Document,
+    Doctype,
+    Text,
+    Comment,
+    Element,
 };
 
-struct Rect {
-    Position position;
-    Size size;
+struct Attribute {
+    ArenaStr name = {};
+    ArenaStr value = {};
+    Namespace ns = Namespace::Html;
+    ArenaPtr<Attribute> next = {};
 };
 
-inline Position LogicalPosition(double x, double y) {
-    return Position{x, y, true};
+struct Node {
+    NodeKind kind = NodeKind::Document;
+    Namespace ns = Namespace::Html;
+    ArenaStr name = {};
+
+    ArenaStr data = {};
+
+    ArenaStr systemId = {};
+    ArenaPtr<Attribute> attrs = {};
+    ArenaPtr<Node> parent = {};
+    ArenaPtr<Node> first = {};
+    ArenaPtr<Node> last = {};
+    ArenaPtr<Node> next = {};
+
+    bool implicit = false;
+};
+
+enum class TokenKind : uint8_t {
+    Eof,
+    ParseError,
+    Character,
+    NullCharacter,
+    Comment,
+    Doctype,
+    StartTag,
+    EndTag,
+};
+
+struct Token {
+    int line = 1;
+    ArenaStr name = {};
+    ArenaStr data = {};
+    ArenaStr systemId = {};
+    ArenaPtr<Attribute> attrs = {};
+    TokenKind kind = TokenKind::Eof;
+    bool selfClosing = false;
+    bool forceQuirks = false;
+};
+
+using TokenSink = void (*)(void* user, const Token* token);
+
+struct TokenizerOptions {
+    bool exactErrors = false;
+    bool discardBom = true;
+};
+
+struct ParseOptions {
+    TokenizerOptions tokenizer = {};
+    bool exactErrors = false;
+    bool scriptingEnabled = true;
+    bool iframeSrcdoc = false;
+    bool dropDoctype = false;
+};
+
+struct SerializeOptions {
+    bool includeNode = false;
+    bool createMissingParent = true;
+};
+
+void Tokenize(Arena* a, Str source, TokenSink sink, void* user = nullptr,
+              TokenizerOptions options = {});
+Node* ParseDocument(Arena* a, Str source, ParseOptions options = {});
+Node* ParseFragment(Arena* a, Str source, Str context = Str{},
+                    ParseOptions options = {});
+Str Serialize(Arena* a, const Node* node, SerializeOptions options = {});
+
+inline Str AttributeName(Arena* a, const Attribute* attr) {
+    return attr ? ArenaStrGet(a, attr->name) : Str{};
 }
-inline Position PhysicalPosition(double x, double y) {
-    return Position{x, y, false};
+inline Str AttributeValue(Arena* a, const Attribute* attr) {
+    return attr ? ArenaStrGet(a, attr->value) : Str{};
 }
-inline Size LogicalSize(double w, double h) {
-    return Size{w, h, true};
+inline Attribute* AttributeNext(Arena* a, Attribute* attr) {
+    return attr ? ArenaPtrGet(a, attr->next) : nullptr;
 }
-inline Size PhysicalSize(double w, double h) {
-    return Size{w, h, false};
+inline const Attribute* AttributeNext(Arena* a, const Attribute* attr) {
+    return attr ? ArenaPtrGet(a, attr->next) : nullptr;
 }
 
-struct Rgba {
-    uint8_t r = 0;
-    uint8_t g = 0;
-    uint8_t b = 0;
-    uint8_t a = 0;
-};
+inline Str NodeName(Arena* a, const Node* node) {
+    return node ? ArenaStrGet(a, node->name) : Str{};
+}
+inline Str NodeData(Arena* a, const Node* node) {
+    return node ? ArenaStrGet(a, node->data) : Str{};
+}
+inline Str NodeSystemId(Arena* a, const Node* node) {
+    return node ? ArenaStrGet(a, node->systemId) : Str{};
+}
+inline Attribute* NodeAttrs(Arena* a, Node* node) {
+    return node ? ArenaPtrGet(a, node->attrs) : nullptr;
+}
+inline const Attribute* NodeAttrs(Arena* a, const Node* node) {
+    return node ? ArenaPtrGet(a, node->attrs) : nullptr;
+}
+#define GPUI_HTML5EVER_NODE_LINK(Name, field)                   \
+    inline Node* Node##Name(Arena* a, Node* node) {             \
+        return node ? ArenaPtrGet(a, node->field) : nullptr;    \
+    }                                                           \
+    inline const Node* Node##Name(Arena* a, const Node* node) { \
+        return node ? ArenaPtrGet(a, node->field) : nullptr;    \
+    }
+GPUI_HTML5EVER_NODE_LINK(Parent, parent)
+GPUI_HTML5EVER_NODE_LINK(First, first)
+GPUI_HTML5EVER_NODE_LINK(Last, last)
+GPUI_HTML5EVER_NODE_LINK(Next, next)
+#undef GPUI_HTML5EVER_NODE_LINK
 
-enum class Theme : uint8_t {
-    Dark,
-    Light,
-    Auto,
-};
+inline Str TokenName(Arena* a, const Token* token) {
+    return token ? ArenaStrGet(a, token->name) : Str{};
+}
+inline Str TokenData(Arena* a, const Token* token) {
+    return token ? ArenaStrGet(a, token->data) : Str{};
+}
+inline Str TokenSystemId(Arena* a, const Token* token) {
+    return token ? ArenaStrGet(a, token->systemId) : Str{};
+}
+inline const Attribute* TokenAttrs(Arena* a, const Token* token) {
+    return token ? ArenaPtrGet(a, token->attrs) : nullptr;
+}
 
-enum class PageLoadEvent : uint8_t {
-    Started,
-    Finished,
-};
+const Attribute* Attr(Arena* a, const Node* node, Str name);
+Str AttrValue(Arena* a, const Node* node, Str name);
 
-enum class ScrollBarStyle : uint8_t {
-    Default,
-    FluentOverlay,
-};
+}
 
-enum class MemoryUsageLevel : uint8_t {
-    Normal,
-    Low,
-};
+#if GPUI_INCLUDE_PRIVATE_API
+#line 1 "src/html5ever-mini/html5ever.h"
 
-enum class BackgroundThrottlingPolicy : uint8_t {
-    Disabled,
-    Suspend,
-    Throttle,
-};
-
-enum class ProxyKind : uint8_t {
-    None,
-    Http,
-    Socks5,
-};
-
-struct ProxyConfig {
-    ProxyKind kind = ProxyKind::None;
-    Str host;
-    Str port;
-};
-
-struct InitializationScript {
-    Str script;
-
-    bool forMainFrameOnly = true;
-};
-
-struct Header {
-    Str name;
-    Str value;
-};
-
-struct Request {
-    Str method;
-    Str uri;
-    const Header* headers = nullptr;
-    int headerCount = 0;
-    const uint8_t* body = nullptr;
-    int bodyLen = 0;
-};
-
-struct Response {
-    int status = 200;
-    const Header* headers = nullptr;
-    int headerCount = 0;
-    const uint8_t* body = nullptr;
-    int bodyLen = 0;
-};
-
-struct RequestResponder;
-void Respond(RequestResponder* responder, const Response* response);
-
-struct CustomProtocol {
-    Str name;
-    void* ctx = nullptr;
-    void (*handler)(void* ctx, Str id, const Request* request,
-                    RequestResponder* responder) = nullptr;
-};
-
-struct WebView;
-
-enum class NewWindowResponse : uint8_t {
-    Allow,
-    Create,
-    Deny,
-};
-
-struct NewWindowFeatures {
-    bool hasPosition = false;
-    double x = 0;
-    double y = 0;
-    bool hasSize = false;
-    double width = 0;
-    double height = 0;
-    WebView* opener = nullptr;
-
-    void* targetConfiguration = nullptr;
-};
-
-using DownloadStartedHandler = bool (*)(void* ctx, Str url, Str* path);
-
-using DownloadCompletedHandler = void (*)(void* ctx, Str url, const Str* path, bool success);
-
-enum class DragDropKind : uint8_t {
-    Enter,
-    Over,
-    Drop,
-    Leave,
-};
-
-struct DragDropEvent {
-    DragDropKind kind = DragDropKind::Leave;
-    const Str* paths = nullptr;
-    int pathCount = 0;
-    int32_t x = 0;
-    int32_t y = 0;
-};
-
-using DragDropHandler = bool (*)(void* ctx, const DragDropEvent* event);
-
-enum class CookieSameSite : uint8_t {
-    None,
-    Lax,
-    Strict,
-};
-
-struct Cookie {
-    Str name;
-    Str value;
-    Str domain;
-    Str path;
-    bool hasHttpOnly = false;
-    bool httpOnly = false;
-    bool hasSecure = false;
-    bool secure = false;
-    bool hasSameSite = false;
-    CookieSameSite sameSite = CookieSameSite::Lax;
-    bool session = true;
-    bool hasExpires = false;
-    int64_t expiresUnixSeconds = 0;
-    bool hasMaxAge = false;
-    int64_t maxAgeSeconds = 0;
-};
-
-void CookieListFree(Vec<Cookie>* cookies);
-
-struct WebViewAttributes {
-    static bool AllowDownload(void*, Str, Str*) { return true; }
-
-    Str id;
-
-    Str dataDirectory;
-    Str userAgent;
-    bool visible = true;
-    bool transparent = false;
-    bool hasBackgroundColor = false;
-    Rgba backgroundColor;
-
-    Str url;
-
-    const Header* headers = nullptr;
-    int headerCount = 0;
-
-    Str html;
-    bool zoomHotkeysEnabled = false;
-    const InitializationScript* initializationScripts = nullptr;
-    int initializationScriptCount = 0;
-    const CustomProtocol* customProtocols = nullptr;
-    int customProtocolCount = 0;
-
-    void* ctx = nullptr;
-
-    void (*ipcHandler)(void* ctx, Str url, Str body) = nullptr;
-
-    bool (*navigationHandler)(void* ctx, Str url) = nullptr;
-    void (*documentTitleChangedHandler)(void* ctx, Str title) = nullptr;
-    void (*onPageLoadHandler)(void* ctx, PageLoadEvent event, Str url) = nullptr;
-
-    DownloadStartedHandler downloadStartedHandler = AllowDownload;
-    DownloadCompletedHandler downloadCompletedHandler = nullptr;
-    DragDropHandler dragDropHandler = nullptr;
-
-    NewWindowResponse (*newWindowReqHandler)(void* ctx, Str url,
-                                             const NewWindowFeatures* features,
-                                             WebView** createdWebView) = nullptr;
-
-    bool clipboard = false;
-#if defined(DEBUG) || defined(_DEBUG)
-    bool devtools = true;
-#else
-    bool devtools = false;
 #endif
-
-    bool acceptFirstMouse = false;
-    bool backForwardNavigationGestures = false;
-    bool incognito = false;
-    bool autoplay = true;
-    ProxyConfig proxyConfig;
-    bool focused = true;
-
-    bool hasBounds = true;
-
-    Rect bounds = {{0, 0, true}, {200, 200, true}};
-
-    bool hasBackgroundThrottling = false;
-    BackgroundThrottlingPolicy backgroundThrottling =
-        BackgroundThrottlingPolicy::Disabled;
-    bool javascriptDisabled = false;
-
-    bool hasDataStoreIdentifier = false;
-    uint8_t dataStoreIdentifier[16] = {};
-
-    bool hasTrafficLightInset = false;
-    Position trafficLightInset;
-
-    bool allowLinkPreview = true;
-
-    void* webviewConfiguration = nullptr;
-
-    Str additionalBrowserArgs;
-    bool browserAcceleratorKeys = true;
-    bool defaultContextMenus = true;
-    bool hasTheme = false;
-    Theme theme = Theme::Auto;
-
-    bool useHttpsScheme = false;
-    ScrollBarStyle scrollBarStyle = ScrollBarStyle::Default;
-    bool browserExtensionsEnabled = false;
-
-    Str extensionPath;
-
-    void* webviewEnvironment = nullptr;
-};
-
-WebView* WebViewNew(void* parentWindow, const WebViewAttributes* attrs, bool asChild);
-
-void WebViewFree(WebView* webview);
-
-Str WebViewId(WebView* webview);
-
-bool WebViewEval(WebView* webview, Str js);
-
-bool WebViewEvalWithCallback(WebView* webview, Str js, void* ctx,
-                             void (*callback)(void* ctx, Str result));
-
-Str WebViewUrlTemp(WebView* webview);
-
-bool WebViewLoadUrl(WebView* webview, Str url);
-
-bool WebViewLoadUrlWithHeaders(WebView* webview, Str url, const Header* headers,
-                               int headerCount);
-
-bool WebViewLoadHtml(WebView* webview, Str html);
-
-bool WebViewReload(WebView* webview);
-
-bool WebViewBounds(WebView* webview, Rect* out);
-
-bool WebViewSetBounds(WebView* webview, Rect bounds);
-
-bool WebViewSetVisible(WebView* webview, bool visible);
-
-bool WebViewFocus(WebView* webview);
-
-bool WebViewFocusParent(WebView* webview);
-
-bool WebViewZoom(WebView* webview, double scaleFactor);
-
-bool WebViewSetBackgroundColor(WebView* webview, Rgba color);
-
-bool WebViewSetTheme(WebView* webview, Theme theme);
-
-bool WebViewSetMemoryUsageLevel(WebView* webview, MemoryUsageLevel level);
-
-bool WebViewReparent(WebView* webview, void* parentWindow);
-
-bool WebViewSetTrafficLightInset(WebView* webview, Position position);
-
-bool WebViewPrint(WebView* webview);
-
-bool WebViewClearAllBrowsingData(WebView* webview);
-
-bool WebViewCookies(WebView* webview, Vec<Cookie>* out);
-bool WebViewCookiesForUrl(WebView* webview, Str url, Vec<Cookie>* out);
-bool WebViewSetCookie(WebView* webview, const Cookie* cookie);
-bool WebViewDeleteCookie(WebView* webview, const Cookie* cookie);
-
-void WebViewOpenDevtools(WebView* webview);
-void WebViewCloseDevtools(WebView* webview);
-bool WebViewIsDevtoolsOpen(WebView* webview);
-
-#if GPUI_OS_WINDOWS
-
-void* WebViewControllerRaw(WebView* webview);
-void* WebViewEnvironmentRaw(WebView* webview);
-void* WebViewNativeRaw(WebView* webview);
-#endif
-
-Str WorkAroundUriPrefix(Str httpOrHttps, Str protocol);
-
-bool IsWorkAroundUri(Str uri, Str httpOrHttps, Str protocol);
-
-Str ApplyUriWorkAround(Str uri, Str httpOrHttps, Str protocol);
-Str RevertUriWorkAround(Str uri, Str httpOrHttps, Str protocol);
-
-Str WebViewVersionTemp();
-
-bool WebViewAvailable();
-
-}
 
 #endif

@@ -19,18 +19,8 @@ float StrToFloatUnchecked(Str s) {
     if (!s.s || s.len <= 0) {
         return 0;
     }
-    char local[128];
-    char* buf = local;
-    if (s.len >= (int)sizeof(local)) {
-        Str temp = AllocStrTemp(s.len);
-        if (!temp.s) {
-            return 0;
-        }
-        buf = temp.s;
-    }
-    memcpy(buf, s.s, (size_t)s.len);
-    buf[s.len] = 0;
-    return strtof(buf, nullptr);
+    TempStr text = StrDupTemp(s);
+    return text.s ? strtof(text.s, nullptr) : 0;
 }
 
 int StrToIntUnchecked(Str s) {
@@ -598,7 +588,7 @@ void DestroyTempArena() {
     gTempArena = nullptr;
 }
 
-Str AllocStrTemp(int size) {
+TempStr AllocStrTemp(int size) {
     if (size == 0) {
         return {};
     }
@@ -606,6 +596,31 @@ Str AllocStrTemp(int size) {
     char* res = (char*)arena->Push((uint64_t)size + 1, 1, false);
     res[size] = 0;
     return Str(res, size);
+}
+
+TempStr StrDupTemp(Str s) {
+    return StrDup(GetTempArena(), s);
+}
+
+TempStr ReadBoundedFileTemp(Str path, int limit) {
+    if (!path || limit <= 0) {
+        return {};
+    }
+    TempStr pathZ = StrDupTemp(path);
+    FILE* file = fopen(pathZ.s, "rb");
+    if (!file) {
+        return {};
+    }
+    TempStr result = AllocStrTemp(limit);
+    size_t n = fread(result.s, 1, (size_t)limit + 1, file);
+    bool ok = !ferror(file) && n <= (size_t)limit;
+    fclose(file);
+    if (!ok) {
+        return {};
+    }
+    result.s[n] = 0;
+    result.len = (int)n;
+    return result;
 }
 
 GPUI_NOINLINE void* ArenaVecAlloc(Arena* a, int count, int elSize, int align,
@@ -1046,6 +1061,15 @@ bool StrEq(Str s1, const char* s2) {
     return StrEq(s1, Str(s2));
 }
 
+int StrCmp(Str s1, Str s2) {
+    int common = std::min(s1.len, s2.len);
+    int cmp = common > 0 ? memcmp(s1.s, s2.s, (size_t)common) : 0;
+    if (cmp != 0) {
+        return cmp;
+    }
+    return s1.len < s2.len ? -1 : s1.len > s2.len ? 1 : 0;
+}
+
 GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2) {
     if (s1.s == s2.s || s1.len == 0) {
         return true;
@@ -1232,20 +1256,24 @@ bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut) {
 }
 
 static int SeqStrIndexCmp(SeqStrings strs, Str toFind, bool ignoreCase) {
-    if (!strs || !toFind) {
-        return -1;
-    }
-    int off = 0;
+    if (!strs || !toFind) return -1;
+    const char* candidate = strs;
     int idx = 0;
-    while (strs[off]) {
-        Str at = SeqStrAt(strs, off);
-        bool same = ignoreCase ? StrEqI(at, toFind) : StrEq(at, toFind);
-        if (same) {
-            return idx;
+    while (*candidate) {
+        int i = 0;
+        while (i < toFind.len && candidate[i]) {
+            char a = candidate[i];
+            char b = toFind.s[i];
+            if (ignoreCase) {
+                if (a >= 'A' && a <= 'Z') a = (char)(a + ('a' - 'A'));
+                if (b >= 'A' && b <= 'Z') b = (char)(b + ('a' - 'A'));
+            }
+            if (a != b) break;
+            i++;
         }
-        if (!SeqStrAdvance(strs, off)) {
-            break;
-        }
+        if (i == toFind.len && !candidate[i]) return idx;
+        while (*candidate) candidate++;
+        candidate++;
         idx++;
     }
     return -1;
@@ -1257,6 +1285,10 @@ int SeqStrIndex(SeqStrings strs, Str toFind) {
 
 int SeqStrIndexIS(SeqStrings strs, Str toFind) {
     return SeqStrIndexCmp(strs, toFind, true);
+}
+
+bool SeqStrContainsI(SeqStrings strs, Str toFind) {
+    return SeqStrIndexCmp(strs, toFind, true) >= 0;
 }
 
 Str SeqStrByIndex(SeqStrings strs, int idx) {
@@ -11245,19 +11277,12 @@ static void PrintNode(TaffyTree* tree, NodeId node, bool hasSibling,
     if (depth >= kMaxDepth) {
         return;
     }
-    char lines[kMaxDepth * 4 + 8];
-    int n = (int)strlen(linesString);
-    if (n > (int)sizeof(lines) - 8) {
-        n = (int)sizeof(lines) - 8;
-    }
-    memcpy(lines, linesString, (size_t)n);
     const char* bar = hasSibling ? "│   " : "    ";
-    memcpy(lines + n, bar, strlen(bar));
-    lines[n + (int)strlen(bar)] = 0;
+    base::TempStr lines = base::fmt("%s%s", Str(linesString), Str(bar));
 
     int count = tree->ChildCount(node);
     for (int i = 0; i < count; i++) {
-        PrintNode(tree, tree->GetChildId(node, i), i < count - 1, lines,
+        PrintNode(tree, tree->GetChildId(node, i), i < count - 1, lines.s,
                   depth + 1);
     }
 }
@@ -11736,16 +11761,15 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
     int n = 0;
     struct dirent* ent = nullptr;
     while (n < max && (ent = readdir(d)) != nullptr) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+        Str name = Str(ent->d_name);
+        if (StrEq(name, StrL(".")) || StrEq(name, StrL(".."))) {
             continue;
         }
         DirEntry& e = out[n];
         StrCopyZ(e.name, (int)sizeof(e.name), ent->d_name);
-        char full[kMaxPath];
-        int fullLen = snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
+        TempStr full = fmt("%s/%s", Str(dir), name);
         struct stat st = {};
-        if (fullLen <= 0 || fullLen >= (int)sizeof(full) ||
-            lstat(full, &st) != 0) {
+        if (full.len >= kMaxPath || lstat(full.s, &st) != 0) {
             continue;
         }
         e.isSymlink = S_ISLNK(st.st_mode);
@@ -12113,10 +12137,9 @@ int PlatListDir(const char* dir, DirEntry* out, int max) {
     if (!dir || !out || max <= 0) {
         return 0;
     }
-    char pattern[kMaxPath];
-    _snprintf_s(pattern, kMaxPath, _TRUNCATE, "%s\\*", dir);
+    TempStr pattern = fmt("%s\\*", Str(dir));
     WIN32_FIND_DATAW fd = {};
-    HANDLE h = FindFirstFileW(ToCWstrTemp(Str(pattern)), &fd);
+    HANDLE h = FindFirstFileW(ToCWstrTemp(pattern), &fd);
     if (h == INVALID_HANDLE_VALUE) {
         return 0;
     }

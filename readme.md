@@ -70,7 +70,11 @@ extras/              the ported library crates as standalone amalgams, one
                      is for using the parser without gpui
   markdown-mini/     a smaller parser implementing the same markdown.h
                      API (not an upstream crate); inside gpui.cpp only
-                     when built with GPUI_MARKDOWN=mini
+                     when built with -markdown=mini
+  html5ever/         the HTML parser, crate html5ever 0.27.0.
+                     Also inside gpui.cpp — this copy is standalone
+  html5ever-mini/    a smaller parser implementing the same html5ever.h API;
+                     selected with -html=mini
   wry/               the webview, crate lb-wry 0.53.3 (WebView2 on
                      Windows, WKWebView on macOS, stubs elsewhere). Also
                      inside gpui.cpp
@@ -130,8 +134,9 @@ declarations plus the linter only, and links *beside* `gpui.cpp`, which
 provides the base implementation — this is exactly how the editor example
 and the tests build.
 
-`extras/taffy/`, `extras/markdown/`, `extras/markdown-mini/` and
-`extras/wry/` are **also inside `gpui.cpp`**; these copies exist for using
+`extras/taffy/`, `extras/markdown/`, `extras/markdown-mini/`,
+`extras/html5ever/`, `extras/html5ever-mini/` and `extras/wry/` are **also
+inside `gpui.cpp`**; these copies exist for using
 one library on its own, without gpui. Each therefore carries the base
 implementation (with its platform halves behind `GPUI_OS_*` guards), which
 means two things: never link one of them beside `gpui.cpp` — the symbols
@@ -139,7 +144,8 @@ would be there twice — and provide the one seam base leaves to the
 application, `void base::log(base::Str)` (the examples' `AppLog.cpp` is the
 reference). `markdown/` and `markdown-mini/` implement the same
 `markdown.h`, so they are drop-in swaps for each other and never link
-together. On Windows, `wry/` additionally links `ole32.lib user32.lib
+together. The same is true of `html5ever/` and `html5ever-mini/` and their
+`html5ever.h`. On Windows, `wry/` additionally links `ole32.lib user32.lib
 comctl32.lib shlwapi.lib advapi32.lib shell32.lib`; taffy and the markdown
 parsers need no libraries at all.
 
@@ -147,7 +153,7 @@ No other dependencies, no nested build system, no STL containers.
 
 ## This copy
 
-Amalgamated from gpui-cpp [`1acf97a473230bf99563da45a9b1c21bb1425375`](https://github.com/kjk/gpui-cpp/commit/1acf97a473230bf99563da45a9b1c21bb1425375).
+Amalgamated from gpui-cpp [`2e9d188afb49d3034778dbabeefafc7345ba8384`](https://github.com/kjk/gpui-cpp/commit/2e9d188afb49d3034778dbabeefafc7345ba8384).
 
-[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/1acf97a473230bf99563da45a9b1c21bb1425375...main)
+[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/2e9d188afb49d3034778dbabeefafc7345ba8384...main)
 shows every commit this copy is behind by; if that page is empty, it is current.

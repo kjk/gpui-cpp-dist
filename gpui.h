@@ -5,6 +5,8 @@
 #endif
 #define GPUI_MARKDOWN_FULL 1
 #define GPUI_MARKDOWN_MINI 0
+#define GPUI_HTML5EVER_FULL 1
+#define GPUI_HTML5EVER_MINI 0
 #ifndef GPUI_INCLUDE_PRIVATE_API
 #define GPUI_INCLUDE_PRIVATE_API 0
 #endif
@@ -104,7 +106,9 @@ using TempStr = Str;
 
 #define StrL(lit) ::base::Str{(char*)(lit), (int)dimof(lit) - 1}
 
-Str AllocStrTemp(int size);
+TempStr AllocStrTemp(int size);
+TempStr StrDupTemp(Str s);
+TempStr ReadBoundedFileTemp(Str path, int limit);
 
 #if GPUI_OS_WINDOWS
 
@@ -1186,6 +1190,7 @@ inline bool StrEq(Str s1, Str s2) {
     return StrEqRest(s1, s2);
 }
 bool StrEq(Str s1, const char* s2);
+int StrCmp(Str s1, Str s2);
 GPUI_NOINLINE bool StrEqIRest(Str s1, Str s2);
 inline bool StrEqI(Str s1, Str s2) {
     if (s1.len != s2.len) {
@@ -1226,6 +1231,8 @@ bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut = nullptr);
 
 int SeqStrIndex(SeqStrings strs, Str toFind);
 int SeqStrIndexIS(SeqStrings strs, Str toFind);
+
+bool SeqStrContainsI(SeqStrings strs, Str toFind);
 
 Str SeqStrByIndex(SeqStrings strs, int idx);
 
@@ -3823,16 +3830,32 @@ using ListenerArgFn = void (*)(void* self, Ctx* cx, const void* ev,
                                intptr_t arg);
 
 struct Listener {
-    void* fn = nullptr;
+
+    static constexpr int kPointerBits = sizeof(uintptr_t) * 8;
+    static constexpr uintptr_t kHasArg = uintptr_t(1) << (kPointerBits - 1);
+    static constexpr uintptr_t kArgBound = uintptr_t(1) << (kPointerBits - 2);
+    static constexpr uintptr_t kFlags = kHasArg | kArgBound;
+
+    uintptr_t fn = 0;
     EntityId view = {};
     intptr_t arg = 0;
 
-    bool hasArg = false;
+    template <typename F>
+    void SetFn(F value) {
+        fn = (uintptr_t)value | (fn & kFlags);
+    }
 
-    bool argBound = false;
+    uintptr_t Fn() const { return fn & ~kFlags; }
 
-    bool IsValid() const { return fn != nullptr; }
+    bool HasArg() const { return (fn & kHasArg) != 0; }
+    bool ArgBound() const { return (fn & kArgBound) != 0; }
+    void SetHasArg() { fn |= kHasArg; }
+    void SetArgBound() { fn |= kHasArg | kArgBound; }
+    bool IsValid() const { return Fn() != 0; }
 };
+
+static_assert(sizeof(Listener) <= 24,
+              "keep Listener flags packed into the function word");
 
 struct TimerSub {
     int id = 0;
@@ -4257,15 +4280,10 @@ AnchoredPosition AnchoredCornerResolve(Anchor anchor, Point at, Size popup,
                                        Size view, float margin);
 
 struct Style {
-    Display display = Display::Block;
-    FlexDir dir = FlexDir::Row;
-    FlexAlign align = FlexAlign::Stretch;
 
-    FlexAlign alignSelf = FlexAlign::Stretch;
-    bool hasAlignSelf = false;
-    Justify justify = Justify::Start;
-    Overflow overflowY = Overflow::Visible;
-    Overflow overflowX = Overflow::Visible;
+    const BoxShadow* shadows = nullptr;
+    Str tooltip;
+
     float width = kAuto;
     float height = kAuto;
 
@@ -4298,12 +4316,9 @@ struct Style {
     float radius = 0;
 
     Corners corners = {};
-    bool hasCorners = false;
     Background bg = {};
     Rgba borderColor = {};
     Rgba color = {};
-
-    const BoxShadow* shadows = nullptr;
     int shadowCount = 0;
 
     float rotate = 0;
@@ -4312,82 +4327,95 @@ struct Style {
     float fontSize = 0;
 
     float lineHeight = 0;
-    bool truncate = false;
-    bool wrap = false;
-
-    bool flexWrap = false;
-    bool hasBg = false;
-    bool hasColor = false;
-    bool fontBold = false;
-    bool fontSemibold = false;
-    bool fontMedium = false;
-    uint16_t fontWeight = 0;
-    bool fontMono = false;
-    bool underline = false;
-
-    bool strike = false;
-    bool italic = false;
-    bool borderDashed = false;
 
     float dashOn = 2;
     float dashOff = 1;
-    bool absolute = false;
-    bool fixed = false;
-
-    bool deferred = false;
-
-    uint8_t deferredLayer = 0;
-
-    bool anchorFlip = false;
-    bool anchorBelow = false;
-    bool anchorAbove = false;
-    bool anchorCenterX = false;
-
-    bool anchorCorner = false;
-    Anchor anchor = Anchor::TopLeft;
     float anchorGap = 0;
     float anchorMargin = 4;
 
-    bool explicitPositioner = false;
-    bool positionerCorner = false;
     Bounds positionerTrigger = {};
     Point positionerPoint = {};
-    int8_t positionerPlacement = -1;
-    uint8_t positionerAlign = 1;
     float absTop = kAuto, absLeft = kAuto, absBottom = kAuto, absRight = kAuto;
 
     float absLeftRel = 0, absRightRel = 0;
     float absTopRel = 0, absBottomRel = 0;
     Background hoverBg = {};
-    bool hasHoverBg = false;
 
     Rgba hoverFg = {};
-    bool hasHoverFg = false;
 
     Background activeBg = {};
-    bool hasActiveBg = false;
-
-    bool group = false;
-
-    bool groupHoverVisible = false;
 
     Background groupHoverBg = {};
-    bool hasGroupHoverBg = false;
     int focusId = 0;
 
-    bool focusFromPath = false;
-
     int tabIndex = 0;
+
+    uint32_t keyContext = 0;
+    int trapId = 0;
+
+    uint32_t hasAlignSelf : 1 = false;
+    uint32_t hasCorners : 1 = false;
+    uint32_t truncate : 1 = false;
+    uint32_t wrap : 1 = false;
+
+    uint32_t flexWrap : 1 = false;
+    uint32_t hasBg : 1 = false;
+    uint32_t hasColor : 1 = false;
+    uint32_t fontBold : 1 = false;
+    uint32_t fontSemibold : 1 = false;
+    uint32_t fontMedium : 1 = false;
+    uint32_t fontMono : 1 = false;
+    uint32_t underline : 1 = false;
+    uint32_t strike : 1 = false;
+    uint32_t italic : 1 = false;
+    uint32_t borderDashed : 1 = false;
+    uint32_t absolute : 1 = false;
+
+    uint32_t fixed : 1 = false;
+    uint32_t deferred : 1 = false;
+
+    uint32_t anchorFlip : 1 = false;
+    uint32_t anchorBelow : 1 = false;
+    uint32_t anchorAbove : 1 = false;
+    uint32_t anchorCenterX : 1 = false;
+    uint32_t anchorCorner : 1 = false;
+    uint32_t explicitPositioner : 1 = false;
+    uint32_t positionerCorner : 1 = false;
+    uint32_t hasHoverBg : 1 = false;
+    uint32_t hasHoverFg : 1 = false;
+    uint32_t hasActiveBg : 1 = false;
+
+    uint32_t group : 1 = false;
+
+    uint32_t groupHoverVisible : 1 = false;
+    uint32_t hasGroupHoverBg : 1 = false;
+
+    uint32_t focusFromPath : 1 = false;
+
+    uint16_t fontWeight = 0;
+    Display display = Display::Block;
+    FlexDir dir = FlexDir::Row;
+    FlexAlign align = FlexAlign::Stretch;
+
+    FlexAlign alignSelf = FlexAlign::Stretch;
+    Justify justify = Justify::Start;
+    Overflow overflowY = Overflow::Visible;
+    Overflow overflowX = Overflow::Visible;
+
+    uint8_t deferredLayer = 0;
+
+    Anchor anchor = Anchor::TopLeft;
+
+    int8_t positionerPlacement = -1;
+    uint8_t positionerAlign = 1;
     bool tabStop = true;
 
     bool focusOnPress = false;
 
-    uint32_t keyContext = 0;
-
     bool focusRing = false;
-    int trapId = 0;
-    Str tooltip;
 };
+
+static_assert(sizeof(Style) <= 408, "keep Style members packed by alignment");
 
 struct ActionSlot {
     uint32_t action = 0;
@@ -4668,62 +4696,60 @@ struct AccessibilityInfo {
     int rowIndex = 0;
     int columnIndex = 0;
     int level = 0;
-    bool hasNumericValue = false;
-    bool hasMinNumericValue = false;
-    bool hasMaxNumericValue = false;
-    bool hasNumericValueStep = false;
-    bool hasPositionInSet = false;
-    bool hasSizeOfSet = false;
-    bool hasRowCount = false;
-    bool hasColumnCount = false;
-    bool hasRowIndex = false;
-    bool hasColumnIndex = false;
-    bool hasLevel = false;
-    bool selected = false;
-    bool hasSelected = false;
-    bool expanded = false;
-    bool hasExpanded = false;
-    bool activeDescendant = false;
-    bool disabled = false;
+
+    unsigned int hasNumericValue : 1 = false;
+    unsigned int hasMinNumericValue : 1 = false;
+    unsigned int hasMaxNumericValue : 1 = false;
+    unsigned int hasNumericValueStep : 1 = false;
+    unsigned int hasPositionInSet : 1 = false;
+    unsigned int hasSizeOfSet : 1 = false;
+    unsigned int hasRowCount : 1 = false;
+    unsigned int hasColumnCount : 1 = false;
+    unsigned int hasRowIndex : 1 = false;
+    unsigned int hasColumnIndex : 1 = false;
+    unsigned int hasLevel : 1 = false;
+    unsigned int selected : 1 = false;
+    unsigned int hasSelected : 1 = false;
+    unsigned int expanded : 1 = false;
+    unsigned int hasExpanded : 1 = false;
+    unsigned int activeDescendant : 1 = false;
+    unsigned int disabled : 1 = false;
+};
+
+static_assert(sizeof(AccessibilityInfo) <= 128,
+              "keep AccessibilityInfo boolean state packed");
+
+struct ElStyleStates {
+    Style refine = {};
+    Style hover = {};
+    Style active = {};
+    Style focus = {};
+    Style dragOver = {};
+    uint32_t refineSet = 0;
+    uint32_t hoverSet = 0;
+    uint32_t activeSet = 0;
+    uint32_t focusSet = 0;
+    uint32_t dragOverSet = 0;
+    ArenaStr dragOverKind = kArenaStrNone;
 };
 
 struct El {
-    ElKind kind = ElKind::Div;
 
     Arena* arena = nullptr;
     Style style;
     Str id;
     Str text;
-    IconName icon = IconName::None;
     Str iconPath;
     AccessibilityInfo accessibility = {};
 
     Str imgSrc;
-    ChartSeries chart = {};
-    float progress = 0;
-    int clickId = 0;
-
-    uint32_t pathId = 0;
-
-    bool clickFromPath = false;
-
-    bool stopClick = false;
-
-    bool stopMouseDown = false;
-
-    bool suppressTextSelection = false;
     Func0 onClick;
+
     Listener listener;
 
     Listener accessibilityDefault;
     Listener accessibilityIncrement;
     Listener accessibilityDecrement;
-
-    Func0 accessibilityIncrementDirect;
-    Func0 accessibilityDecrementDirect;
-
-    uint32_t clickAction = 0;
-    intptr_t clickActionArg = 0;
 
     Listener onHover;
 
@@ -4731,51 +4757,31 @@ struct El {
     Listener onScroll;
 
     Listener onScrollWheel;
-    ActionSlot* actions = nullptr;
 
     Listener onMouseDown;
     Listener onMouseUp;
-    DispatchPhase mouseDownPhase = DispatchPhase::Bubble;
-    DispatchPhase mouseUpPhase = DispatchPhase::Bubble;
 
     Listener onDragMove;
 
     Listener onMouseDownOut;
 
-    Style refine = {};
-    uint32_t refineSet = 0;
+    Listener onMouseUpOut;
 
-    Style hoverStyle = {};
-    uint32_t hoverSet = 0;
+    Listener onDrop;
+    Listener onLineClamp;
 
-    Style activeStyle = {};
-    uint32_t activeSet = 0;
-    Style focusStyle = {};
-    uint32_t focusSet = 0;
-    Style dragOverStyle = {};
-    uint32_t dragOverSet = 0;
-    Str dragOverKind = {};
+    Func0 accessibilityIncrementDirect;
+    Func0 accessibilityDecrementDirect;
+    intptr_t clickActionArg = 0;
+    ActionSlot* actions = nullptr;
 
     DragPayload drag = {};
 
-    CursorKind cursor = CursorKind::Arrow;
-
-    Listener onMouseUpOut;
-
     Str dropKind = {};
-    Listener onDrop;
 
     gpui::Bounds* boundsOut = nullptr;
 
-    bool lineSpan = false;
-    float lineSpanHeight = 0;
-
-    bool lineClamp = false;
-    float lineClampCap = 0;
-    Listener onLineClamp;
-
     SliderState* slider = nullptr;
-    Axis sliderAxis = Axis::Horizontal;
 
     InputState* input = nullptr;
 
@@ -4785,15 +4791,40 @@ struct El {
     El* first = nullptr;
     El* last = nullptr;
     El* next = nullptr;
+
+    const TextSpan* spans = nullptr;
+
+    const TextSpan* washes = nullptr;
+
+    const TextSpan* underlines = nullptr;
+    gpui::Bounds* rangeOut = nullptr;
+    float* caretOutX = nullptr;
+    float* caretOutY = nullptr;
+
+    const SelSource* selSrc = nullptr;
+
+    uint64_t layoutNode = 0;
+
+    TextLayout* laidLayout = nullptr;
+
+    ArenaPtr<ChartSeries> chart = {};
+    float progress = 0;
+    int clickId = 0;
+
+    uint32_t pathId = 0;
+
+    uint32_t clickAction = 0;
+
+    ArenaPtr<ElStyleStates> styleStates = {};
+    float lineSpanHeight = 0;
+    float lineClampCap = 0;
+
     float x = 0, y = 0, w = 0, h = 0;
 
     gpui::Bounds Bounds() const { return {x, y, w, h}; }
     float scrollY = 0;
 
     float scrollX = 0;
-
-    ScrollbarMode scrollMode = ScrollbarMode::Always;
-    bool scrollModeSet = false;
 
     ScrollbarMotion scrollMotion = {};
     Background scrollTrack = {};
@@ -4818,61 +4849,67 @@ struct El {
     float scrollThumbMinLength = 48;
     float scrollThumbHoverMinLength = 48;
     float scrollThumbActiveMinLength = 48;
-    bool scrollThemeSet = false;
-
-    bool noScrollbar = false;
-
-    bool noScrollbarX = false;
-    bool noScrollbarY = false;
-
-    uint8_t scrollMaskAxes = 0;
     int scrollId = 0;
-
-    bool scrollFromPath = false;
     float contentW = 0;
     float contentH = 0;
     int selLo = -1;
     int selHi = -1;
-
-    const TextSpan* spans = nullptr;
     int nSpans = 0;
-
-    const TextSpan* washes = nullptr;
     int nWashes = 0;
-
-    const TextSpan* underlines = nullptr;
     int nUnderlines = 0;
 
     int rangeOutLo = -1;
     int rangeOutHi = -1;
-    gpui::Bounds* rangeOut = nullptr;
-    float* caretOutX = nullptr;
-    float* caretOutY = nullptr;
     Rgba selColor{Rgba8(0x6b, 0xb3, 0xf0, 90)};
 
     int markLo = -1;
     int markHi = -1;
-    bool selectable = false;
 
     EntityId selectionOwner = {};
-
-    const SelSource* selSrc = nullptr;
-    bool selJoin = false;
 
     int caretOff = -1;
     Rgba caretColor = {};
     float caretW = 2;
-
-    bool caretLineEndAffinity = false;
-
-    uint64_t layoutNode = 0;
     float laidFont = 0;
     float laidMaxW = 0;
 
-    TextLayout* laidLayout = nullptr;
-
     float measKeyW[4] = {};
     Size measSize[4] = {};
+
+    unsigned int clickFromPath : 1 = false;
+
+    unsigned int scrollFromPath : 1 = false;
+
+    unsigned int stopClick : 1 = false;
+
+    unsigned int stopMouseDown : 1 = false;
+
+    unsigned int suppressTextSelection : 1 = false;
+
+    unsigned int lineSpan : 1 = false;
+
+    unsigned int lineClamp : 1 = false;
+
+    unsigned int scrollModeSet : 1 = false;
+    unsigned int scrollThemeSet : 1 = false;
+    unsigned int noScrollbar : 1 = false;
+    unsigned int noScrollbarX : 1 = false;
+    unsigned int noScrollbarY : 1 = false;
+
+    unsigned int selectable : 1 = false;
+    unsigned int selJoin : 1 = false;
+    unsigned int caretLineEndAffinity : 1 = false;
+
+    IconName icon = IconName::None;
+    ElKind kind = ElKind::Div;
+    CursorKind cursor = CursorKind::Arrow;
+    DispatchPhase mouseDownPhase = DispatchPhase::Bubble;
+    DispatchPhase mouseUpPhase = DispatchPhase::Bubble;
+    Axis sliderAxis = Axis::Horizontal;
+
+    ScrollbarMode scrollMode = ScrollbarMode::Always;
+
+    uint8_t scrollMaskAxes = 0;
     uint8_t measCount = 0;
     uint8_t measNext = 0;
 
@@ -5027,6 +5064,11 @@ struct El {
     El* Focus(const struct StateStyle& s);
 
     El* DragOver(Str dragKind, const struct StateStyle& s);
+    ElStyleStates* StyleStates();
+    const ElStyleStates* StyleStates() const;
+    ElStyleStates* EnsureStyleStates();
+    ChartSeries* Chart();
+    const ChartSeries* Chart() const;
     El* BoundsOut(gpui::Bounds* out);
     El* ReportLineSpan(float lineHeight);
     El* LineClamp(float cap, Listener onChange = {});
@@ -5113,6 +5155,11 @@ struct El {
     El* Tip(Str s);
     El* Id(Str s);
 };
+
+static_assert(sizeof(unsigned int) == 4,
+              "El flags require a four-byte unsigned int");
+static_assert(sizeof(El) <= 1800,
+              "keep El flags packed and members alignment-ordered");
 
 enum class BtnKind : uint8_t {
     Default,
@@ -6836,8 +6883,6 @@ struct Window {
     double frameNow = 0;
 
     double lastDrawTime = 0;
-
-    bool pendingInvalidate = false;
     bool mouseDown = false;
 
     bool stopPropagation = false;
@@ -6997,7 +7042,7 @@ Entity<T> EntityNewState(App* app) {
 template <typename T, typename E>
 Listener Listen(Ctx* cx, void (*fn)(T*, Ctx*, const E*)) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = cx->self;
     return l;
 }
@@ -7006,36 +7051,34 @@ template <typename T, typename E>
 Listener Listen(Ctx* cx, void (*fn)(T*, Ctx*, const E*, intptr_t),
                 intptr_t arg) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = cx->self;
     l.arg = arg;
-    l.hasArg = true;
-    l.argBound = true;
+    l.SetArgBound();
     return l;
 }
 
 template <typename T, typename E>
 Listener Listen(Ctx* cx, void (*fn)(T*, Ctx*, const E*, intptr_t)) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = cx->self;
-    l.hasArg = true;
+    l.SetHasArg();
     return l;
 }
 
 inline Listener ListenerArg(Listener l, intptr_t arg) {
     if (l.IsValid()) {
         l.arg = arg;
-        l.hasArg = true;
-        l.argBound = true;
+        l.SetArgBound();
     }
     return l;
 }
 
 inline Listener ListenerFill(Listener l, intptr_t v) {
-    if (l.IsValid() && !l.argBound) {
+    if (l.IsValid() && !l.ArgBound()) {
         l.arg = v;
-        l.hasArg = true;
+        l.SetHasArg();
     }
     return l;
 }
@@ -7043,7 +7086,7 @@ inline Listener ListenerFill(Listener l, intptr_t v) {
 template <typename T, typename E>
 Listener ListenTo(Entity<T> e, void (*fn)(T*, Ctx*, const E*)) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = e.id;
     return l;
 }
@@ -7051,9 +7094,9 @@ Listener ListenTo(Entity<T> e, void (*fn)(T*, Ctx*, const E*)) {
 template <typename T, typename E>
 Listener ListenTo(Entity<T> e, void (*fn)(T*, Ctx*, const E*, intptr_t)) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = e.id;
-    l.hasArg = true;
+    l.SetHasArg();
     return l;
 }
 
@@ -7061,11 +7104,10 @@ template <typename T, typename E>
 Listener ListenTo(Entity<T> e, void (*fn)(T*, Ctx*, const E*, intptr_t),
                   intptr_t arg) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = e.id;
     l.arg = arg;
-    l.hasArg = true;
-    l.argBound = true;
+    l.SetArgBound();
     return l;
 }
 
@@ -7108,7 +7150,7 @@ template <typename T, typename S, typename E>
 requires EmitsEvent<T, E> Subscription
 Subscribe(Ctx* cx, Entity<T> emitter, void (*fn)(S*, Ctx*, const E*)) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = cx->self;
     return EntitySubscribeRaw(cx->app, emitter.id, EntityEventType<E>(), l);
 }
@@ -7133,7 +7175,7 @@ requires EmitsEvent<T, E> Subscription SubscribeTo(App* app, Entity<T> emitter,
                                                    void (*fn)(S*, Ctx*,
                                                               const E*)) {
     Listener l;
-    l.fn = (void*)fn;
+    l.SetFn(fn);
     l.view = subscriber.id;
     return EntitySubscribeRaw(app, emitter.id, EntityEventType<E>(), l);
 }
@@ -7332,7 +7374,7 @@ struct PathPrompt {
     Str title = {};
 };
 
-bool PromptForPath(Window* win, const PathPrompt& opts, char* out, int cap);
+TempStr PromptForPathTemp(Window* win, const PathPrompt& opts);
 
 int AppRun(App* app);
 Window* WindowOpen(App* app, Str title, int dipW, int dipH, WinOpts opts);
@@ -11743,9 +11785,8 @@ struct NumberInputEvent {
     StepAction action = StepAction::Increment;
 };
 
-bool NumberStepValue(Str value, StepAction action, double step, bool hasMin,
-                     double min, bool hasMax, double max, char* out,
-                     int outCap);
+TempStr NumberStepValueTemp(Str value, StepAction action, double step,
+                            bool hasMin, double min, bool hasMax, double max);
 
 bool NumberParseValue(Str value, double* out);
 
@@ -16563,7 +16604,7 @@ namespace component {
 
 float AvatarSizePx(UiSize s);
 
-Str AvatarInitials(char* out, int cap, Str name);
+TempStr AvatarInitialsTemp(Str name);
 
 struct Avatar {
     Arena* a = nullptr;
@@ -21377,7 +21418,7 @@ struct NotificationSystemEntry {
     Listener onClick = {};
 };
 
-Str NotificationSystemTag(char* buf, int cap, int id);
+TempStr NotificationSystemTagTemp(int id);
 
 bool NotificationTagId(Str tag, int* outId);
 
@@ -24270,8 +24311,8 @@ enum class ProcessSort : uint8_t {
 void SysSortProcesses(SysState* s, ProcessSort field, bool descending,
                       int keepTop);
 
-TempStr FormatBytes(uint64_t bytes);
-TempStr FormatPct(float v, int decimals);
+TempStr FormatBytesTemp(uint64_t bytes);
+TempStr FormatPctTemp(float v, int decimals);
 
 bool SysSelfPrivateMemory(uint64_t* bytes);
 }
@@ -24422,9 +24463,9 @@ void FpsMonitorSetContinuous(FpsMonitor* self, bool continuous);
 
 Rgba FpsRateColor(float fps, float budgetSecs, const FpsStyle& style);
 
-TempStr FpsFormatCpu(float percent);
+TempStr FpsFormatCpuTemp(float percent);
 
-TempStr FpsFormatBytes(uint64_t bytes);
+TempStr FpsFormatBytesTemp(uint64_t bytes);
 
 enum class FpsAnchor : uint8_t {
     TopLeft,
@@ -25034,6 +25075,172 @@ const SceneStats& Stats(PaintCtx* ctx);
 }
 
 #if GPUI_INCLUDE_PRIVATE_API
+#line 1 "src/html5ever/html5ever.h"
+
+namespace html5ever {
+
+using base::Arena;
+using base::ArenaPtr;
+using base::ArenaPtrGet;
+using base::ArenaStr;
+using base::ArenaStrGet;
+using base::ArenaVec;
+using base::Str;
+
+enum class Namespace : uint8_t {
+    Html,
+    MathMl,
+    Svg,
+};
+
+enum class NodeKind : uint8_t {
+    Document,
+    Doctype,
+    Text,
+    Comment,
+    Element,
+};
+
+struct Attribute {
+    ArenaStr name = {};
+    ArenaStr value = {};
+    Namespace ns = Namespace::Html;
+    ArenaPtr<Attribute> next = {};
+};
+
+struct Node {
+    NodeKind kind = NodeKind::Document;
+    Namespace ns = Namespace::Html;
+    ArenaStr name = {};
+
+    ArenaStr data = {};
+
+    ArenaStr systemId = {};
+    ArenaPtr<Attribute> attrs = {};
+    ArenaPtr<Node> parent = {};
+    ArenaPtr<Node> first = {};
+    ArenaPtr<Node> last = {};
+    ArenaPtr<Node> next = {};
+
+    bool implicit = false;
+};
+
+enum class TokenKind : uint8_t {
+    Eof,
+    ParseError,
+    Character,
+    NullCharacter,
+    Comment,
+    Doctype,
+    StartTag,
+    EndTag,
+};
+
+struct Token {
+    int line = 1;
+    ArenaStr name = {};
+    ArenaStr data = {};
+    ArenaStr systemId = {};
+    ArenaPtr<Attribute> attrs = {};
+    TokenKind kind = TokenKind::Eof;
+    bool selfClosing = false;
+    bool forceQuirks = false;
+};
+
+using TokenSink = void (*)(void* user, const Token* token);
+
+struct TokenizerOptions {
+    bool exactErrors = false;
+    bool discardBom = true;
+};
+
+struct ParseOptions {
+    TokenizerOptions tokenizer = {};
+    bool exactErrors = false;
+    bool scriptingEnabled = true;
+    bool iframeSrcdoc = false;
+    bool dropDoctype = false;
+};
+
+struct SerializeOptions {
+    bool includeNode = false;
+    bool createMissingParent = true;
+};
+
+void Tokenize(Arena* a, Str source, TokenSink sink, void* user = nullptr,
+              TokenizerOptions options = {});
+Node* ParseDocument(Arena* a, Str source, ParseOptions options = {});
+Node* ParseFragment(Arena* a, Str source, Str context = Str{},
+                    ParseOptions options = {});
+Str Serialize(Arena* a, const Node* node, SerializeOptions options = {});
+
+inline Str AttributeName(Arena* a, const Attribute* attr) {
+    return attr ? ArenaStrGet(a, attr->name) : Str{};
+}
+inline Str AttributeValue(Arena* a, const Attribute* attr) {
+    return attr ? ArenaStrGet(a, attr->value) : Str{};
+}
+inline Attribute* AttributeNext(Arena* a, Attribute* attr) {
+    return attr ? ArenaPtrGet(a, attr->next) : nullptr;
+}
+inline const Attribute* AttributeNext(Arena* a, const Attribute* attr) {
+    return attr ? ArenaPtrGet(a, attr->next) : nullptr;
+}
+
+inline Str NodeName(Arena* a, const Node* node) {
+    return node ? ArenaStrGet(a, node->name) : Str{};
+}
+inline Str NodeData(Arena* a, const Node* node) {
+    return node ? ArenaStrGet(a, node->data) : Str{};
+}
+inline Str NodeSystemId(Arena* a, const Node* node) {
+    return node ? ArenaStrGet(a, node->systemId) : Str{};
+}
+inline Attribute* NodeAttrs(Arena* a, Node* node) {
+    return node ? ArenaPtrGet(a, node->attrs) : nullptr;
+}
+inline const Attribute* NodeAttrs(Arena* a, const Node* node) {
+    return node ? ArenaPtrGet(a, node->attrs) : nullptr;
+}
+#define GPUI_HTML5EVER_NODE_LINK(Name, field)                   \
+    inline Node* Node##Name(Arena* a, Node* node) {             \
+        return node ? ArenaPtrGet(a, node->field) : nullptr;    \
+    }                                                           \
+    inline const Node* Node##Name(Arena* a, const Node* node) { \
+        return node ? ArenaPtrGet(a, node->field) : nullptr;    \
+    }
+GPUI_HTML5EVER_NODE_LINK(Parent, parent)
+GPUI_HTML5EVER_NODE_LINK(First, first)
+GPUI_HTML5EVER_NODE_LINK(Last, last)
+GPUI_HTML5EVER_NODE_LINK(Next, next)
+#undef GPUI_HTML5EVER_NODE_LINK
+
+inline Str TokenName(Arena* a, const Token* token) {
+    return token ? ArenaStrGet(a, token->name) : Str{};
+}
+inline Str TokenData(Arena* a, const Token* token) {
+    return token ? ArenaStrGet(a, token->data) : Str{};
+}
+inline Str TokenSystemId(Arena* a, const Token* token) {
+    return token ? ArenaStrGet(a, token->systemId) : Str{};
+}
+inline const Attribute* TokenAttrs(Arena* a, const Token* token) {
+    return token ? ArenaPtrGet(a, token->attrs) : nullptr;
+}
+
+const Attribute* Attr(Arena* a, const Node* node, Str name);
+Str AttrValue(Arena* a, const Node* node, Str name);
+
+}
+
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
+#line 1 "src/html5ever-mini/html5ever.h"
+
+#endif
+
+#if GPUI_INCLUDE_PRIVATE_API
 #line 1 "src/markdown/constant.h"
 
 namespace markdown {
@@ -25417,6 +25624,7 @@ enum class StateName : uint16_t {
     TitleEscape,
     TitleInside,
     TitleNok,
+    Count,
 };
 
 struct State {
@@ -25729,7 +25937,7 @@ struct EditMap {
     struct Entry {
         int32_t at = 0;
         int32_t remove = 0;
-        ArenaVec<Event> add {};
+        ArenaVec<Event> add{};
     };
 
     Arena* a = nullptr;
@@ -25738,8 +25946,8 @@ struct EditMap {
     Vec<int32_t> buckets;
 };
 
-void EditMapAdd(EditMap& map, int32_t index, int32_t remove,
-                const Event* add, int32_t addLen);
+void EditMapAdd(EditMap& map, int32_t index, int32_t remove, const Event* add,
+                int32_t addLen);
 void EditMapAddBefore(EditMap& map, int32_t index, int32_t remove,
                       const Event* add, int32_t addLen);
 inline bool EditMapEmpty(const EditMap& map) {
@@ -25768,7 +25976,7 @@ bool CharacterReferenceValueTest(uint8_t marker, uint8_t byte);
 
 Str CharacterReferenceDecode(Arena* a, Str value, uint8_t marker);
 
-Str CharacterReferenceDecodeInto(char buf[4], Str value, uint8_t marker);
+base::TempStr CharacterReferenceDecodeTemp(Str value, uint8_t marker);
 
 }
 
