@@ -1,6 +1,6 @@
-# gpui-cpp-dist
+# gpui-kit-cpp-dist
 
-The amalgamated build of [gpui-cpp](https://github.com/kjk/gpui-cpp): GPUI is
+The amalgamated build of [gpui-kit-cpp](https://github.com/kjk/gpui-kit-cpp): GPUI is
 `gpui.h` and `gpui.cpp`, its QuickJS-NG engine is the separate generated
 `quickjs/quickjs.h` and `quickjs/quickjs.c`, and `extras/` holds the ported
 library crates as standalone amalgams, one header + one source each (see
@@ -153,7 +153,7 @@ No other dependencies, no nested build system, no STL containers.
 
 ## This copy
 
-Amalgamated from gpui-cpp [`2e9d188afb49d3034778dbabeefafc7345ba8384`](https://github.com/kjk/gpui-cpp/commit/2e9d188afb49d3034778dbabeefafc7345ba8384).
+Amalgamated from gpui-kit-cpp [`a1ec2b3bb9e8a8438dbefd13f5c5584b76844bd0`](https://github.com/kjk/gpui-kit-cpp/commit/a1ec2b3bb9e8a8438dbefd13f5c5584b76844bd0).
 
-[What has changed in gpui-cpp since](https://github.com/kjk/gpui-cpp/compare/2e9d188afb49d3034778dbabeefafc7345ba8384...main)
+[What has changed in gpui-kit-cpp since](https://github.com/kjk/gpui-kit-cpp/compare/a1ec2b3bb9e8a8438dbefd13f5c5584b76844bd0...main)
 shows every commit this copy is behind by; if that page is empty, it is current.

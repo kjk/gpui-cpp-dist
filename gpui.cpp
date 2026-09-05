@@ -38,8 +38,9 @@ int StrToIntUnchecked(Str s) {
         i++;
     }
     bool negative = false;
-    if (i < s.len && (s.s[i] == '+' || s.s[i] == '-')) {
-        negative = s.s[i] == '-';
+    Str rest = Str(s.s + i, s.len - i);
+    if (StrStartsWithAny(rest, "+-")) {
+        negative = rest.s[0] == '-';
         i++;
     }
     uint64_t value = 0;
@@ -1104,6 +1105,18 @@ bool StrStartsWith(Str s, const char* prefix) {
     return StrStartsWith(s, Str(prefix));
 }
 
+bool StrStartsWithAny(Str s, const char* chars) {
+    if (!s || !chars) {
+        return false;
+    }
+    for (; *chars; chars++) {
+        if (s.s[0] == *chars) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool StrStartsWithI(Str s, const char* prefix) {
     return StrStartsWithI(s, Str(prefix));
 }
@@ -1235,30 +1248,19 @@ Str StrReplaceAll(Str value, Str from, Str to) {
     return result;
 }
 
-Str SeqStrAt(SeqStrings strs, int off) {
-    if (!strs || off < 0 || !strs[off]) {
+Str SeqStrFirst(SeqStrings strs) {
+    if (!strs || !strs[0]) {
         return {};
     }
-    return Str(strs + off);
+    return Str(strs);
 }
 
-bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut) {
-    if (!strs || off < 0 || !strs[off]) {
-        off = -1;
-        if (idxInOut) {
-            *idxInOut = -1;
-        }
-        return false;
+Str SeqStrNext(Str s) {
+    if (s.len == 0) {
+        return {};
     }
-    off += (int)strlen(strs + off) + 1;
-    if (!strs[off]) {
-        off = -1;
-        return false;
-    }
-    if (idxInOut) {
-        (*idxInOut)++;
-    }
-    return true;
+    const char* next = s.s + s.len + 1;
+    return next[0] ? Str(next) : Str{};
 }
 
 static int SeqStrIndexCmp(SeqStrings strs, Str toFind, bool ignoreCase) {
@@ -1301,23 +1303,17 @@ Str SeqStrByIndex(SeqStrings strs, int idx) {
     if (idx < 0) {
         return {};
     }
-    int off = 0;
-    while (idx > 0) {
-        if (!SeqStrAdvance(strs, off)) {
-            return {};
-        }
+    Str s = SeqStrFirst(strs);
+    while (idx > 0 && s.len > 0) {
+        s = SeqStrNext(s);
         idx--;
     }
-    return SeqStrAt(strs, off);
+    return s;
 }
 
 int SeqStrCount(SeqStrings strs) {
-    if (!strs || !strs[0]) {
-        return 0;
-    }
-    int off = 0;
-    int n = 1;
-    while (SeqStrAdvance(strs, off)) {
+    int n = 0;
+    for (Str s = SeqStrFirst(strs); s.len > 0; s = SeqStrNext(s)) {
         n++;
     }
     return n;
@@ -1339,12 +1335,12 @@ static void StrBuilderTerminate(StrBuilder& b) {
     }
 }
 
-static char* StrBuilderEnsureCap(Arena* a, StrBuilder& b, int needed) {
-    char* els = VecReserve(a, b, needed);
+static char* StrBuilderEnsureCap(StrBuilder& b, int needed) {
+    char* els = VecReserve(b.a, b, needed);
     if (!els) {
         return nullptr;
     }
-    if (a && b.cap > 0) {
+    if (b.a && b.cap > 0) {
         b.cap = -b.cap;
     }
     return els;
@@ -1368,42 +1364,34 @@ void StrBuilderUseExternalBuffer(StrBuilder& b, Str buf) {
     }
 }
 
-bool StrBuilderReserve(Arena* a, StrBuilder& b, int cap) {
-    if (!StrBuilderEnsureCap(a, b, cap)) {
+bool StrBuilder::Reserve(int capacity) {
+    if (!StrBuilderEnsureCap(*this, capacity)) {
         return false;
     }
-    StrBuilderTerminate(b);
-    return true;
-}
-
-bool StrBuilderAppendChar(Arena* a, StrBuilder& b, char c) {
-    if (!StrBuilderEnsureCap(a, b, b.len + 1)) {
-        return false;
-    }
-    b.els[b.len++] = c;
-    StrBuilderTerminate(b);
-    return true;
-}
-
-bool StrBuilderAppend(Arena* a, StrBuilder& b, Str src) {
-    if (StrIsNull(src) || 0 == src.len) {
-        return true;
-    }
-    if (!StrBuilderEnsureCap(a, b, b.len + src.len)) {
-        return false;
-    }
-    memcpy(b.els + b.len, src.s, (size_t)src.len);
-    b.len += src.len;
-    StrBuilderTerminate(b);
+    StrBuilderTerminate(*this);
     return true;
 }
 
 bool StrBuilder::AppendChar(char c) {
-    return StrBuilderAppendChar(nullptr, *this, c);
+    if (!StrBuilderEnsureCap(*this, len + 1)) {
+        return false;
+    }
+    els[len++] = c;
+    StrBuilderTerminate(*this);
+    return true;
 }
 
 bool StrBuilder::Append(Str src) {
-    return StrBuilderAppend(nullptr, *this, src);
+    if (StrIsNull(src) || 0 == src.len) {
+        return true;
+    }
+    if (!StrBuilderEnsureCap(*this, len + src.len)) {
+        return false;
+    }
+    memcpy(els + len, src.s, (size_t)src.len);
+    len += src.len;
+    StrBuilderTerminate(*this);
+    return true;
 }
 
 char StrBuilder::RemoveAt(int idx, int count) {
@@ -1417,27 +1405,23 @@ char StrBuilder::RemoveLast() {
     return len == 0 ? 0 : RemoveAt(len - 1);
 }
 
-Str StrBuilderTakeStr(Arena* a, StrBuilder& b) {
-    int n = b.len;
-    char* res = b.els;
-    if (!b.els || n == 0) {
-        b.Reset();
+Str StrBuilder::TakeStr() {
+    int n = len;
+    char* res = els;
+    if (!els || n == 0) {
+        Reset();
         return Str{};
     }
-    if (IsNotOurHeapBlock(b)) {
+    if (IsNotOurHeapBlock(*this)) {
 
-        res = (char*)MemDup(a, b.els, (size_t)n + kPadding);
+        res = (char*)MemDup(a, els, (size_t)n + kPadding);
     } else {
 
-        b.els = nullptr;
-        b.cap = 0;
+        els = nullptr;
+        cap = 0;
     }
-    b.Reset();
+    Reset();
     return Str(res, n);
-}
-
-Str StrBuilder::TakeStr() {
-    return StrBuilderTakeStr(nullptr, *this);
 }
 
 char StrBuilder::LastChar() const {
@@ -1461,10 +1445,8 @@ struct Inst {
 };
 
 struct Fmt {
-    Fmt() = default;
+    explicit Fmt(Arena* a) : res(a) {}
     ~Fmt() = default;
-
-    Arena* a = nullptr;
 
     bool Eval(const FmtArg** args, int nArgs);
 
@@ -1737,24 +1719,23 @@ static void evalDefault(Fmt& fmt, const FmtArg& arg) {
     Str buf(fmt.buf, (int)dimof(fmt.buf));
     switch (arg.t) {
         case FmtArg::Kind::Char:
-            StrBuilderAppendChar(fmt.a, fmt.res, arg.c);
+            fmt.res.AppendChar(arg.c);
             break;
         case FmtArg::Kind::Int:
-            StrBuilderAppend(fmt.a, fmt.res,
-                             bufFmt(buf, "%lld", (long long)arg.i));
+            fmt.res.Append(bufFmt(buf, "%lld", (long long)arg.i));
             break;
         case FmtArg::Kind::Ptr:
-            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%p", arg.ptr));
+            fmt.res.Append(bufFmt(buf, "%p", arg.ptr));
             break;
         case FmtArg::Kind::Float:
 
-            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", (double)arg.f));
+            fmt.res.Append(bufFmt(buf, "%G", (double)arg.f));
             break;
         case FmtArg::Kind::Double:
-            StrBuilderAppend(fmt.a, fmt.res, bufFmt(buf, "%G", arg.d));
+            fmt.res.Append(bufFmt(buf, "%G", arg.d));
             break;
         case FmtArg::Kind::Str:
-            StrBuilderAppend(fmt.a, fmt.res, arg.str);
+            fmt.res.Append(arg.str);
             break;
         default:
             break;
@@ -1785,13 +1766,13 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
         pad = std::max(pad, 0);
         if (!inst.leftJust) {
             for (int j = 0; j < pad; j++) {
-                StrBuilderAppendChar(fmt.a, fmt.res, ' ');
+                fmt.res.AppendChar(' ');
             }
         }
-        StrBuilderAppend(fmt.a, fmt.res, Str(sv.s, slen));
+        fmt.res.Append(Str(sv.s, slen));
         if (inst.leftJust) {
             for (int j = 0; j < pad; j++) {
-                StrBuilderAppendChar(fmt.a, fmt.res, ' ');
+                fmt.res.AppendChar(' ');
             }
         }
         return;
@@ -1821,7 +1802,7 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
                 fbuf[k] = 0;
                 out = bufFmt(bufS, fbuf, (int)ival);
             }
-            StrBuilderAppend(fmt.a, fmt.res, out);
+            fmt.res.Append(out);
             break;
         case 'u':
         case 'o':
@@ -1839,12 +1820,12 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
                 out =
                     bufFmt(bufS, fbuf, (unsigned int)(unsigned long long)ival);
             }
-            StrBuilderAppend(fmt.a, fmt.res, out);
+            fmt.res.Append(out);
             break;
         case 'c':
             fbuf[k++] = 'c';
             fbuf[k] = 0;
-            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, fbuf, (int)ival));
+            fmt.res.Append(bufFmt(bufS, fbuf, (int)ival));
             break;
         case 'f':
         case 'F':
@@ -1857,14 +1838,14 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
             fbuf[k++] = conv;
             fbuf[k] = 0;
             double dv = (arg.t == FmtArg::Kind::Double) ? arg.d : (double)arg.f;
-            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, fbuf, dv));
+            fmt.res.Append(bufFmt(bufS, fbuf, dv));
         } break;
         case 'p': {
 
             const void* pv = (arg.t == FmtArg::Kind::Ptr)
                                  ? arg.ptr
                                  : (const void*)(intptr_t)ival;
-            StrBuilderAppend(fmt.a, fmt.res, bufFmt(bufS, "%p", pv));
+            fmt.res.Append(bufFmt(bufS, "%p", pv));
         } break;
         default:
             break;
@@ -1881,7 +1862,7 @@ bool Fmt::Eval(const FmtArg** args, int nArgs) {
         auto& inst = instructions[n];
 
         if (inst.t == FmtArg::Kind::RawStr) {
-            StrBuilderAppend(a, res, Str(format.s + inst.rawOff, inst.sLen));
+            res.Append(Str(format.s + inst.rawOff, inst.sLen));
             continue;
         }
 
@@ -1927,9 +1908,8 @@ static Str FormatArgs(Arena* a, const char* fmt, const FmtArg** args,
         }
     }
 
-    Fmt f;
+    Fmt f(a);
 
-    f.a = a;
     bool ok = ParseFormat(f, Str(fmt));
     if (!ok) {
         return {};
@@ -1938,7 +1918,7 @@ static Str FormatArgs(Arena* a, const char* fmt, const FmtArg** args,
     if (!ok) {
         return {};
     }
-    return StrBuilderTakeStr(f.a, f.res);
+    return f.res.TakeStr();
 }
 
 TempStr FormatTempArgs(const char* fmt, const FmtArg** args, int nArgs) {
@@ -4414,6 +4394,13 @@ static uint32_t ColorToU32(Rgba c) {
            ((uint32_t)c.b << 8) | (uint32_t)c.a;
 }
 
+static Rgba Grayscale(Rgba c) {
+    uint8_t gray = (uint8_t)(((uint32_t)c.r * 54 + (uint32_t)c.g * 183 +
+                              (uint32_t)c.b * 19) >>
+                             8);
+    return {gray, gray, gray, c.a};
+}
+
 struct DrawOpsExec {
     PaintCtx* ctx = nullptr;
     DrawOpsTarget t;
@@ -4595,7 +4582,7 @@ bool ExecuteDrawOps(PaintCtx* ctx, const void* data, int dataLen,
     DrawOpsExec e;
     e.ctx = ctx;
     e.t = t;
-    e.color = t.color;
+    e.color = t.grayscale ? Grayscale(t.color) : t.color;
     e.Rescale();
     float ang = t.turns * 2.f * kPi;
     e.ca = t.turns != 0 ? cosf(ang) : 1.f;
@@ -4626,9 +4613,12 @@ bool ExecuteDrawOps(PaintCtx* ctx, const void* data, int dataLen,
             case kOpColor:
 
                 e.color = ColorFromU32(r.U32());
+                if (t.grayscale) {
+                    e.color = Grayscale(e.color);
+                }
                 break;
             case kOpColorReset:
-                e.color = t.color;
+                e.color = t.grayscale ? Grayscale(t.color) : t.color;
                 break;
             case kOpLine: {
                 float x1 = r.F(), y1 = r.F(), x2 = r.F(), y2 = r.F();
@@ -5946,11 +5936,72 @@ El* IconEl(Arena* a, IconName name, float size) {
 }
 
 El* ImageEl(Arena* a, Str src, Str alt) {
+    return ImageEl(a, ImageSource::FromResource(src), alt);
+}
+
+El* ImageEl(Arena* a, ImageSource source, Str alt) {
     El* e = NewEl(a, ElKind::Image);
-    e->imgSrc = src;
+    e->imageSource = source;
     e->text = alt;
     e->style.flexShrink = 0;
     return e;
+}
+
+ImageSource ImageSource::FromResource(Str resource) {
+    ImageSource source;
+    source.kind = ImageSourceKind::Resource;
+    source.resource = resource;
+    return source;
+}
+
+ImageSource ImageSource::FromRender(RenderImage* image) {
+    ImageSource source;
+    source.kind = ImageSourceKind::Render;
+    source.render = image;
+    return source;
+}
+
+ImageSource ImageSource::FromImage(const uint8_t* bytes, int len) {
+    ImageSource source;
+    source.kind = ImageSourceKind::Image;
+    source.bytes = bytes;
+    source.bytesLen = len;
+    return source;
+}
+
+ImageSource ImageSource::FromCustom(ImageSourceLoader loader, void* user) {
+    ImageSource source;
+    source.kind = ImageSourceKind::Custom;
+    source.loader = loader;
+    source.user = user;
+    return source;
+}
+
+Bounds ObjectFitBounds(ObjectFit fit, Bounds bounds, Size imageSize) {
+    if (bounds.w <= 0 || bounds.h <= 0 || imageSize.w <= 0 ||
+        imageSize.h <= 0) {
+        return {};
+    }
+    if (fit == ObjectFit::Fill) {
+        return bounds;
+    }
+    float sx = bounds.w / imageSize.w;
+    float sy = bounds.h / imageSize.h;
+    float scale = 1.f;
+    if (fit == ObjectFit::Cover) {
+        scale = sx > sy ? sx : sy;
+    } else if (fit == ObjectFit::Contain) {
+        scale = sx < sy ? sx : sy;
+    } else if (fit == ObjectFit::ScaleDown) {
+        scale = sx < sy ? sx : sy;
+        if (scale > 1.f) {
+            scale = 1.f;
+        }
+    }
+    float w = imageSize.w * scale;
+    float h = imageSize.h * scale;
+    return {bounds.x + (bounds.w - w) * 0.5f, bounds.y + (bounds.h - h) * 0.5f,
+            w, h};
 }
 
 El* ButtonEl(Arena* a, int clickId, Str label, BtnKind kind) {
@@ -6838,6 +6889,26 @@ El* El::ScrollMask(Axis axis) {
 
 El* El::Opacity(float f) {
     style.opacity = f < 0 ? 0 : (f > 1 ? 1 : f);
+    return this;
+}
+
+El* El::Grayscale(bool grayscale) {
+    imageGrayscale = grayscale;
+    return this;
+}
+
+El* El::ObjectFitMode(gpui::ObjectFit fit) {
+    objectFit = fit;
+    return this;
+}
+
+El* El::WithLoading(El* loading) {
+    imageLoading = loading;
+    return this;
+}
+
+El* El::WithFallback(El* fallback) {
+    imageFallback = fallback;
     return this;
 }
 
@@ -8282,12 +8353,13 @@ static void MoveEl(El* c, float cx, float cy) {
 }
 
 static Size ImageNaturalSize(PaintCtx* ctx, El* e) {
-    Image* img = ImageForSrc(ctx ? ctx->pa : nullptr, e->imgSrc);
+    RenderImage* img = ImageForSource(ctx ? ctx->pa : nullptr, e->imageSource);
     if (img) {
-        return ImageSizePx(img);
+        return RenderImageSizePx(img);
     }
     int opsLen = 0;
-    const uint8_t* ops = ImageVectorForSrc(e->imgSrc, &opsLen);
+    const uint8_t* ops =
+        ImageVectorForSource(ctx ? ctx->pa : nullptr, e->imageSource, &opsLen);
     Size vb = {};
     if (ops && DrawOpsViewBox(ops, opsLen, &vb)) {
         return vb;
@@ -8299,6 +8371,9 @@ static Size LayoutImageSize(PaintCtx* ctx, El* e, float wSpec, float hSpec,
                             float availW, float font) {
     Size px = ImageNaturalSize(ctx, e);
     if (px.w <= 0 || px.h <= 0) {
+        if (e->imageLoadState == ImageLoadState::Loading) {
+            return {wSpec > 0 ? wSpec : 0, hSpec > 0 ? hSpec : 0};
+        }
         Size text =
             MeasureText(ctx, e->text, font, availW > 0 ? availW : 0,
                         e->style.wrap, ElTextWeight(e), e->style.lineHeight);
@@ -8551,6 +8626,9 @@ static taffy::SizeF LayoutMeasure(taffy::SizeFOpt known, taffy::SizeAvail avail,
 }
 
 static bool ElIsMeasured(const El* e) {
+    if (e->kind == ElKind::Image && e->imageReplacement) {
+        return false;
+    }
     switch (e->kind) {
         case ElKind::Text:
         case ElKind::Icon:
@@ -8581,6 +8659,27 @@ static void ResolveImageStyle(PaintCtx* ctx, El* e) {
     }
 }
 
+static void ResolveImageReplacement(PaintCtx* ctx, El* e) {
+    double loadingSeconds = 0;
+    e->imageLoadState = ImageSourceState(ctx ? ctx->pa : nullptr,
+                                         e->imageSource, &loadingSeconds);
+    if (e->imageLoadState == ImageLoadState::Loading) {
+
+        if (e->imageLoading && loadingSeconds >= 0.2) {
+            e->imageReplacement = e->imageLoading;
+        } else if (e->imageLoading && ctx) {
+            ctx->wantsAnimFrame = true;
+        }
+    } else if (e->imageLoadState == ImageLoadState::Failed) {
+        e->imageReplacement = e->imageFallback;
+    }
+    if (e->imageReplacement) {
+        e->imageReplacement->next = nullptr;
+        e->first = e->imageReplacement;
+        e->last = e->imageReplacement;
+    }
+}
+
 static void PrepareEl(PaintCtx* ctx, El* e, float inheritFont, Rgba inheritFg) {
 
     ElStyleStates* states = e->StyleStates();
@@ -8608,6 +8707,9 @@ static void PrepareEl(PaintCtx* ctx, El* e, float inheritFont, Rgba inheritFg) {
         StyleApplyFields(&e->style, states->dragOver, states->dragOverSet);
     }
     StyleOverrideApply(e);
+    if (e->kind == ElKind::Image) {
+        ResolveImageReplacement(ctx, e);
+    }
 
     float font =
         e->style.fontSize > 0
@@ -8650,7 +8752,7 @@ static void PrepareEl(PaintCtx* ctx, El* e, float inheritFont, Rgba inheritFg) {
         e->style.width = font > 0 ? font : 16.f;
         e->style.height = font > 0 ? font : 16.f;
     }
-    if (e->kind == ElKind::Image) {
+    if (e->kind == ElKind::Image && !e->imageReplacement) {
         ResolveImageStyle(ctx, e);
     }
 
@@ -10895,21 +10997,45 @@ static void PaintElNodeInner(PaintCtx* ctx, El* e, bool skipOverlay) {
             CanvasPopClip(ctx);
         }
         PaintCaret(ctx, e, font);
-    } else if (e->kind == ElKind::Image) {
+    } else if (e->kind == ElKind::Image && !e->imageReplacement) {
 
-        Image* img = ImageForSrc(ctx->pa, e->imgSrc);
+        RenderImage* img = ImageForSource(ctx->pa, e->imageSource);
         int opsLen = 0;
         const uint8_t* ops =
-            img ? nullptr : ImageVectorForSrc(e->imgSrc, &opsLen);
+            img ? nullptr
+                : ImageVectorForSource(ctx->pa, e->imageSource, &opsLen);
+        Bounds bounds = e->Bounds();
+        bool drewSvg = false;
         if (img) {
-            ImageDraw(ctx, img, e->Bounds(), e->style.radius);
-        } else if (SvgDrawOps(ctx, ops, opsLen, e->x, e->y, e->w, e->h,
-                              e->style.hasColor
-                                  ? e->style.color
-                                  : RuntimeStyleNow(ctx->app).foreground,
-                              0)) {
+            bool wantsAnimation = false;
+            int frameIndex =
+                ImageFrameIndex(img, PlatReduceMotion(), &wantsAnimation);
+            if (wantsAnimation) {
+                ctx->wantsAnimFrame = true;
+            }
+            Bounds imageBounds = ObjectFitBounds(
+                e->objectFit, bounds, RenderImageSizePx(img, frameIndex));
+            RenderImageDraw(ctx, img, bounds, imageBounds, frameIndex,
+                            e->style.radius, e->imageGrayscale);
+        } else if (ops) {
+            Size imageSize = {};
+            if (DrawOpsViewBox(ops, opsLen, &imageSize)) {
+                Bounds imageBounds =
+                    ObjectFitBounds(e->objectFit, bounds, imageSize);
+                CanvasPushClip(ctx, bounds.x, bounds.y, bounds.w, bounds.h);
+                drewSvg = SvgDrawOps(
+                    ctx, ops, opsLen, imageBounds.x, imageBounds.y,
+                    imageBounds.w, imageBounds.h,
+                    e->style.hasColor ? e->style.color
+                                      : RuntimeStyleNow(ctx->app).foreground,
+                    0, e->imageGrayscale);
+                CanvasPopClip(ctx);
+            }
+        }
+        if (drewSvg) {
 
-        } else if (e->text.s && e->text.len > 0) {
+        } else if (!img && e->imageLoadState == ImageLoadState::Failed &&
+                   e->text.s && e->text.len > 0) {
 
             float font =
                 e->laidFont > 0
@@ -12457,41 +12583,7 @@ Str ImageAssetFor(Arena* a, Str src) {
 }
 
 static Str ImageAssetResolve(Arena* a, Str src) {
-    if (ImageSrcIsLocal(src)) {
-        return AssetsExists(src) ? StrDup(a, src) : Str{};
-    }
-    int slash = -1;
-    for (int i = src.len - 1; i >= 0; i--) {
-        if (src.s[i] == '/') {
-            slash = i;
-            break;
-        }
-    }
-    if (slash < 0 || slash + 1 >= src.len) {
-        return {};
-    }
-    Str name(src.s + slash + 1, src.len - slash - 1);
-
-    for (int i = 0; i < name.len; i++) {
-        if (name.s[i] == '?' || name.s[i] == '#') {
-            name.len = i;
-            break;
-        }
-    }
-    if (name.len <= 0) {
-        return {};
-    }
-    if (AssetsExists(name)) {
-        return StrDup(a, name);
-    }
-    const char* dirs[] = {"story/", "images/"};
-    for (const char* d : dirs) {
-        Str p = StrDup(a, fmt("%s%s", Str(d), name));
-        if (AssetsExists(p)) {
-            return p;
-        }
-    }
-    return {};
+    return ImageSrcIsLocal(src) && AssetsExists(src) ? StrDup(a, src) : Str{};
 }
 
 static bool LooksLikeSvg(const uint8_t* b, int len) {
@@ -12542,10 +12634,12 @@ static SrcBytes BytesForSrc(Str src, Vec<uint8_t>* owned,
 
 struct ImageCacheSlot {
     Str src = {};
-    Image* img = nullptr;
+    RenderImage* img = nullptr;
 
     uint8_t* ops = nullptr;
     int opsLen = 0;
+    double loadingAt = 0;
+    bool pending = false;
     bool tried = false;
 };
 
@@ -12554,9 +12648,32 @@ constexpr int kImageCacheSlots = 32;
 static ImageCacheSlot gImageCache[kImageCacheSlots];
 static int gImageCacheNext = 0;
 
+struct EncodedImageSlot {
+    uint64_t hash = 0;
+    int bytesLen = 0;
+    RenderImage* img = nullptr;
+    uint8_t* ops = nullptr;
+    int opsLen = 0;
+    bool tried = false;
+};
+
+constexpr int kEncodedImageSlots = 16;
+static EncodedImageSlot gEncodedImages[kEncodedImageSlots];
+static int gEncodedImageNext = 0;
+
+struct ImageClock {
+    uint64_t key = 0;
+    double at = 0;
+    int frameIndex = 0;
+};
+
+constexpr int kImageClockSlots = 64;
+static ImageClock gLoadingClocks[kImageClockSlots];
+static ImageClock gAnimationClocks[kImageClockSlots];
+
 static void ImageSlotFree(ImageCacheSlot* s) {
     if (s->img) {
-        ImageFree(s->img);
+        RenderImageRelease(s->img);
         s->img = nullptr;
     }
     if (s->ops) {
@@ -12564,6 +12681,8 @@ static void ImageSlotFree(ImageCacheSlot* s) {
         s->ops = nullptr;
     }
     s->opsLen = 0;
+    s->loadingAt = 0;
+    s->pending = false;
     if (s->src.s) {
         StrFree(s->src);
         s->src = {};
@@ -12571,13 +12690,63 @@ static void ImageSlotFree(ImageCacheSlot* s) {
     s->tried = false;
 }
 
+static void EncodedSlotFree(EncodedImageSlot* s) {
+    if (s->img) {
+        RenderImageRelease(s->img);
+    }
+    Free(nullptr, s->ops);
+    *s = {};
+}
+
 void ImageCacheClear() {
     for (int i = 0; i < kImageCacheSlots; i++) {
         ImageSlotFree(&gImageCache[i]);
     }
+    for (int i = 0; i < kEncodedImageSlots; i++) {
+        EncodedSlotFree(&gEncodedImages[i]);
+    }
     gImageCacheNext = 0;
+    gEncodedImageNext = 0;
+    for (int i = 0; i < kImageClockSlots; i++) {
+        gLoadingClocks[i] = {};
+        gAnimationClocks[i] = {};
+    }
     AssetResolveClear();
+    SvgCacheClear();
     HttpFetchClear();
+}
+
+static uint64_t ImageBytesHash(const uint8_t* bytes, int len) {
+    uint64_t hash = 1469598103934665603ull;
+    for (int i = 0; bytes && i < len; i++) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+    return hash ? hash : 1;
+}
+
+static void DecodeImageBytes(PaintApp* pa, const uint8_t* bytes, int len,
+                             RenderImage** imgOut, uint8_t** opsOut,
+                             int* opsLenOut) {
+    *imgOut = nullptr;
+    *opsOut = nullptr;
+    *opsLenOut = 0;
+    if (!bytes || len <= 0) {
+        return;
+    }
+    if (LooksLikeSvg(bytes, len)) {
+        DrawOpsBuilder builder;
+        if (SvgToDrawOps(Str((char*)bytes, len), &builder) &&
+            builder.data.len > 0) {
+            *opsOut = AllocArray<uint8_t>(builder.data.len);
+            if (*opsOut) {
+                memcpy(*opsOut, builder.data.els, (size_t)builder.data.len);
+                *opsLenOut = builder.data.len;
+            }
+        }
+    } else if (pa) {
+        *imgOut = RenderImageDecode(pa, bytes, len);
+    }
 }
 
 static ImageCacheSlot* ImageSlotFind(Str src) {
@@ -12594,7 +12763,7 @@ static ImageCacheSlot* ImageSlotFor(PaintApp* pa, Str src) {
         return nullptr;
     }
     ImageCacheSlot* hit = ImageSlotFind(src);
-    if (hit) {
+    if (hit && !hit->pending) {
         return hit;
     }
 
@@ -12603,53 +12772,293 @@ static ImageCacheSlot* ImageSlotFor(PaintApp* pa, Str src) {
     int borrowedLen = 0;
     SrcBytes got = BytesForSrc(src, &owned, &borrowed, &borrowedLen);
     if (got == SrcBytes::Pending) {
-        return nullptr;
+        if (!hit) {
+            hit = &gImageCache[gImageCacheNext];
+            gImageCacheNext = (gImageCacheNext + 1) % kImageCacheSlots;
+            ImageSlotFree(hit);
+            hit->src = StrDup(src);
+            hit->tried = true;
+            hit->pending = true;
+            hit->loadingAt = TimeNow();
+        }
+        return hit;
     }
     const uint8_t* bytes = owned.len > 0 ? owned.els : borrowed;
     int len = owned.len > 0 ? owned.len : borrowedLen;
 
-    Image* img = nullptr;
+    RenderImage* img = nullptr;
     uint8_t* ops = nullptr;
     int opsLen = 0;
     if (got == SrcBytes::Yes && bytes && len > 0) {
-        if (LooksLikeSvg(bytes, len)) {
-            DrawOpsBuilder b;
-            if (SvgToDrawOps(Str((char*)bytes, len), &b) && b.data.len > 0) {
-                ops = AllocArray<uint8_t>(b.data.len);
-                if (ops) {
-                    memcpy(ops, b.data.els, (size_t)b.data.len);
-                    opsLen = b.data.len;
-                }
-            }
-        } else if (pa) {
-            img = ImageDecode(pa, bytes, len);
-        } else {
+        if (!pa && !LooksLikeSvg(bytes, len)) {
 
             VecReset(owned);
             return nullptr;
         }
+        DecodeImageBytes(pa, bytes, len, &img, &ops, &opsLen);
     }
 
-    ImageCacheSlot* slot = &gImageCache[gImageCacheNext];
-    gImageCacheNext = (gImageCacheNext + 1) % kImageCacheSlots;
-    ImageSlotFree(slot);
-    slot->src = StrDup(src);
+    ImageCacheSlot* slot = hit;
+    if (!slot) {
+        slot = &gImageCache[gImageCacheNext];
+        gImageCacheNext = (gImageCacheNext + 1) % kImageCacheSlots;
+        ImageSlotFree(slot);
+        slot->src = StrDup(src);
+        slot->tried = true;
+    }
     slot->img = img;
     slot->ops = ops;
     slot->opsLen = opsLen;
-    slot->tried = true;
+    slot->pending = false;
+    if (img && RenderImageStatusGet(img) == RenderImageStatus::Loading &&
+        slot->loadingAt == 0) {
+        slot->loadingAt = TimeNow();
+    }
     if (HttpUrlIsRemote(src)) {
         HttpFetchDrop(src);
     }
     return slot;
 }
 
-Image* ImageForSrc(PaintApp* pa, Str src) {
+static EncodedImageSlot* EncodedSlotFor(PaintApp* pa,
+                                        const ImageSource& source) {
+    if (!source.bytes || source.bytesLen <= 0) {
+        return nullptr;
+    }
+    uint64_t hash = ImageBytesHash(source.bytes, source.bytesLen);
+    for (int i = 0; i < kEncodedImageSlots; i++) {
+        EncodedImageSlot* slot = &gEncodedImages[i];
+        if (slot->tried && slot->hash == hash &&
+            slot->bytesLen == source.bytesLen) {
+            return slot;
+        }
+    }
+    if (!pa && !LooksLikeSvg(source.bytes, source.bytesLen)) {
+        return nullptr;
+    }
+    EncodedImageSlot* slot = &gEncodedImages[gEncodedImageNext];
+    gEncodedImageNext = (gEncodedImageNext + 1) % kEncodedImageSlots;
+    EncodedSlotFree(slot);
+    slot->hash = hash;
+    slot->bytesLen = source.bytesLen;
+    slot->tried = true;
+    DecodeImageBytes(pa, source.bytes, source.bytesLen, &slot->img, &slot->ops,
+                     &slot->opsLen);
+    return slot;
+}
+
+static uint64_t ImageSourceKey(const ImageSource& source) {
+    uint64_t key = ((uint64_t)source.kind + 1) * 0x9e3779b97f4a7c15ull;
+    switch (source.kind) {
+        case ImageSourceKind::Resource:
+            key ^= ImageBytesHash((const uint8_t*)source.resource.s,
+                                  source.resource.len);
+            break;
+        case ImageSourceKind::Render:
+            key ^= RenderImageGeneration(source.render);
+            break;
+        case ImageSourceKind::Image:
+            key ^= ImageBytesHash(source.bytes, source.bytesLen);
+            break;
+        case ImageSourceKind::Custom:
+            key ^= (uint64_t)(uintptr_t)source.loader;
+            key ^= (uint64_t)(uintptr_t)source.user * 0xc2b2ae3d27d4eb4full;
+            break;
+    }
+    return key ? key : 1;
+}
+
+static ImageClock* ClockFor(ImageClock* clocks, uint64_t key) {
+    int empty = -1;
+    for (int i = 0; i < kImageClockSlots; i++) {
+        if (clocks[i].key == key) {
+            return &clocks[i];
+        }
+        if (!clocks[i].key && empty < 0) {
+            empty = i;
+        }
+    }
+    int at = empty >= 0 ? empty : (int)(key % kImageClockSlots);
+    clocks[at] = {};
+    clocks[at].key = key;
+    return &clocks[at];
+}
+
+ImageLoadState ImageSrcState(PaintApp* pa, Str src, double* loadingSeconds) {
+    if (loadingSeconds) {
+        *loadingSeconds = 0;
+    }
+    if (!src.s || src.len <= 0) {
+        return ImageLoadState::Failed;
+    }
+    ImageCacheSlot* s = ImageSlotFor(pa, src);
+    if (!s || s->pending) {
+        if (s && loadingSeconds && s->loadingAt > 0) {
+            *loadingSeconds = TimeNow() - s->loadingAt;
+        }
+        return ImageLoadState::Loading;
+    }
+    if (s->ops) {
+        return ImageLoadState::Ready;
+    }
+    if (!s->img) {
+        return ImageLoadState::Failed;
+    }
+    RenderImageStatus status = RenderImageStatusGet(s->img);
+    if (status == RenderImageStatus::Loading) {
+        if (loadingSeconds && s->loadingAt > 0) {
+            *loadingSeconds = TimeNow() - s->loadingAt;
+        }
+        return ImageLoadState::Loading;
+    }
+    if (status == RenderImageStatus::Failed) {
+        RenderImageRelease(s->img);
+        s->img = nullptr;
+        return ImageLoadState::Failed;
+    }
+    s->loadingAt = 0;
+    return ImageLoadState::Ready;
+}
+
+ImageLoadState ImageSourceState(PaintApp* pa, const ImageSource& source,
+                                double* loadingSeconds) {
+    if (loadingSeconds) {
+        *loadingSeconds = 0;
+    }
+    ImageLoadState state = ImageLoadState::Failed;
+    switch (source.kind) {
+        case ImageSourceKind::Resource:
+            state = ImageSrcState(pa, source.resource, nullptr);
+            break;
+        case ImageSourceKind::Render:
+            if (source.render) {
+                RenderImageStatus status = RenderImageStatusGet(source.render);
+                state = status == RenderImageStatus::Ready
+                            ? ImageLoadState::Ready
+                            : (status == RenderImageStatus::Loading
+                                   ? ImageLoadState::Loading
+                                   : ImageLoadState::Failed);
+            }
+            break;
+        case ImageSourceKind::Image: {
+            EncodedImageSlot* slot = EncodedSlotFor(pa, source);
+            if (slot && slot->ops) {
+                state = ImageLoadState::Ready;
+            } else if (slot && slot->img) {
+                RenderImageStatus status = RenderImageStatusGet(slot->img);
+                state = status == RenderImageStatus::Ready
+                            ? ImageLoadState::Ready
+                            : (status == RenderImageStatus::Loading
+                                   ? ImageLoadState::Loading
+                                   : ImageLoadState::Failed);
+            }
+            break;
+        }
+        case ImageSourceKind::Custom: {
+            RenderImage* image = nullptr;
+            if (source.loader) {
+                state = source.loader(pa, source.user, &image);
+                if (state == ImageLoadState::Ready && !image) {
+                    state = ImageLoadState::Failed;
+                }
+            }
+            break;
+        }
+    }
+    uint64_t key = ImageSourceKey(source);
+    ImageClock* clock = ClockFor(gLoadingClocks, key);
+    if (state == ImageLoadState::Loading) {
+        double now = TimeNow();
+        if (clock->at <= 0) {
+            clock->at = now;
+        }
+        if (loadingSeconds) {
+            *loadingSeconds = now - clock->at;
+        }
+    } else {
+        *clock = {};
+    }
+    return state;
+}
+
+int ImageFrameIndex(RenderImage* image, bool reducedMotion,
+                    bool* wantsAnimation) {
+    if (wantsAnimation) {
+        *wantsAnimation = false;
+    }
+    int count = RenderImageFrameCount(image);
+    if (count <= 1) {
+        return 0;
+    }
+    ImageClock* clock =
+        ClockFor(gAnimationClocks, RenderImageGeneration(image));
+    if (clock->frameIndex < 0 || clock->frameIndex >= count) {
+        clock->frameIndex = 0;
+    }
+    if (reducedMotion) {
+        clock->at = 0;
+        return clock->frameIndex;
+    }
+    if (wantsAnimation) {
+        *wantsAnimation = true;
+    }
+    double now = TimeNow();
+    if (clock->at <= 0) {
+        clock->at = now;
+        return clock->frameIndex;
+    }
+    double elapsed = now - clock->at;
+    for (int advances = 0; advances < count * 2; advances++) {
+        int delay = RenderImageFrameDurationMs(image, clock->frameIndex);
+        double seconds = (delay > 0 ? delay : 100) / 1000.0;
+        if (elapsed < seconds) {
+            break;
+        }
+        elapsed -= seconds;
+        clock->at += seconds;
+        clock->frameIndex = (clock->frameIndex + 1) % count;
+    }
+    return clock->frameIndex;
+}
+
+RenderImage* ImageForSrc(PaintApp* pa, Str src) {
     if (!pa) {
         return nullptr;
     }
     ImageCacheSlot* s = ImageSlotFor(pa, src);
-    return s ? s->img : nullptr;
+    if (!s || !s->img) {
+        return nullptr;
+    }
+    RenderImageStatus status = RenderImageStatusGet(s->img);
+    if (status == RenderImageStatus::Failed) {
+        RenderImageRelease(s->img);
+        s->img = nullptr;
+        return nullptr;
+    }
+    return status == RenderImageStatus::Ready ? s->img : nullptr;
+}
+
+RenderImage* ImageForSource(PaintApp* pa, const ImageSource& source) {
+    if (!pa) {
+        return nullptr;
+    }
+    if (source.kind == ImageSourceKind::Resource) {
+        return ImageForSrc(pa, source.resource);
+    }
+    RenderImage* image = nullptr;
+    if (source.kind == ImageSourceKind::Render) {
+        image = source.render;
+    } else if (source.kind == ImageSourceKind::Image) {
+        EncodedImageSlot* slot = EncodedSlotFor(pa, source);
+        image = slot ? slot->img : nullptr;
+    } else if (source.kind == ImageSourceKind::Custom && source.loader) {
+        if (source.loader(pa, source.user, &image) != ImageLoadState::Ready) {
+            image = nullptr;
+        }
+    }
+    return image && RenderImageStatusGet(image) == RenderImageStatus::Ready
+               ? image
+               : nullptr;
 }
 
 const uint8_t* ImageVectorForSrc(Str src, int* lenOut) {
@@ -12670,6 +13079,27 @@ const uint8_t* ImageVectorForSrc(Str src, int* lenOut) {
         *lenOut = s->opsLen;
     }
     return s->ops;
+}
+
+const uint8_t* ImageVectorForSource(PaintApp* pa, const ImageSource& source,
+                                    int* lenOut) {
+    if (lenOut) {
+        *lenOut = 0;
+    }
+    if (source.kind == ImageSourceKind::Resource) {
+        return ImageVectorForSrc(source.resource, lenOut);
+    }
+    if (source.kind != ImageSourceKind::Image) {
+        return nullptr;
+    }
+    EncodedImageSlot* slot = EncodedSlotFor(pa, source);
+    if (!slot || !slot->ops) {
+        return nullptr;
+    }
+    if (lenOut) {
+        *lenOut = slot->opsLen;
+    }
+    return slot->ops;
 }
 
 }
@@ -12795,8 +13225,7 @@ static int VkForName(Str name, bool* shift) {
         }
     }
 
-    if ((name.s[0] == 'f' || name.s[0] == 'F') && name.len >= 2 &&
-        name.len <= 3) {
+    if (StrStartsWithAny(name, "fF") && name.len >= 2 && name.len <= 3) {
         int n = 0;
         for (int i = 1; i < name.len; i++) {
             if (name.s[i] < '0' || name.s[i] > '9') {
@@ -13513,6 +13942,8 @@ struct Prim {
     float g0 = 0, g1 = 0, g2 = 0, g3 = 0;
 
     float e0 = 0, e1 = 0, e2 = 0, e3 = 0;
+
+    Bounds imageBounds = {};
     Bounds mask = {};
 
     Bounds bbox = {};
@@ -13670,23 +14101,25 @@ static inline uint64_t Pair(float a, float b) {
 }
 
 static uint64_t HashPrim(const Prim& p) {
-    uint64_t w[10];
+    uint64_t w[12];
     w[0] =
         (uint64_t)p.kind | ((uint64_t)p.layer << 8) | ((uint64_t)p.flags << 16);
     w[1] = Pair(p.g0, p.g1);
     w[2] = Pair(p.g2, p.g3);
     w[3] = Pair(p.e0, p.e1);
     w[4] = Pair(p.e2, p.e3);
-    w[5] = Pair(p.mask.x, p.mask.y);
-    w[6] = Pair(p.mask.w, p.mask.h);
+    w[5] = Pair(p.imageBounds.x, p.imageBounds.y);
+    w[6] = Pair(p.imageBounds.w, p.imageBounds.h);
+    w[7] = Pair(p.mask.x, p.mask.y);
+    w[8] = Pair(p.mask.w, p.mask.h);
     uint32_t c0 = 0, c1 = 0;
     memcpy(&c0, &p.color, 4);
     memcpy(&c1, &p.color2, 4);
-    w[7] = ((uint64_t)c1 << 32) | c0;
-    w[8] = p.resourceGeneration;
-    w[9] = (p.path >= 0 && p.path < gPaths.len) ? gPaths[p.path].hash : 0;
+    w[9] = ((uint64_t)c1 << 32) | c0;
+    w[10] = p.resourceGeneration;
+    w[11] = (p.path >= 0 && p.path < gPaths.len) ? gPaths[p.path].hash : 0;
     uint64_t h = kHashSeed;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 12; i++) {
         h ^= w[i];
         h *= 0x100000001b3ull;
         h ^= h >> 29;
@@ -13773,6 +14206,15 @@ static Prim* gpui_scene_Emit(PaintCtx* ctx, uint8_t kind, Bounds bbox) {
     return &gCur[gCur.len - 1];
 }
 
+static void ReleaseImages(State* s) {
+    for (Prim& p : s->cur) {
+        if (p.kind == kPImage && p.ref) {
+            RenderImageRelease((RenderImage*)p.ref);
+            p.ref = nullptr;
+        }
+    }
+}
+
 void FrameBegin(PaintCtx* ctx) {
     gActive = StateFor(ctx, true);
     if (!gActive) {
@@ -13780,6 +14222,7 @@ void FrameBegin(PaintCtx* ctx) {
     }
     gRecording = true;
     gSkipPresent = false;
+    ReleaseImages(gActive);
     VecClear(gCur);
     VecClear(gPaths);
     VecClear(gVerbs);
@@ -14072,15 +14515,21 @@ void RecPathStroke(PaintCtx* ctx, Path* p, float stroke, Rgba c,
     }
 }
 
-void RecImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
-    Prim* p = gpui_scene_Emit(ctx, kPImage, b);
-    p->g0 = b.x;
-    p->g1 = b.y;
-    p->g2 = b.w;
-    p->g3 = b.h;
+void RecImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                  Bounds imageBounds, int frameIndex, float radius,
+                  bool grayscale) {
+    Prim* p = gpui_scene_Emit(ctx, kPImage, bounds);
+    p->g0 = bounds.x;
+    p->g1 = bounds.y;
+    p->g2 = bounds.w;
+    p->g3 = bounds.h;
     p->e0 = radius;
+    p->e1 = grayscale ? 1.f : 0.f;
+    p->e2 = (float)frameIndex;
+    p->imageBounds = imageBounds;
+    RenderImageRetain(img);
     p->ref = img;
-    p->resourceGeneration = ImageGeneration(img);
+    p->resourceGeneration = RenderImageGeneration(img);
 }
 
 void RecTextDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
@@ -14237,6 +14686,7 @@ void Free(PaintCtx* ctx) {
     gActive = s;
     s->recording = false;
     CacheClear();
+    ReleaseImages(s);
     VecReset(s->cur);
     VecReset(s->prev);
     VecReset(s->paths);
@@ -14481,7 +14931,9 @@ bool FrameEnd(PaintCtx* ctx, Bounds* damage) {
 
     VecClear(gPrev);
     for (int i = 0; i < gCur.len; i++) {
-        VecAppend(gPrev, gCur[i]);
+        Prim previous = gCur[i];
+        previous.ref = nullptr;
+        VecAppend(gPrev, previous);
     }
     gPrevFrameHash = frameHash;
     gHavePrev = true;
@@ -14576,8 +15028,9 @@ void Replay(PaintCtx* ctx, const Bounds* damage) {
                 CanvasEllipse(ctx, p.g0, p.g1, p.g2, p.g3, p.e1, p.color);
                 break;
             case kPImage:
-                ImageDraw(ctx, (Image*)p.ref, Bounds{p.g0, p.g1, p.g2, p.g3},
-                          p.e0);
+                RenderImageDraw(ctx, (RenderImage*)p.ref,
+                                Bounds{p.g0, p.g1, p.g2, p.g3}, p.imageBounds,
+                                (int)p.e2, p.e0, p.e1 != 0);
                 break;
             case kPText:
                 TextLayoutDraw(ctx, (TextLayout*)p.ref, p.g0, p.g1, p.color,
@@ -15905,6 +16358,16 @@ struct OpsCache {
 static OpsCache gCache[kMaxCache];
 static int gCacheN = 0;
 
+void SvgCacheClear() {
+    for (int i = 0; i < kMaxCache; i++) {
+        if (gCache[i].owned) {
+            Free(nullptr, (void*)gCache[i].data);
+        }
+        gCache[i] = {};
+    }
+    gCacheN = 0;
+}
+
 static OpsCache* CacheSlotFor(Str assetPath) {
     if (gCacheN >= kMaxCache) {
         gCacheN = 0;
@@ -15973,7 +16436,7 @@ bool SvgViewBox(Str assetPath, Size* out) {
 }
 
 bool SvgDrawOps(PaintCtx* ctx, const uint8_t* ops, int len, float x, float y,
-                float w, float h, Rgba color, float turns) {
+                float w, float h, Rgba color, float turns, bool grayscale) {
     if (!ctx || !ctx->rt || w <= 0 || h <= 0 || !ops || len <= 0) {
         return false;
     }
@@ -15984,6 +16447,7 @@ bool SvgDrawOps(PaintCtx* ctx, const uint8_t* ops, int len, float x, float y,
     t.h = h;
     t.color = color;
     t.turns = turns;
+    t.grayscale = grayscale;
     return ExecuteDrawOps(ctx, ops, len, t);
 }
 
@@ -18532,6 +18996,7 @@ void AppFree(App* app) {
         return;
     }
 
+    ImageCacheClear();
     ExecShutdown();
     EntityDropAll(app);
     for (int i = 0; i < app->windows.len; i++) {
@@ -18550,8 +19015,6 @@ void AppFree(App* app) {
         delete w;
     }
     VecReset(app->windows);
-
-    ImageCacheClear();
     LayoutScratchFree();
     ScrollFadeClear();
     StyleOverrideClearAll();
@@ -39081,11 +39544,11 @@ static const html5ever::Node* FirstElement(Arena* a,
 
 Str HtmlAttrValue(Arena* a, Str attrs, const char* name) {
     if (!a || !attrs.s || !name) return {};
-    StrBuilder source;
-    StrBuilderAppend(a, source, StrL("<x "));
-    StrBuilderAppend(a, source, attrs);
-    StrBuilderAppendChar(a, source, '>');
-    Str html = StrBuilderTakeStr(a, source);
+    StrBuilder source(a);
+    source.Append(StrL("<x "));
+    source.Append(attrs);
+    source.AppendChar('>');
+    Str html = source.TakeStr();
     html5ever::Node* doc = html5ever::ParseFragment(a, html);
     return html5ever::AttrValue(a, FirstElement(a, doc), Str((char*)name));
 }
@@ -41886,8 +42349,8 @@ static Str SrcIndent(Arena* a, Str s) {
 }
 
 static Str SrcMarkPre(Arena* a, uint8_t marks) {
-    StrBuilder out;
-    auto put = [&](const char* text) { StrBuilderAppend(a, out, Str(text)); };
+    StrBuilder out(a);
+    auto put = [&](const char* text) { out.Append(Str(text)); };
     if (marks & MdLink) {
         put("[");
     }
@@ -41909,12 +42372,12 @@ static Str SrcMarkPre(Arena* a, uint8_t marks) {
     if (marks & MdCode) {
         put("`");
     }
-    return StrBuilderTakeStr(a, out);
+    return out.TakeStr();
 }
 
 static Str SrcMarkPost(Arena* a, uint8_t marks, Str href) {
-    StrBuilder out;
-    auto put = [&](const char* text) { StrBuilderAppend(a, out, Str(text)); };
+    StrBuilder out(a);
+    auto put = [&](const char* text) { out.Append(Str(text)); };
     if (marks & MdCode) {
         put("`");
     }
@@ -41933,7 +42396,7 @@ static Str SrcMarkPost(Arena* a, uint8_t marks, Str href) {
     if (marks & MdHighlight) {
         put("==");
     }
-    Str tail = StrBuilderTakeStr(a, out);
+    Str tail = out.TakeStr();
     if (marks & MdLink) {
 
         return SrcCat(a, tail, StrL("]("), href, StrL(")"));
@@ -71288,7 +71751,7 @@ const uint32_t kShadcnWhite = 0xffffff;
 const char* const kDefaultThemeJson =
     "{\n"
     "  \"$schema\": "
-    "\"https://github.com/longbridge/gpui-component/raw/refs/heads/main/"
+    "\"https://github.com/longbridge/gpui-kit/raw/refs/heads/main/"
     ".theme-schema.json\",\n"
     "  \"name\": \"Default\",\n"
     "  \"author\": \"shadcn\",\n"
@@ -74706,31 +75169,31 @@ static Date PresetDate(const DateRangePreset& preset) {
     return preset.value.IntoDate();
 }
 
-static void AppendDateNumber(Arena* a, StrBuilder* out, int value, int digits) {
+static void AppendDateNumber(StrBuilder* out, int value, int digits) {
     if (digits == 2) {
-        StrBuilderAppend(a, *out, fmt("%02d", value));
+        out->Append(fmt("%02d", value));
     } else if (digits == 3) {
-        StrBuilderAppend(a, *out, fmt("%03d", value));
+        out->Append(fmt("%03d", value));
     } else if (digits == 4) {
-        StrBuilderAppend(a, *out, fmt("%04d", value));
+        out->Append(fmt("%04d", value));
     } else {
-        StrBuilderAppend(a, *out, fmt("%d", value));
+        out->Append(fmt("%d", value));
     }
 }
 
-static void AppendDateNumeric(Arena* a, StrBuilder* out, int value, int digits,
+static void AppendDateNumeric(StrBuilder* out, int value, int digits,
                               char defaultPad, char modifier) {
     char pad = modifier == '-'   ? 0
                : modifier == '_' ? ' '
                : modifier == '0' ? '0'
                                  : defaultPad;
     if (!pad || digits <= 1) {
-        AppendDateNumber(a, out, value, 1);
+        AppendDateNumber(out, value, 1);
         return;
     }
 
     TempStr format = pad == '0' ? fmt("%%0%dd", digits) : fmt("%%%dd", digits);
-    StrBuilderAppend(a, *out, fmt(format.s, value));
+    out->Append(fmt(format.s, value));
 }
 
 static int DateYearDay(LocalDate date) {
@@ -74767,7 +75230,7 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
     static const char* longDays[] = {"Sunday",    "Monday",   "Tuesday",
                                      "Wednesday", "Thursday", "Friday",
                                      "Saturday"};
-    StrBuilder out;
+    StrBuilder out(a);
     int weekday = CalendarWeekday(date.year, date.month, date.day);
     int yearDay = DateYearDay(date);
     int isoYear = 0, isoWeek = 0;
@@ -74775,7 +75238,7 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
     for (int i = 0; i < pattern.len; i++) {
         char ch = pattern.s[i];
         if (ch != '%' || i + 1 >= pattern.len) {
-            StrBuilderAppendChar(a, out, ch);
+            out.AppendChar(ch);
             continue;
         }
         char directive = pattern.s[++i];
@@ -74787,105 +75250,101 @@ Str DatePickerFormatDate(Arena* a, Str pattern, LocalDate date) {
         }
         switch (directive) {
             case '%':
-                StrBuilderAppendChar(a, out, '%');
+                out.AppendChar('%');
                 break;
             case 'Y':
-                AppendDateNumeric(a, &out, date.year, 4, '0', modifier);
+                AppendDateNumeric(&out, date.year, 4, '0', modifier);
                 break;
             case 'y':
-                AppendDateNumeric(a, &out, date.year % 100, 2, '0', modifier);
+                AppendDateNumeric(&out, date.year % 100, 2, '0', modifier);
                 break;
             case 'C':
-                AppendDateNumeric(a, &out, date.year / 100, 2, '0', modifier);
+                AppendDateNumeric(&out, date.year / 100, 2, '0', modifier);
                 break;
             case 'q':
-                AppendDateNumeric(a, &out, (date.month - 1) / 3 + 1, 1, 0,
+                AppendDateNumeric(&out, (date.month - 1) / 3 + 1, 1, 0,
                                   modifier);
                 break;
             case 'm':
-                AppendDateNumeric(a, &out, date.month, 2, '0', modifier);
+                AppendDateNumeric(&out, date.month, 2, '0', modifier);
                 break;
             case 'b':
             case 'h':
-                StrBuilderAppend(a, out, Str(shortMonths[date.month]));
+                out.Append(Str(shortMonths[date.month]));
                 break;
             case 'B':
-                StrBuilderAppend(a, out, Str(longMonths[date.month]));
+                out.Append(Str(longMonths[date.month]));
                 break;
             case 'd':
-                AppendDateNumeric(a, &out, date.day, 2, '0', modifier);
+                AppendDateNumeric(&out, date.day, 2, '0', modifier);
                 break;
             case 'e':
-                AppendDateNumeric(a, &out, date.day, 2, ' ', modifier);
+                AppendDateNumeric(&out, date.day, 2, ' ', modifier);
                 break;
             case 'j':
-                AppendDateNumeric(a, &out, yearDay, 3, '0', modifier);
+                AppendDateNumeric(&out, yearDay, 3, '0', modifier);
                 break;
             case 'a':
-                StrBuilderAppend(a, out, Str(shortDays[weekday]));
+                out.Append(Str(shortDays[weekday]));
                 break;
             case 'A':
-                StrBuilderAppend(a, out, Str(longDays[weekday]));
+                out.Append(Str(longDays[weekday]));
                 break;
             case 'w':
-                AppendDateNumeric(a, &out, weekday, 1, 0, modifier);
+                AppendDateNumeric(&out, weekday, 1, 0, modifier);
                 break;
             case 'u':
-                AppendDateNumeric(a, &out, weekday ? weekday : 7, 1, 0,
-                                  modifier);
+                AppendDateNumeric(&out, weekday ? weekday : 7, 1, 0, modifier);
                 break;
             case 'U':
-                AppendDateNumeric(a, &out, (yearDay - 1 + 7 - weekday) / 7, 2,
-                                  '0', modifier);
+                AppendDateNumeric(&out, (yearDay - 1 + 7 - weekday) / 7, 2, '0',
+                                  modifier);
                 break;
             case 'W': {
                 int mondayWeekday = (weekday + 6) % 7;
-                AppendDateNumeric(a, &out,
-                                  (yearDay - 1 + 7 - mondayWeekday) / 7, 2, '0',
-                                  modifier);
+                AppendDateNumeric(&out, (yearDay - 1 + 7 - mondayWeekday) / 7,
+                                  2, '0', modifier);
                 break;
             }
             case 'G':
-                AppendDateNumeric(a, &out, isoYear, 4, '0', modifier);
+                AppendDateNumeric(&out, isoYear, 4, '0', modifier);
                 break;
             case 'g':
-                AppendDateNumeric(a, &out, isoYear % 100, 2, '0', modifier);
+                AppendDateNumeric(&out, isoYear % 100, 2, '0', modifier);
                 break;
             case 'V':
-                AppendDateNumeric(a, &out, isoWeek, 2, '0', modifier);
+                AppendDateNumeric(&out, isoWeek, 2, '0', modifier);
                 break;
             case 'F':
-                StrBuilderAppend(
-                    a, out,
+                out.Append(
                     fmt("%04d-%02d-%02d", date.year, date.month, date.day));
                 break;
             case 'D':
             case 'x':
-                StrBuilderAppend(a, out,
-                                 fmt("%02d/%02d/%02d", date.month, date.day,
-                                     date.year % 100));
+                out.Append(fmt("%02d/%02d/%02d", date.month, date.day,
+                               date.year % 100));
                 break;
             case 'v':
-                AppendDateNumeric(a, &out, date.day, 2, ' ', modifier);
-                StrBuilderAppendChar(a, out, '-');
-                StrBuilderAppend(a, out, Str(shortMonths[date.month]));
-                StrBuilderAppendChar(a, out, '-');
-                AppendDateNumeric(a, &out, date.year, 4, '0', modifier);
+                AppendDateNumeric(&out, date.day, 2, ' ', modifier);
+                out.AppendChar('-');
+                out.Append(Str(shortMonths[date.month]));
+                out.AppendChar('-');
+                AppendDateNumeric(&out, date.year, 4, '0', modifier);
                 break;
             case 't':
-                StrBuilderAppendChar(a, out, '\t');
+                out.AppendChar('\t');
                 break;
             case 'n':
-                StrBuilderAppendChar(a, out, '\n');
+                out.AppendChar('\n');
                 break;
             default:
 
-                StrBuilderAppendChar(a, out, '%');
-                StrBuilderAppendChar(a, out, directive);
+                out.AppendChar('%');
+                out.AppendChar(directive);
                 break;
         }
     }
-    return StrBuilderTakeStr(a, out);
+    return out.TakeStr();
 }
 
 Str DatePickerFormatValue(Arena* a, Str pattern, Date date) {
@@ -76749,11 +77208,22 @@ bool HttpSendAsync(const HttpReq& req, Func1<HttpAsyncResult> done) {
 #endif
 }
 
+struct FetchJob {
+    int slot = 0;
+    Func0 done = {};
+#if !GPUI_OS_WASM
+    Str url = {};
+#endif
+};
+
 struct FetchSlot {
     Str url = {};
     FetchState state = FetchState::None;
     uint8_t* body = nullptr;
     int len = 0;
+    FetchJob* job = nullptr;
+    TaskId task = 0;
+    bool discard = false;
 };
 
 constexpr int kFetchSlots = 24;
@@ -76792,13 +77262,6 @@ int HttpFetchPending() {
     return n;
 }
 
-struct FetchJob {
-    int slot = 0;
-#if !GPUI_OS_WASM
-    Str url = {};
-#endif
-};
-
 static void SlotDrop(FetchSlot* s) {
     if (s->body) {
         Free(nullptr, s->body);
@@ -76809,6 +77272,9 @@ static void SlotDrop(FetchSlot* s) {
         StrFree(s->url);
         s->url = {};
     }
+    s->job = nullptr;
+    s->task = 0;
+    s->discard = false;
     s->state = FetchState::None;
 }
 
@@ -76821,7 +77287,10 @@ static void FetchDone(FetchJob* job, HttpAsyncResult result) {
 
     gFetchLock.Lock();
     FetchSlot* s = &gFetch[job->slot];
-    if (got) {
+    bool discard = s->discard;
+    if (discard) {
+        SlotDrop(s);
+    } else if (got) {
 
         s->body = response->body.els;
         s->len = response->body.len;
@@ -76832,11 +77301,16 @@ static void FetchDone(FetchJob* job, HttpAsyncResult result) {
     } else {
         s->state = FetchState::Failed;
     }
+    s->job = nullptr;
+    s->task = 0;
     gFetchPending--;
     gFetchLock.Unlock();
 
+    Func0 done = job->done;
     Free(nullptr, job);
-    gOnFetchDone.Call();
+    if (!discard) {
+        done.Call();
+    }
 }
 #else
 
@@ -76848,7 +77322,10 @@ static void FetchWorker(FetchJob* job) {
 
     gFetchLock.Lock();
     FetchSlot* s = &gFetch[job->slot];
-    if (got) {
+    bool discard = s->discard;
+    if (discard) {
+        SlotDrop(s);
+    } else if (got) {
         s->body = response.body.els;
         s->len = response.body.len;
         response.body.els = nullptr;
@@ -76858,12 +77335,18 @@ static void FetchWorker(FetchJob* job) {
     } else {
         s->state = FetchState::Failed;
     }
+    s->job = nullptr;
+    s->task = 0;
     gFetchPending--;
     gFetchLock.Unlock();
 
+    Func0 done = job->done;
     HttpRspFree(&response);
     StrFree(job->url);
     Free(nullptr, job);
+    if (!discard) {
+        ExecPost(done);
+    }
 }
 #endif
 
@@ -76927,7 +77410,9 @@ FetchState HttpFetch(Str url, const uint8_t** bytes, int* len) {
     }
     s->url = StrDup(url);
     s->state = FetchState::Pending;
+    s->job = job;
     job->slot = (int)(s - gFetch);
+    job->done = gOnFetchDone;
 #if !GPUI_OS_WASM
     job->url = StrDup(url);
 #endif
@@ -76937,10 +77422,12 @@ FetchState HttpFetch(Str url, const uint8_t** bytes, int* len) {
 #if GPUI_OS_WASM
     HttpReq req;
     req.url = url;
-    if (!HttpSendAsync(req, MkFunc1(FetchDone, job))) {
+    bool started = HttpSendAsync(req, MkFunc1(FetchDone, job));
 #else
-    if (!job->url.s || !ExecSpawn(MkFunc0(FetchWorker, job), gOnFetchDone)) {
+    TaskId task = job->url.s ? ExecSpawn(MkFunc0(FetchWorker, job)) : 0;
+    bool started = task != 0;
 #endif
+    if (!started) {
         gFetchLock.Lock();
         gFetchPending--;
         SlotDrop(s);
@@ -76951,26 +77438,45 @@ FetchState HttpFetch(Str url, const uint8_t** bytes, int* len) {
         Free(nullptr, job);
         return FetchState::None;
     }
+#if !GPUI_OS_WASM
+    gFetchLock.Lock();
+
+    if (s->state == FetchState::Pending && s->job == job) {
+        s->task = task;
+    }
+    gFetchLock.Unlock();
+#endif
     return FetchState::Pending;
 }
 
 void HttpFetchClear() {
-
-    const int kWaitMs = 500;
-    for (int waited = 0; waited < kWaitMs; waited += 10) {
-        if (HttpFetchPending() == 0) {
-            break;
-        }
-        PlatSleepMs(10);
-    }
+    FetchJob* cancelled[kFetchSlots] = {};
+    int cancelledN = 0;
     gFetchLock.Lock();
     for (int i = 0; i < kFetchSlots; i++) {
-        if (gFetch[i].state != FetchState::Pending) {
-            SlotDrop(&gFetch[i]);
+        FetchSlot* s = &gFetch[i];
+        if (s->state != FetchState::Pending) {
+            SlotDrop(s);
+            continue;
         }
+        s->discard = true;
+#if !GPUI_OS_WASM
+        if (s->task && ExecCancel(s->task)) {
+            cancelled[cancelledN++] = s->job;
+            gFetchPending--;
+            SlotDrop(s);
+        }
+#endif
     }
     gFetchNext = 0;
     gFetchLock.Unlock();
+    for (int i = 0; i < cancelledN; i++) {
+        FetchJob* job = cancelled[i];
+#if !GPUI_OS_WASM
+        StrFree(job->url);
+#endif
+        Free(nullptr, job);
+    }
 }
 
 void HttpFetchDrop(Str url) {
@@ -78188,10 +78694,10 @@ static int EncodeUtf8(char* out, uint32_t cp) {
     return 4;
 }
 
-static void AppendCp(Arena* a, StrBuilder& out, uint32_t cp) {
+static void AppendCp(StrBuilder& out, uint32_t cp) {
     char bytes[4];
     int n = EncodeUtf8(bytes, cp);
-    StrBuilderAppend(a, out, Str(bytes, n));
+    out.Append(Str(bytes, n));
 }
 
 static ArenaStr Decode(Arena* a, Str value, bool attribute) {
@@ -78204,8 +78710,8 @@ static ArenaStr Decode(Arena* a, Str value, bool attribute) {
     }
     if (!needsDecode) return ArenaStrDup(a, value);
 
-    StrBuilder out;
-    StrBuilderReserve(a, out, value.len);
+    StrBuilder out(a);
+    out.Reserve(value.len);
     for (int i = 0; i < value.len;) {
         if (value.s[i] != '&') {
             char c = value.s[i++] == '\r' ? '\n' : value.s[i - 1];
@@ -78214,9 +78720,9 @@ static ArenaStr Decode(Arena* a, Str value, bool attribute) {
                 i++;
             }
             if (c == 0) {
-                AppendCp(a, out, 0xfffd);
+                AppendCp(out, 0xfffd);
             } else {
-                StrBuilderAppendChar(a, out, c);
+                out.AppendChar(c);
             }
             continue;
         }
@@ -78237,14 +78743,14 @@ static ArenaStr Decode(Arena* a, Str value, bool attribute) {
                 i++;
             }
             if (digits == i) {
-                StrBuilderAppendChar(a, out, '&');
+                out.AppendChar('&');
                 i = start + 1;
                 continue;
             }
             uint32_t cp =
                 NumericEntity(Str(value.s + digits, i - digits), radix);
             if (i < value.len && value.s[i] == ';') i++;
-            AppendCp(a, out, cp);
+            AppendCp(out, cp);
             continue;
         }
         int end = i;
@@ -78265,14 +78771,14 @@ static ArenaStr Decode(Arena* a, Str value, bool attribute) {
             (attribute && !semi && i + matched < value.len &&
              (html5ever_html5ever_IsDigit(value.s[i + matched]) || IsAlpha(value.s[i + matched]) ||
               value.s[i + matched] == '='))) {
-            StrBuilderAppendChar(a, out, '&');
+            out.AppendChar('&');
             i = start + 1;
             continue;
         }
-        StrBuilderAppend(a, out, decoded);
+        out.Append(decoded);
         i += matched + (semi ? 1 : 0);
     }
-    return ArenaStrDup(a, StrBuilderTakeStr(a, out));
+    return ArenaStrDup(a, out.TakeStr());
 }
 
 struct Scanner {
@@ -79045,19 +79551,19 @@ Str AttrValue(Arena* a, const Node* node, Str name) {
     return AttributeValue(a, Attr(a, node, name));
 }
 
-static void WriteEscaped(Arena* a, StrBuilder& out, Str value, bool attribute) {
+static void WriteEscaped(StrBuilder& out, Str value, bool attribute) {
     for (int i = 0; i < value.len; i++) {
         char c = value.s[i];
         if (c == '&')
-            StrBuilderAppend(a, out, StrL("&amp;"));
+            out.Append(StrL("&amp;"));
         else if (c == '<')
-            StrBuilderAppend(a, out, StrL("&lt;"));
+            out.Append(StrL("&lt;"));
         else if (c == '>' && !attribute)
-            StrBuilderAppend(a, out, StrL("&gt;"));
+            out.Append(StrL("&gt;"));
         else if (c == '"' && attribute)
-            StrBuilderAppend(a, out, StrL("&quot;"));
+            out.Append(StrL("&quot;"));
         else
-            StrBuilderAppendChar(a, out, c);
+            out.AppendChar(c);
     }
 }
 
@@ -79069,29 +79575,29 @@ static void html5ever_html5ever_WriteNode(Arena* a, StrBuilder& out, const Node*
         if (node->kind == NodeKind::Text) {
             const Node* parent = NodeParent(a, node);
             if (parent && SeqStrContainsI(kRawElements, NodeName(a, parent)))
-                StrBuilderAppend(a, out, NodeData(a, node));
+                out.Append(NodeData(a, node));
             else
-                WriteEscaped(a, out, NodeData(a, node), false);
+                WriteEscaped(out, NodeData(a, node), false);
         } else if (node->kind == NodeKind::Comment) {
-            StrBuilderAppend(a, out, StrL("<!--"));
-            StrBuilderAppend(a, out, NodeData(a, node));
-            StrBuilderAppend(a, out, StrL("-->"));
+            out.Append(StrL("<!--"));
+            out.Append(NodeData(a, node));
+            out.Append(StrL("-->"));
         } else if (node->kind == NodeKind::Doctype) {
-            StrBuilderAppend(a, out, StrL("<!DOCTYPE "));
-            StrBuilderAppend(a, out, NodeName(a, node));
-            StrBuilderAppendChar(a, out, '>');
+            out.Append(StrL("<!DOCTYPE "));
+            out.Append(NodeName(a, node));
+            out.AppendChar('>');
         } else if (element) {
-            StrBuilderAppendChar(a, out, '<');
-            StrBuilderAppend(a, out, NodeName(a, node));
+            out.AppendChar('<');
+            out.Append(NodeName(a, node));
             for (const Attribute* attr = NodeAttrs(a, node); attr;
                  attr = AttributeNext(a, attr)) {
-                StrBuilderAppendChar(a, out, ' ');
-                StrBuilderAppend(a, out, AttributeName(a, attr));
-                StrBuilderAppend(a, out, StrL("=\""));
-                WriteEscaped(a, out, AttributeValue(a, attr), true);
-                StrBuilderAppendChar(a, out, '"');
+                out.AppendChar(' ');
+                out.Append(AttributeName(a, attr));
+                out.Append(StrL("=\""));
+                WriteEscaped(out, AttributeValue(a, attr), true);
+                out.AppendChar('"');
             }
-            StrBuilderAppendChar(a, out, '>');
+            out.AppendChar('>');
         }
     }
     if (node->kind != NodeKind::Text && node->kind != NodeKind::Comment &&
@@ -79102,17 +79608,17 @@ static void html5ever_html5ever_WriteNode(Arena* a, StrBuilder& out, const Node*
         }
     }
     if (include && element && !IsVoid(NodeName(a, node))) {
-        StrBuilderAppend(a, out, StrL("</"));
-        StrBuilderAppend(a, out, NodeName(a, node));
-        StrBuilderAppendChar(a, out, '>');
+        out.Append(StrL("</"));
+        out.Append(NodeName(a, node));
+        out.AppendChar('>');
     }
 }
 
 Str Serialize(Arena* a, const Node* node, SerializeOptions options) {
     if (!a || !node) return {};
-    StrBuilder out;
+    StrBuilder out(a);
     html5ever_html5ever_WriteNode(a, out, node, options.includeNode);
-    return StrBuilderTakeStr(a, out);
+    return out.TakeStr();
 }
 
 }
@@ -88242,13 +88748,9 @@ static const uint8_t kHtmlBasic = 6;
 static const uint8_t kHtmlComplete = 7;
 
 static bool NamesContainI(SeqStrings names, Str name) {
-    int off = 0;
-    while (names[off]) {
-        if (base::StrEqI(SeqStrAt(names, off), name)) {
+    for (Str item = SeqStrFirst(names); item.len > 0; item = SeqStrNext(item)) {
+        if (base::StrEqI(item, name)) {
             return true;
-        }
-        if (!SeqStrAdvance(names, off)) {
-            break;
         }
     }
     return false;
@@ -92667,10 +93169,9 @@ static void OnExitListItem(CompileContext* c) {
             Node* text = firstInParagraph;
             Str value = Get(c, text, NodeStrKind::Value);
             int32_t start = 0;
-            if (value.len > 0 && (value.s[0] == '\t' || value.s[0] == ' ')) {
+            if (StrStartsWithAny(value, "\t ")) {
                 start += 1;
-            } else if (value.len > 0 &&
-                       (value.s[0] == '\r' || value.s[0] == '\n')) {
+            } else if (StrStartsWithAny(value, "\r\n")) {
                 start += 1;
                 if (value.len > 1 && value.s[0] == '\r' && value.s[1] == '\n') {
                     start += 1;
@@ -94372,8 +94873,8 @@ bool AppAssets::Resolve(Str path, Str* relative, Str* error) const {
         StrFree(*error);
         *error = {};
     }
-    if (!path || path.len >= kMaxPath || path.s[0] == '/' ||
-        path.s[0] == '\\' || (path.len >= 2 && path.s[1] == ':')) {
+    if (!path || path.len >= kMaxPath || StrStartsWithAny(path, "/\\") ||
+        (path.len >= 2 && path.s[1] == ':')) {
         if (error)
             *error = StrDup(
                 fmt("asset `%s` is outside the application directory", path));
@@ -94844,19 +95345,19 @@ static bool IsAbsolute(Str path) {
 
 static Str NormalizePath(Arena* arena, Str path, bool* escaped) {
     if (escaped) *escaped = false;
-    StrBuilder out;
+    StrBuilder out(arena);
     int prefix = 0;
 #if GPUI_OS_WINDOWS
     if (path.len >= 2 && path.s[1] == ':') {
         char drive = path.s[0];
         if (drive >= 'a' && drive <= 'z') drive = (char)(drive - 'a' + 'A');
-        StrBuilderAppendChar(arena, out, drive);
-        StrBuilderAppendChar(arena, out, ':');
+        out.AppendChar(drive);
+        out.AppendChar(':');
         prefix = 2;
     }
 #endif
     if (prefix < path.len && shell_capability_IsSeparator(path.s[prefix])) {
-        StrBuilderAppendChar(arena, out, '/');
+        out.AppendChar('/');
         while (prefix < path.len && shell_capability_IsSeparator(path.s[prefix])) prefix++;
     }
     Vec<Str> parts;
@@ -94881,10 +95382,10 @@ static Str NormalizePath(Arena* arena, Str path, bool* escaped) {
     for (int i = 0; i < parts.len; i++) {
         if (out.len > 0 && !(rootSlash && out.len == 1) &&
             out.els[out.len - 1] != '/')
-            StrBuilderAppendChar(arena, out, '/');
-        StrBuilderAppend(arena, out, parts[i]);
+            out.AppendChar('/');
+        out.Append(parts[i]);
     }
-    Str result = StrBuilderTakeStr(arena, out);
+    Str result = out.TakeStr();
     return result.len == 0 ? StrDup(arena, StrL(".")) : result;
 }
 
@@ -98098,8 +98599,7 @@ struct MaterialLength {
 };
 
 static Str TrimSpace(Str value) {
-    while (value.len > 0 && (value.s[0] == ' ' || value.s[0] == '\t' ||
-                             value.s[0] == '\r' || value.s[0] == '\n')) {
+    while (StrStartsWithAny(value, " \t\r\n")) {
         value.s++;
         value.len--;
     }
@@ -100147,12 +100647,12 @@ static void shell_plugin_SetError(ShellError* error, Str message) {
 }
 
 static Str Join(Arena* arena, Str left, Str right) {
-    StrBuilder path;
-    StrBuilderAppend(arena, path, left);
+    StrBuilder path(arena);
+    path.Append(left);
     if (left && left.s[left.len - 1] != '/' && left.s[left.len - 1] != '\\')
-        StrBuilderAppendChar(arena, path, GPUI_OS_WINDOWS ? '\\' : '/');
-    StrBuilderAppend(arena, path, right);
-    return StrBuilderTakeStr(arena, path);
+        path.AppendChar(GPUI_OS_WINDOWS ? '\\' : '/');
+    path.Append(right);
+    return path.TakeStr();
 }
 
 static const char* JsonTypeName(const JsonValue* value) {
@@ -100255,7 +100755,7 @@ static bool ValidId(Str id) {
 }
 
 static bool ValidEntry(Str entry) {
-    if (!entry || entry.s[0] == '/' || entry.s[0] == '\\' ||
+    if (!entry || StrStartsWithAny(entry, "/\\") ||
         StrFind(entry, StrL(":")) >= 0)
         return false;
     int start = 0;
@@ -100444,7 +100944,7 @@ static bool ParseGitDependencyString(Arena* arena, Str source, Str* git,
 }
 
 static bool ValidBareModuleName(Str name) {
-    if (!name || name.s[0] == '.' || name.s[0] == '/') return false;
+    if (!name || StrStartsWithAny(name, "./")) return false;
     if (StrContains(name, StrL("\\")) || StrContains(name, StrL(":")))
         return false;
     int start = 0;
@@ -100918,8 +101418,7 @@ void PluginManifestSchema(StrBuilder* out) {
 }
 
 static bool shell_plugin_AbsolutePath(Str path) {
-    if (!path) return false;
-    if (path.s[0] == '/' || path.s[0] == '\\') return true;
+    if (StrStartsWithAny(path, "/\\")) return true;
     return path.len >= 3 && path.s[1] == ':' &&
            (path.s[2] == '/' || path.s[2] == '\\');
 }
@@ -103308,16 +103807,16 @@ static int Interrupt(JSRuntime*, void* opaque) {
 
 static Str ExceptionText(Arena* arena, JSContext* ctx) {
     JSValue exception = JS_GetException(ctx);
-    StrBuilder out;
+    StrBuilder out(arena);
     size_t messageLen = 0;
     const char* message = JS_ToCStringLen(ctx, &messageLen, exception);
     Str messageText;
     if (message) {
         messageText = StrDup(arena, Str(message, (int)messageLen));
-        StrBuilderAppend(arena, out, messageText);
+        out.Append(messageText);
         JS_FreeCString(ctx, message);
     } else {
-        StrBuilderAppend(arena, out, StrL("JavaScript exception"));
+        out.Append(StrL("JavaScript exception"));
     }
     if (JS_IsError(exception)) {
         JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
@@ -103327,12 +103826,11 @@ static Str ExceptionText(Arena* arena, JSContext* ctx) {
             if (text && stackLen > 0) {
                 Str stackText(text, (int)stackLen);
                 if (!messageText || !StrStartsWith(stackText, messageText)) {
-                    StrBuilderAppendChar(arena, out, '\n');
-                    StrBuilderAppend(arena, out, stackText);
+                    out.AppendChar('\n');
+                    out.Append(stackText);
                 } else if ((int)stackLen > (int)messageLen) {
-                    StrBuilderAppend(arena, out,
-                                     Str(text + messageLen,
-                                         (int)stackLen - (int)messageLen));
+                    out.Append(Str(text + messageLen,
+                                   (int)stackLen - (int)messageLen));
                 }
                 JS_FreeCString(ctx, text);
             }
@@ -103340,7 +103838,7 @@ static Str ExceptionText(Arena* arena, JSContext* ctx) {
         JS_FreeValue(ctx, stack);
     }
     JS_FreeValue(ctx, exception);
-    return StrBuilderTakeStr(arena, out);
+    return out.TakeStr();
 }
 
 static bool CaptureException(ShellRuntimeImpl* impl, ShellError* error) {
@@ -105388,15 +105886,12 @@ static JSValue NativeShowFpsMonitor(JSContext* ctx, JSValueConst, int argc,
         if (ok && present && !FpsAnchorFromName(anchor, &request.anchor)) {
             StrBuilder names;
             bool first = true;
-            int offset = 0;
             SeqStrings all = FpsAnchorNames();
-            while (offset >= 0) {
-                Str name = SeqStrAt(all, offset);
-                if (!name) break;
+            for (Str name = SeqStrFirst(all); name.len > 0;
+                 name = SeqStrNext(name)) {
                 if (!first) names.Append(StrL(", "));
                 first = false;
                 names.Append(name);
-                SeqStrAdvance(all, offset);
             }
             Str list = names.TakeStr();
             JSValue thrown = JS_ThrowTypeError(
@@ -106408,29 +106903,22 @@ static void AppendThemeColor(StrBuilder* out, Str name, bool comma) {
 }
 
 static void AppendThemeColors(StrBuilder* out) {
-    int offset = 0;
     int index = 0;
-    while (offset >= 0) {
-        Str name = SeqStrAt(shell::ThemeColorTokenNames(), offset);
-        if (!name) break;
+    SeqStrings names = shell::ThemeColorTokenNames();
+    for (Str name = SeqStrFirst(names); name.len > 0; name = SeqStrNext(name)) {
         AppendThemeColor(out, name, index++ > 0);
-        SeqStrAdvance(shell::ThemeColorTokenNames(), offset);
     }
 }
 
 static void AppendThemeScale(StrBuilder* out, SeqStrings names,
                              bool (*value)(Str, float*)) {
-    int offset = 0;
     int index = 0;
-    while (offset >= 0) {
-        Str name = SeqStrAt(names, offset);
-        if (!name) break;
+    for (Str name = SeqStrFirst(names); name.len > 0; name = SeqStrNext(name)) {
         float number = 0;
         if (value(name, &number)) {
             if (index++) out->AppendChar(',');
             out->Append(fmt("\"%s\":%g", name, number));
         }
-        SeqStrAdvance(names, offset);
     }
 }
 
@@ -106527,10 +107015,7 @@ static bool SetThemeRadius(RadiusTokens* radius, Str name, float value) {
 static bool ReadThemeColors(JSContext* ctx, JSValueConst object,
                             ColorTokens* colors) {
     SeqStrings names = shell::ThemeColorTokenNames();
-    int offset = 0;
-    while (offset >= 0) {
-        Str name = SeqStrAt(names, offset);
-        if (!name) break;
+    for (Str name = SeqStrFirst(names); name.len > 0; name = SeqStrNext(name)) {
         JSValue property = JS_UNDEFINED;
         if (!ThemeRequiredProperty(ctx, object, name.s, &property,
                                    "theme tokens.colors")) {
@@ -106561,7 +107046,6 @@ static bool ReadThemeColors(JSContext* ctx, JSValueConst object,
         }
         ShellErrorClear(&error);
         SetThemeColor(colors, name, ShellThemeRgba(color));
-        SeqStrAdvance(names, offset);
     }
     return true;
 }
@@ -106569,10 +107053,7 @@ static bool ReadThemeColors(JSContext* ctx, JSValueConst object,
 static bool ReadThemeScale(JSContext* ctx, JSValueConst object,
                            SeqStrings names, const char* container,
                            SpacingTokens* spacing, RadiusTokens* radius) {
-    int offset = 0;
-    while (offset >= 0) {
-        Str name = SeqStrAt(names, offset);
-        if (!name) break;
+    for (Str name = SeqStrFirst(names); name.len > 0; name = SeqStrNext(name)) {
         JSValue property = JS_UNDEFINED;
         if (!ThemeRequiredProperty(ctx, object, name.s, &property, container)) {
             return false;
@@ -106592,7 +107073,6 @@ static bool ReadThemeScale(JSContext* ctx, JSValueConst object,
             SetThemeSpacing(spacing, name, (float)number);
         else
             SetThemeRadius(radius, name, (float)number);
-        SeqStrAdvance(names, offset);
     }
     return true;
 }
@@ -112308,19 +112788,19 @@ static TempStr ShellUtf8Temp(uint32_t cp) {
 static const float kShellWheelNotch = 48.f;
 
 static Str ScriptKeystroke(Arena* arena, const KeyEvent& event) {
-    StrBuilder out;
-    if (event.function) StrBuilderAppend(arena, out, StrL("fn-"));
-    if (event.ctrl) StrBuilderAppend(arena, out, StrL("ctrl-"));
-    if (event.alt) StrBuilderAppend(arena, out, StrL("alt-"));
-    if (event.platform) StrBuilderAppend(arena, out, StrL("cmd-"));
-    if (event.shift) StrBuilderAppend(arena, out, StrL("shift-"));
+    StrBuilder out(arena);
+    if (event.function) out.Append(StrL("fn-"));
+    if (event.ctrl) out.Append(StrL("ctrl-"));
+    if (event.alt) out.Append(StrL("alt-"));
+    if (event.platform) out.Append(StrL("cmd-"));
+    if (event.shift) out.Append(StrL("shift-"));
     Str key = event.vk ? KeyName(event.vk) : Str{};
     if (key) {
-        StrBuilderAppend(arena, out, key);
+        out.Append(key);
     } else if (event.ch) {
-        StrBuilderAppend(arena, out, ShellUtf8Temp(event.ch));
+        out.Append(ShellUtf8Temp(event.ch));
     }
-    return StrBuilderTakeStr(arena, out);
+    return out.TakeStr();
 }
 
 static JSValue JsModifiers(JSContext* ctx, bool shift, bool control, bool alt,
@@ -113539,46 +114019,44 @@ bool SpecArena::ClaimVirtualItems(uint64_t count, uint64_t limit) {
     return true;
 }
 
-static void Indent(Arena* a, StrBuilder* out, int depth) {
-    for (int i = 0; i < depth; i++) StrBuilderAppend(a, *out, StrL("  "));
+static void Indent(StrBuilder* out, int depth) {
+    for (int i = 0; i < depth; i++) out->Append(StrL("  "));
 }
 
-static void AppendBridged(Arena* a, StrBuilder* out, const Bridged& value) {
+static void AppendBridged(StrBuilder* out, const Bridged& value) {
     switch (value.kind) {
         case BridgedKind::Nil:
-            StrBuilderAppend(a, *out, StrL("nil"));
+            out->Append(StrL("nil"));
             break;
         case BridgedKind::Bool:
-            StrBuilderAppend(a, *out,
-                             value.boolean ? StrL("true") : StrL("false"));
+            out->Append(value.boolean ? StrL("true") : StrL("false"));
             break;
         case BridgedKind::Number:
-            StrBuilderAppend(a, *out, fmt("%g", value.number));
+            out->Append(fmt("%g", value.number));
             break;
         case BridgedKind::String:
-            StrBuilderAppendChar(a, *out, '"');
-            StrBuilderAppend(a, *out, value.string);
-            StrBuilderAppendChar(a, *out, '"');
+            out->AppendChar('"');
+            out->Append(value.string);
+            out->AppendChar('"');
             break;
     }
 }
 
-static void AppendArgs(Arena* a, StrBuilder* out, const SpecOp& op) {
-    StrBuilderAppendChar(a, *out, '(');
+static void AppendArgs(StrBuilder* out, const SpecOp& op) {
+    out->AppendChar('(');
     for (int i = 0; i < op.argCount; i++) {
-        if (i) StrBuilderAppend(a, *out, StrL(", "));
-        AppendBridged(a, out, op.args[i]);
+        if (i) out->Append(StrL(", "));
+        AppendBridged(out, op.args[i]);
     }
-    StrBuilderAppendChar(a, *out, ')');
+    out->AppendChar(')');
 }
 
-void SpecArena::WriteTree(Arena* a, StrBuilder* out, SpecId id,
-                          int depth) const {
+void SpecArena::WriteTree(StrBuilder* out, SpecId id, int depth) const {
     const SpecNode* node = Node(id);
     if (!node) return;
     const Component& component = node->component;
-    Indent(a, out, depth);
-    StrBuilderAppend(a, *out, Str(ComponentName(component)));
+    Indent(out, depth);
+    out->Append(Str(ComponentName(component)));
     switch (component.kind) {
         case ComponentKind::Text:
         case ComponentKind::Button:
@@ -113611,20 +114089,18 @@ void SpecArena::WriteTree(Arena* a, StrBuilder* out, SpecId id,
         case ComponentKind::Combobox:
         case ComponentKind::HResizable:
         case ComponentKind::VResizable:
-            StrBuilderAppend(a, *out, StrL(" \""));
-            StrBuilderAppend(a, *out, component.text);
-            StrBuilderAppendChar(a, *out, '"');
+            out->Append(StrL(" \""));
+            out->Append(component.text);
+            out->AppendChar('"');
             break;
         case ComponentKind::TableRow:
         case ComponentKind::TableHead:
         case ComponentKind::TableCell:
-            StrBuilderAppend(
-                a, *out, fmt(" \"%s\" #%u", component.text, component.index));
+            out->Append(fmt(" \"%s\" #%u", component.text, component.index));
             break;
         case ComponentKind::DatePicker:
-            StrBuilderAppend(a, *out,
-                             fmt(" \"%s\" #%llu", component.text,
-                                 (unsigned long long)component.handle));
+            out->Append(fmt(" \"%s\" #%llu", component.text,
+                            (unsigned long long)component.handle));
             break;
         case ComponentKind::ChildView:
         case ComponentKind::Input:
@@ -113635,15 +114111,13 @@ void SpecArena::WriteTree(Arena* a, StrBuilder* out, SpecId id,
         case ComponentKind::SliderTrack:
         case ComponentKind::SliderIndicator:
         case ComponentKind::SliderThumb:
-            StrBuilderAppend(
-                a, *out, fmt(" #%llu", (unsigned long long)component.handle));
+            out->Append(fmt(" #%llu", (unsigned long long)component.handle));
             break;
         case ComponentKind::VVirtualList:
         case ComponentKind::HVirtualList:
             if (component.virtualList) {
-                StrBuilderAppend(a, *out,
-                                 fmt(" \"%s\" ×%d", component.virtualList->id,
-                                     component.virtualList->sizeCount));
+                out->Append(fmt(" \"%s\" ×%d", component.virtualList->id,
+                                component.virtualList->sizeCount));
             }
             break;
         default:
@@ -113652,62 +114126,62 @@ void SpecArena::WriteTree(Arena* a, StrBuilder* out, SpecId id,
 
     for (const SpecOp& op : node->ops) {
         if (op.kind == SpecOpKind::NullaryStyle) {
-            StrBuilderAppend(a, *out, StrL(" ."));
-            StrBuilderAppend(a, *out, op.name);
+            out->Append(StrL(" ."));
+            out->Append(op.name);
         } else if (op.kind == SpecOpKind::ParamStyle) {
-            StrBuilderAppend(a, *out, StrL(" ."));
-            StrBuilderAppend(a, *out, op.name);
-            AppendArgs(a, out, op);
+            out->Append(StrL(" ."));
+            out->Append(op.name);
+            AppendArgs(out, op);
         } else if (op.kind == SpecOpKind::Method) {
-            StrBuilderAppend(a, *out, StrL(" :"));
-            StrBuilderAppend(a, *out, op.name);
-            AppendArgs(a, out, op);
+            out->Append(StrL(" :"));
+            out->Append(op.name);
+            AppendArgs(out, op);
         } else if (op.kind == SpecOpKind::Callback) {
-            StrBuilderAppend(a, *out, StrL(" :"));
-            StrBuilderAppend(a, *out, op.name);
-            StrBuilderAppend(a, *out, StrL("(fn)"));
+            out->Append(StrL(" :"));
+            out->Append(op.name);
+            out->Append(StrL("(fn)"));
         } else if (op.kind == SpecOpKind::ActionCallback) {
-            StrBuilderAppend(a, *out, StrL(" :on_action("));
-            StrBuilderAppend(a, *out, op.name);
-            StrBuilderAppend(a, *out, StrL(", fn)"));
+            out->Append(StrL(" :on_action("));
+            out->Append(op.name);
+            out->Append(StrL(", fn)"));
         } else if (op.kind == SpecOpKind::StateStyle) {
-            StrBuilderAppend(a, *out, StrL(" :"));
-            StrBuilderAppend(a, *out, op.name);
-            StrBuilderAppendChar(a, *out, '(');
+            out->Append(StrL(" :"));
+            out->Append(op.name);
+            out->AppendChar('(');
             const SpecNode* state = Node(op.node);
             if (state) {
                 for (const SpecOp& stateOp : state->ops) {
                     if (stateOp.kind == SpecOpKind::NullaryStyle ||
                         stateOp.kind == SpecOpKind::ParamStyle) {
-                        StrBuilderAppend(a, *out, StrL("."));
-                        StrBuilderAppend(a, *out, stateOp.name);
+                        out->Append(StrL("."));
+                        out->Append(stateOp.name);
                         if (stateOp.kind == SpecOpKind::ParamStyle)
-                            AppendArgs(a, out, stateOp);
+                            AppendArgs(out, stateOp);
                     }
                 }
             } else {
-                StrBuilderAppendChar(a, *out, '?');
+                out->AppendChar('?');
             }
-            StrBuilderAppendChar(a, *out, ')');
+            out->AppendChar(')');
         }
     }
-    StrBuilderAppendChar(a, *out, '\n');
+    out->AppendChar('\n');
 
     for (const SpecOp& op : node->ops) {
         if (op.kind != SpecOpKind::Slot) continue;
-        Indent(a, out, depth + 1);
-        StrBuilderAppendChar(a, *out, '@');
-        StrBuilderAppend(a, *out, op.name);
-        StrBuilderAppendChar(a, *out, '\n');
-        WriteTree(a, out, op.node, depth + 2);
+        Indent(out, depth + 1);
+        out->AppendChar('@');
+        out->Append(op.name);
+        out->AppendChar('\n');
+        WriteTree(out, op.node, depth + 2);
     }
-    for (SpecId child : node->children) WriteTree(a, out, child, depth + 1);
+    for (SpecId child : node->children) WriteTree(out, child, depth + 1);
 }
 
 Str SpecArena::DebugTree(Arena* into, SpecId root) const {
-    StrBuilder out;
-    WriteTree(into, &out, root, 0);
-    return StrBuilderTakeStr(into, out);
+    StrBuilder out(into);
+    WriteTree(&out, root, 0);
+    return out.TakeStr();
 }
 
 }
@@ -153146,9 +153620,11 @@ void PathStroke(PaintCtx* ctx, Path* p, float stroke, Rgba c, bool roundCaps,
     cairo_restore(cr);
 }
 
-struct Image {
+struct RenderImage {
+    int refs = 1;
     uint64_t generation = 0;
     cairo_surface_t* surface = nullptr;
+    cairo_surface_t* graySurface = nullptr;
     int w = 0;
     int h = 0;
 };
@@ -153170,7 +153646,7 @@ static cairo_status_t PngReadFn(void* closure, unsigned char* out,
     return CAIRO_STATUS_SUCCESS;
 }
 
-Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
+RenderImage* RenderImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     (void)pa;
     if (!bytes || len <= 0) {
         return nullptr;
@@ -153185,7 +153661,7 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
         cairo_surface_destroy(surface);
         return nullptr;
     }
-    auto* img = new Image();
+    auto* img = new RenderImage();
     img->generation = PaintResourceGenerationNew();
     img->surface = surface;
     img->w = cairo_image_surface_get_width(surface);
@@ -153193,49 +153669,119 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     return img;
 }
 
-void ImageFree(Image* img) {
-    if (!img) {
+void RenderImageRetain(RenderImage* img) {
+    if (img) {
+        img->refs++;
+    }
+}
+
+void RenderImageRelease(RenderImage* img) {
+    if (!img || --img->refs != 0) {
         return;
     }
     if (img->surface) {
         cairo_surface_destroy(img->surface);
     }
+    if (img->graySurface) {
+        cairo_surface_destroy(img->graySurface);
+    }
     delete img;
 }
 
-uint64_t ImageGeneration(const Image* img) {
+uint64_t RenderImageGeneration(const RenderImage* img) {
     return img ? img->generation : 0;
 }
 
-Size ImageSizePx(const Image* img) {
+RenderImageStatus RenderImageStatusGet(const RenderImage* img) {
+    return img ? RenderImageStatus::Ready : RenderImageStatus::Failed;
+}
+
+Size RenderImageSizePx(const RenderImage* img, int frameIndex) {
+    (void)frameIndex;
     if (!img) {
         return {};
     }
     return {(float)img->w, (float)img->h};
 }
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
+int RenderImageFrameCount(const RenderImage* img) {
+    return img ? 1 : 0;
+}
+
+int RenderImageFrameDurationMs(const RenderImage* img, int frameIndex) {
+    (void)img;
+    (void)frameIndex;
+    return 0;
+}
+
+static cairo_surface_t* ImageSurface(RenderImage* img, bool grayscale) {
+    if (!grayscale || img->graySurface) {
+        return grayscale ? img->graySurface : img->surface;
+    }
+    cairo_surface_flush(img->surface);
+    unsigned char* src = cairo_image_surface_get_data(img->surface);
+    int srcStride = cairo_image_surface_get_stride(img->surface);
+    cairo_surface_t* gray =
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, img->w, img->h);
+    if (!src || cairo_surface_status(gray) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(gray);
+        return nullptr;
+    }
+    unsigned char* dst = cairo_image_surface_get_data(gray);
+    int dstStride = cairo_image_surface_get_stride(gray);
+    for (int y = 0; y < img->h; y++) {
+        for (int x = 0; x < img->w; x++) {
+            unsigned char* s = src + y * srcStride + x * 4;
+            unsigned char* d = dst + y * dstStride + x * 4;
+            uint8_t v = (uint8_t)(((uint32_t)s[2] * 54 + (uint32_t)s[1] * 183 +
+                                   (uint32_t)s[0] * 19) >>
+                                  8);
+            d[0] = v;
+            d[1] = v;
+            d[2] = v;
+            d[3] = s[3];
+        }
+    }
+    cairo_surface_mark_dirty(gray);
+    img->graySurface = gray;
+    return gray;
+}
+
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius,
+                     bool grayscale) {
+    (void)frameIndex;
     cairo_t* cr = Cr(ctx);
     if (!cr || !img || !img->surface || img->w <= 0 || img->h <= 0 ||
-        b.w <= 0 || b.h <= 0) {
+        bounds.w <= 0 || bounds.h <= 0 || imageBounds.w <= 0 ||
+        imageBounds.h <= 0) {
+        return;
+    }
+    cairo_surface_t* surface = ImageSurface(img, grayscale);
+    if (!surface) {
         return;
     }
     cairo_save(cr);
     if (radius > 0) {
 
-        float half = (b.w < b.h ? b.w : b.h) * 0.5f;
+        float half = (bounds.w < bounds.h ? bounds.w : bounds.h) * 0.5f;
         double r = radius > half ? half : radius;
         cairo_new_path(cr);
-        cairo_arc(cr, b.x + b.w - r, b.y + r, r, -kPi / 2, 0);
-        cairo_arc(cr, b.x + b.w - r, b.y + b.h - r, r, 0, kPi / 2);
-        cairo_arc(cr, b.x + r, b.y + b.h - r, r, kPi / 2, kPi);
-        cairo_arc(cr, b.x + r, b.y + r, r, kPi, kPi * 1.5);
+        cairo_arc(cr, bounds.x + bounds.w - r, bounds.y + r, r, -kPi / 2, 0);
+        cairo_arc(cr, bounds.x + bounds.w - r, bounds.y + bounds.h - r, r, 0,
+                  kPi / 2);
+        cairo_arc(cr, bounds.x + r, bounds.y + bounds.h - r, r, kPi / 2, kPi);
+        cairo_arc(cr, bounds.x + r, bounds.y + r, r, kPi, kPi * 1.5);
         cairo_close_path(cr);
         cairo_clip(cr);
+    } else {
+        cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
+        cairo_clip(cr);
     }
-    cairo_translate(cr, b.x, b.y);
-    cairo_scale(cr, b.w / (double)img->w, b.h / (double)img->h);
-    cairo_set_source_surface(cr, img->surface, 0, 0);
+    cairo_translate(cr, imageBounds.x, imageBounds.y);
+    cairo_scale(cr, imageBounds.w / (double)img->w,
+                imageBounds.h / (double)img->h);
+    cairo_set_source_surface(cr, surface, 0, 0);
     cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
     cairo_rectangle(cr, 0, 0, img->w, img->h);
     cairo_clip(cr);
@@ -154032,14 +154578,21 @@ static int U16OffToUtf8(Str s, int u16off) {
     return i;
 }
 
-struct Image {
-    uint64_t generation = 0;
+struct MacImageFrame {
     CGImageRef image = nullptr;
+    CGImageRef grayImage = nullptr;
     int w = 0;
     int h = 0;
+    int durationMs = 100;
 };
 
-Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
+struct RenderImage {
+    int refs = 1;
+    uint64_t generation = 0;
+    Vec<MacImageFrame> frames;
+};
+
+RenderImage* RenderImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     (void)pa;
     if (!bytes || len <= 0) {
         return nullptr;
@@ -154049,42 +154602,133 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     if (!rep) {
         return nullptr;
     }
-    CGImageRef cg = [rep CGImage];
-    if (!cg) {
+    auto* img = new RenderImage();
+    img->generation = PaintResourceGenerationNew();
+    NSInteger count = [[rep valueForProperty:NSImageFrameCount] integerValue];
+    if (count < 1) {
+        count = 1;
+    }
+    for (NSInteger i = 0; i < count; i++) {
+        if (count > 1) {
+            [rep setProperty:NSImageCurrentFrame
+                   withValue:[NSNumber numberWithInteger:i]];
+        }
+        CGImageRef cg = [rep CGImage];
+        if (!cg) {
+            continue;
+        }
+        MacImageFrame frame = {};
+        frame.image = CGImageRetain(cg);
+        frame.w = (int)CGImageGetWidth(cg);
+        frame.h = (int)CGImageGetHeight(cg);
+        NSNumber* duration = [rep valueForProperty:NSImageCurrentFrameDuration];
+        if (duration && [duration doubleValue] > 0) {
+            frame.durationMs = (int)([duration doubleValue] * 1000.0);
+        }
+        VecAppend(img->frames, frame);
+    }
+    if (img->frames.len == 0) {
+        delete img;
         return nullptr;
     }
-    auto* img = new Image();
-    img->generation = PaintResourceGenerationNew();
-    img->image = CGImageRetain(cg);
-    img->w = (int)CGImageGetWidth(cg);
-    img->h = (int)CGImageGetHeight(cg);
     return img;
 }
 
-void ImageFree(Image* img) {
-    if (!img) {
+void RenderImageRetain(RenderImage* img) {
+    if (img) {
+        img->refs++;
+    }
+}
+
+void RenderImageRelease(RenderImage* img) {
+    if (!img || --img->refs != 0) {
         return;
     }
-    if (img->image) {
-        CGImageRelease(img->image);
+    for (int i = 0; i < img->frames.len; i++) {
+        MacImageFrame& frame = img->frames[i];
+        if (frame.image) {
+            CGImageRelease(frame.image);
+        }
+        if (frame.grayImage) {
+            CGImageRelease(frame.grayImage);
+        }
     }
+    VecReset(img->frames);
     delete img;
 }
 
-uint64_t ImageGeneration(const Image* img) {
+uint64_t RenderImageGeneration(const RenderImage* img) {
     return img ? img->generation : 0;
 }
 
-Size ImageSizePx(const Image* img) {
-    if (!img) {
-        return {};
-    }
-    return {(float)img->w, (float)img->h};
+RenderImageStatus RenderImageStatusGet(const RenderImage* img) {
+    return img ? RenderImageStatus::Ready : RenderImageStatus::Failed;
 }
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
+Size RenderImageSizePx(const RenderImage* img, int frameIndex) {
+    if (!img || img->frames.len <= 0) {
+        return {};
+    }
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
+    }
+    return {(float)img->frames[frameIndex].w, (float)img->frames[frameIndex].h};
+}
+
+int RenderImageFrameCount(const RenderImage* img) {
+    return img ? img->frames.len : 0;
+}
+
+int RenderImageFrameDurationMs(const RenderImage* img, int frameIndex) {
+    if (!img || img->frames.len <= 0) {
+        return 0;
+    }
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
+    }
+    return img->frames[frameIndex].durationMs;
+}
+
+static CGImageRef ImageForDraw(MacImageFrame* frame, bool grayscale) {
+    if (!grayscale || frame->grayImage) {
+        return grayscale ? frame->grayImage : frame->image;
+    }
+    size_t bytesPerRow = (size_t)frame->w * 2;
+    size_t bytes = bytesPerRow * (size_t)frame->h;
+    uint8_t* pixels = AllocArray<uint8_t>(bytes);
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceGray();
+    CGContextRef cg =
+        pixels && space
+            ? CGBitmapContextCreate(pixels, (size_t)frame->w, (size_t)frame->h,
+                                    8, bytesPerRow, space,
+                                    kCGImageAlphaPremultipliedLast)
+            : nullptr;
+    if (cg) {
+        CGContextDrawImage(cg, CGRectMake(0, 0, frame->w, frame->h),
+                           frame->image);
+        frame->grayImage = CGBitmapContextCreateImage(cg);
+        CGContextRelease(cg);
+    }
+    if (space) {
+        CGColorSpaceRelease(space);
+    }
+    Free(nullptr, pixels);
+    return frame->grayImage;
+}
+
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius,
+                     bool grayscale) {
     CGContextRef cg = Cg(ctx);
-    if (!cg || !img || !img->image || b.w <= 0 || b.h <= 0) {
+    if (!cg || !img || img->frames.len <= 0 || bounds.w <= 0 || bounds.h <= 0 ||
+        imageBounds.w <= 0 || imageBounds.h <= 0) {
+        return;
+    }
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
+    }
+    CGImageRef image = ImageForDraw(&img->frames[frameIndex], grayscale);
+    if (!image) {
         return;
     }
     CGContextSaveGState(cg);
@@ -154093,18 +154737,22 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
     }
     if (radius > 0) {
 
-        float half = (b.w < b.h ? b.w : b.h) * 0.5f;
+        float half = (bounds.w < bounds.h ? bounds.w : bounds.h) * 0.5f;
         CGFloat r = radius > half ? half : radius;
         CGPathRef path = CGPathCreateWithRoundedRect(
-            CGRectMake(b.x, b.y, b.w, b.h), r, r, nullptr);
+            CGRectMake(bounds.x, bounds.y, bounds.w, bounds.h), r, r, nullptr);
         CGContextAddPath(cg, path);
         CGContextClip(cg);
         CGPathRelease(path);
+    } else {
+        CGContextClipToRect(cg,
+                            CGRectMake(bounds.x, bounds.y, bounds.w, bounds.h));
     }
 
-    CGContextTranslateCTM(cg, b.x, b.y + b.h);
+    CGContextTranslateCTM(cg, imageBounds.x, imageBounds.y + imageBounds.h);
     CGContextScaleCTM(cg, 1, -1);
-    CGContextDrawImage(cg, CGRectMake(0, 0, b.w, b.h), img->image);
+    CGContextDrawImage(cg, CGRectMake(0, 0, imageBounds.w, imageBounds.h),
+                       image);
     CGContextRestoreGState(cg);
 }
 
@@ -154936,10 +155584,67 @@ EM_JS(int, GpJsImageDecode, (const uint8_t* bytes, int len), {
 
     const copy = new Uint8Array(HEAPU8.subarray(bytes, bytes + len));
     const url = URL.createObjectURL(new Blob([copy]));
-    const rec = {img: new Image(), w: 0, h: 0, url: url};
+    let animated = false;
+    if (len >= 13 && copy[0] == 71 && copy[1] == 73 && copy[2] == 70) {
+        let at = 13;
+        const packed = copy[10];
+        if (packed & 128) {
+            at += 3 * (1 << ((packed & 7) + 1));
+        }
+        let frames = 0;
+        while (at < len && frames < 2) {
+            const kind = copy[at++];
+            if (kind == 59) {
+                break;
+            }
+            if (kind == 33) {
+                at++;
+            } else if (kind == 44) {
+                frames++;
+                if (at + 9 > len) {
+                    break;
+                }
+                const imagePacked = copy[at + 8];
+                at += 9;
+                if (imagePacked & 128) {
+                    at += 3 * (1 << ((imagePacked & 7) + 1));
+                }
+                at++;
+            } else {
+                break;
+            }
+            while (at < len) {
+                const block = copy[at++];
+                if (!block) {
+                    break;
+                }
+                at += block;
+            }
+        }
+        animated = frames > 1;
+    }
+    if (!animated && len >= 16 && copy[0] == 82 && copy[1] == 73 &&
+        copy[2] == 70 && copy[3] == 70) {
+        for (let i = 12; i + 4 <= len; i++) {
+            if (copy[i] == 65 && copy[i + 1] == 78 && copy[i + 2] == 73 &&
+                copy[i + 3] == 77) {
+                animated = true;
+                break;
+            }
+        }
+    }
+    const rec = {
+        img: new Image(),
+        w: 0,
+        h: 0,
+        status: 0,
+        url: url,
+        animated: animated
+    };
     rec.img.onload = function() {
         rec.w = rec.img.naturalWidth;
         rec.h = rec.img.naturalHeight;
+        rec.status = 1;
         URL.revokeObjectURL(url);
         rec.url = null;
 
@@ -154948,8 +155653,13 @@ EM_JS(int, GpJsImageDecode, (const uint8_t* bytes, int len), {
         }
     };
     rec.img.onerror = function() {
+        rec.status = 2;
+        rec.img = null;
         URL.revokeObjectURL(url);
         rec.url = null;
+        if (typeof _gpui_wasm_wake === "function") {
+            _gpui_wasm_wake();
+        }
     };
     rec.img.src = url;
     return G.alloc(G.images, G.imageFree, rec);
@@ -154965,17 +155675,30 @@ EM_JS(int, GpJsImageH, (int id), {
     return e ? e.h : 0;
 });
 
+EM_JS(int, GpJsImageStatus, (int id), {
+    const e = globalThis.__gpui.images[id];
+    return e ? e.status : 2;
+});
+
+EM_JS(int, GpJsImageFrameCount, (int id), {
+    const e = globalThis.__gpui.images[id];
+    return e && e.animated ? 2 : (e ? 1 : 0);
+});
+
 EM_JS(void, GpJsImageDraw,
-      (int id, float x, float y, float w, float h, float alpha, float r), {
+      (int id, float x, float y, float w, float h, float imageX, float imageY,
+       float imageW, float imageH, float alpha, float r, int grayscale), {
     const G = globalThis.__gpui;
     const c = G.cur, e = G.images[id];
     if (!c || !e || e.w <= 0 || e.h <= 0) {
         return;
     }
-    const prev = c.globalAlpha;
+    c.save();
     c.globalAlpha = alpha;
+    if (grayscale) {
+        c.filter = "grayscale(1)";
+    }
     if (r > 0) {
-        c.save();
         c.beginPath();
         c.moveTo(x + r, y);
         c.arcTo(x + w, y, x + w, y + h, r);
@@ -154984,17 +155707,22 @@ EM_JS(void, GpJsImageDraw,
         c.arcTo(x, y, x + w, y, r);
         c.closePath();
         c.clip();
+    } else {
+        c.beginPath();
+        c.rect(x, y, w, h);
+        c.clip();
     }
-    c.drawImage(e.img, x, y, w, h);
-    if (r > 0) {
-        c.restore();
-    }
-    c.globalAlpha = prev;
+    c.drawImage(e.img, imageX, imageY, imageW, imageH);
+    c.restore();
 });
 
 EM_JS(void, GpJsImageFree, (int id), {
     const G = globalThis.__gpui;
     const e = G.images[id];
+    if (e && e.img) {
+        e.img.onload = null;
+        e.img.onerror = null;
+    }
     if (e && e.url) {
         URL.revokeObjectURL(e.url);
     }
@@ -155511,12 +156239,13 @@ void PathStroke(PaintCtx* ctx, Path* p, float stroke, Rgba c, bool roundCaps,
     GpJsPathStroke(id, stroke, (int)Packed(ctx, c), roundCaps ? 1 : 0, dx, dy);
 }
 
-struct Image {
+struct RenderImage {
+    int refs = 1;
     uint64_t generation = 0;
     int js = 0;
 };
 
-Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
+RenderImage* RenderImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     (void)pa;
     if (!bytes || len <= 0) {
         return nullptr;
@@ -155525,14 +156254,20 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     if (!id) {
         return nullptr;
     }
-    auto* img = new Image();
+    auto* img = new RenderImage();
     img->generation = PaintResourceGenerationNew();
     img->js = id;
     return img;
 }
 
-void ImageFree(Image* img) {
-    if (!img) {
+void RenderImageRetain(RenderImage* img) {
+    if (img) {
+        img->refs++;
+    }
+}
+
+void RenderImageRelease(RenderImage* img) {
+    if (!img || --img->refs != 0) {
         return;
     }
     if (img->js) {
@@ -155541,25 +156276,53 @@ void ImageFree(Image* img) {
     delete img;
 }
 
-uint64_t ImageGeneration(const Image* img) {
+uint64_t RenderImageGeneration(const RenderImage* img) {
     return img ? img->generation : 0;
 }
 
-Size ImageSizePx(const Image* img) {
+RenderImageStatus RenderImageStatusGet(const RenderImage* img) {
+    if (!img || !img->js) {
+        return RenderImageStatus::Failed;
+    }
+    int status = GpJsImageStatus(img->js);
+    return status == 0   ? RenderImageStatus::Loading
+           : status == 1 ? RenderImageStatus::Ready
+                         : RenderImageStatus::Failed;
+}
+
+Size RenderImageSizePx(const RenderImage* img, int frameIndex) {
+    (void)frameIndex;
     if (!img || !img->js) {
         return {};
     }
     return {(float)GpJsImageW(img->js), (float)GpJsImageH(img->js)};
 }
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
-    if (!ctx || !ctx->rt || !img || !img->js || b.w <= 0 || b.h <= 0) {
+int RenderImageFrameCount(const RenderImage* img) {
+    return img && img->js ? GpJsImageFrameCount(img->js) : 0;
+}
+
+int RenderImageFrameDurationMs(const RenderImage* img, int frameIndex) {
+    (void)img;
+    (void)frameIndex;
+
+    return 16;
+}
+
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius,
+                     bool grayscale) {
+    (void)frameIndex;
+    if (!ctx || !ctx->rt || !img || !img->js || bounds.w <= 0 ||
+        bounds.h <= 0 || imageBounds.w <= 0 || imageBounds.h <= 0) {
         return;
     }
     float a = ctx->opacity < 0 ? 0 : (ctx->opacity > 1 ? 1 : ctx->opacity);
-    float half = (b.w < b.h ? b.w : b.h) * 0.5f;
+    float half = (bounds.w < bounds.h ? bounds.w : bounds.h) * 0.5f;
     float r = radius > half ? half : (radius > 0 ? radius : 0.f);
-    GpJsImageDraw(img->js, b.x, b.y, b.w, b.h, a, r);
+    GpJsImageDraw(img->js, bounds.x, bounds.y, bounds.w, bounds.h,
+                  imageBounds.x, imageBounds.y, imageBounds.w, imageBounds.h, a,
+                  r, grayscale ? 1 : 0);
 }
 
 struct TextLayout {
@@ -155811,6 +156574,7 @@ struct PaintApp {
 };
 
 struct PaintTarget {
+    uint64_t generation = 0;
     ID2D1DCRenderTarget* dcRt = nullptr;
     IDXGISwapChain1* swap = nullptr;
     ID2D1DeviceContext* dc = nullptr;
@@ -155864,6 +156628,8 @@ void PaintAppFree(PaintApp* pa) {
     if (!pa) {
         return;
     }
+
+    gpuw::PaintAppFree();
     gpui_paint_win_Rel(&pa->ellipsis12);
     gpui_paint_win_Rel(&pa->ellipsis14);
     gpui_paint_win_Rel(&pa->ellipsis16);
@@ -156012,6 +156778,7 @@ bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH) {
     }
     if (!ctx->rt) {
         auto* t = new PaintTarget();
+        t->generation = PaintResourceGenerationNew();
         t->hwnd = hwnd;
         DXGI_SWAP_CHAIN_DESC1 desc = {};
         desc.Width = (UINT)pxW;
@@ -156130,6 +156897,7 @@ bool PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH) {
 
     PaintTargetFree(ctx);
     auto* t = new PaintTarget();
+    t->generation = PaintResourceGenerationNew();
     D2D1_RENDER_TARGET_PROPERTIES rtp = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_DEFAULT,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -156893,17 +157661,76 @@ static int WideOffToUtf8(Str s, int woff) {
                                nullptr);
 }
 
-struct Image {
-    uint64_t generation = 0;
-    int w = 0;
-    int h = 0;
+struct WinImageFrame {
     uint8_t* bgra = nullptr;
     ID2D1Bitmap* bmp = nullptr;
+    ID2D1Bitmap* grayBmp = nullptr;
 
-    ID2D1RenderTarget* bmpRt = nullptr;
+    uint64_t bmpTargetGeneration = 0;
+    int w = 0;
+    int h = 0;
+    int durationMs = 100;
 };
 
-Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
+struct RenderImage {
+    int refs = 1;
+    uint64_t generation = 0;
+    Vec<WinImageFrame> frames;
+};
+
+static int WicFrameDurationMs(IWICBitmapFrameDecode* frame) {
+    IWICMetadataQueryReader* metadata = nullptr;
+    int duration = 100;
+    if (SUCCEEDED(frame->GetMetadataQueryReader(&metadata)) && metadata) {
+        PROPVARIANT value = {};
+        if (SUCCEEDED(metadata
+                          ->GetMetadataByName(L"/grctlext/Delay", &value)) &&
+            value.vt == VT_UI2 && value.uiVal > 0) {
+            duration = (int)value.uiVal * 10;
+        }
+        PropVariantClear(&value);
+        gpui_paint_win_Rel(&metadata);
+    }
+    return duration;
+}
+
+static bool WicDecodeFrame(IWICImagingFactory* wic,
+                           IWICBitmapFrameDecode* frame, WinImageFrame* out) {
+    IWICFormatConverter* conv = nullptr;
+    HRESULT hr = wic->CreateFormatConverter(&conv);
+    if (SUCCEEDED(hr)) {
+        hr = conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
+                              WICBitmapDitherTypeNone, nullptr, 0.f,
+                              WICBitmapPaletteTypeMedianCut);
+    }
+    UINT w = 0, h = 0;
+    if (SUCCEEDED(hr)) {
+        hr = conv->GetSize(&w, &h);
+    }
+    uint8_t* px = nullptr;
+    if (SUCCEEDED(hr) && w > 0 && h > 0 && w <= UINT_MAX / 4 &&
+        h <= UINT_MAX / (w * 4)) {
+        UINT stride = w * 4;
+        UINT size = stride * h;
+        if (size <= 0x7fffffffu) {
+            px = (uint8_t*)Alloc(nullptr, (int)size);
+            if (!px || FAILED(conv->CopyPixels(nullptr, stride, size, px))) {
+                Free(nullptr, px);
+                px = nullptr;
+            }
+        }
+    }
+    if (px) {
+        out->bgra = px;
+        out->w = (int)w;
+        out->h = (int)h;
+        out->durationMs = WicFrameDurationMs(frame);
+    }
+    gpui_paint_win_Rel(&conv);
+    return px != nullptr;
+}
+
+RenderImage* RenderImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     (void)pa;
     if (!bytes || len <= 0) {
         return nullptr;
@@ -156916,9 +157743,7 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
     }
     IWICStream* stream = nullptr;
     IWICBitmapDecoder* dec = nullptr;
-    IWICBitmapFrameDecode* frame = nullptr;
-    IWICFormatConverter* conv = nullptr;
-    Image* img = nullptr;
+    RenderImage* img = nullptr;
     hr = wic->CreateStream(&stream);
     if (SUCCEEDED(hr)) {
         hr = stream->InitializeFromMemory((BYTE*)bytes, (DWORD)len);
@@ -156927,165 +157752,220 @@ Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len) {
         hr = wic->CreateDecoderFromStream(stream, nullptr,
                                           WICDecodeMetadataCacheOnLoad, &dec);
     }
+    UINT frameCount = 0;
     if (SUCCEEDED(hr)) {
-        hr = dec->GetFrame(0, &frame);
+        hr = dec->GetFrameCount(&frameCount);
     }
-    if (SUCCEEDED(hr)) {
-        hr = wic->CreateFormatConverter(&conv);
-    }
-    if (SUCCEEDED(hr)) {
-        hr = conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
-                              WICBitmapDitherTypeNone, nullptr, 0.f,
-                              WICBitmapPaletteTypeMedianCut);
-    }
-    UINT w = 0, h = 0;
-    if (SUCCEEDED(hr)) {
-        hr = conv->GetSize(&w, &h);
-    }
-    if (SUCCEEDED(hr) && w > 0 && h > 0) {
-        IWICBitmapSource* source = conv;
-        IWICBitmapScaler* scaler = nullptr;
-
-        const UINT kMaxDim = 1920;
-        if (w > kMaxDim || h > kMaxDim) {
-            UINT targetW = w;
-            UINT targetH = h;
-            if (w >= h) {
-                targetW = kMaxDim;
-                targetH = (UINT)((uint64_t)h * kMaxDim / w);
-                if (targetH == 0) targetH = 1;
-            } else {
-                targetH = kMaxDim;
-                targetW = (UINT)((uint64_t)w * kMaxDim / h);
-                if (targetW == 0) targetW = 1;
+    if (SUCCEEDED(hr) && frameCount > 0) {
+        img = new RenderImage();
+        img->generation = PaintResourceGenerationNew();
+        for (UINT i = 0; i < frameCount; i++) {
+            IWICBitmapFrameDecode* frame = nullptr;
+            WinImageFrame decoded = {};
+            if (SUCCEEDED(dec->GetFrame(i, &frame)) && frame &&
+                WicDecodeFrame(wic, frame, &decoded)) {
+                VecAppend(img->frames, decoded);
             }
-            if (SUCCEEDED(wic->CreateBitmapScaler(&scaler))) {
-                if (SUCCEEDED(
-                        scaler->Initialize(conv, targetW, targetH,
-                                           WICBitmapInterpolationModeFant))) {
-                    source = scaler;
-                    w = targetW;
-                    h = targetH;
-                }
-            }
+            gpui_paint_win_Rel(&frame);
         }
-        UINT stride = w * 4;
-        UINT size = stride * h;
-        auto* px = (uint8_t*)Alloc(nullptr, (int)size);
-        if (px && SUCCEEDED(source->CopyPixels(nullptr, stride, size, px))) {
-            img = new Image();
-            img->generation = PaintResourceGenerationNew();
-            img->w = (int)w;
-            img->h = (int)h;
-            img->bgra = px;
-        } else {
-            Free(nullptr, px);
+        if (img->frames.len == 0) {
+            delete img;
+            img = nullptr;
         }
-        gpui_paint_win_Rel(&scaler);
     }
-    gpui_paint_win_Rel(&conv);
-    gpui_paint_win_Rel(&frame);
     gpui_paint_win_Rel(&dec);
     gpui_paint_win_Rel(&stream);
     gpui_paint_win_Rel(&wic);
     return img;
 }
 
-void ImageFree(Image* img) {
-    if (!img) {
+void RenderImageRetain(RenderImage* img) {
+    if (img) {
+        img->refs++;
+    }
+}
+
+void RenderImageRelease(RenderImage* img) {
+    if (!img || --img->refs != 0) {
         return;
     }
-    gpui_paint_win_Rel(&img->bmp);
-    Free(nullptr, img->bgra);
+    gpuw::RenderImageFree(img->generation);
+    for (int i = 0; i < img->frames.len; i++) {
+        WinImageFrame& frame = img->frames[i];
+        gpui_paint_win_Rel(&frame.bmp);
+        gpui_paint_win_Rel(&frame.grayBmp);
+        Free(nullptr, frame.bgra);
+    }
+    VecReset(img->frames);
     delete img;
 }
 
-uint64_t ImageGeneration(const Image* img) {
+uint64_t RenderImageGeneration(const RenderImage* img) {
     return img ? img->generation : 0;
 }
 
-bool PaintImagePixels(const Image* img, const uint8_t** bgra, int* w, int* h) {
-    if (!img || !img->bgra || img->w <= 0 || img->h <= 0) {
+RenderImageStatus RenderImageStatusGet(const RenderImage* img) {
+    return img ? RenderImageStatus::Ready : RenderImageStatus::Failed;
+}
+
+bool PaintImagePixels(const RenderImage* img, const uint8_t** bgra, int* w,
+                      int* h, int frameIndex) {
+    if (!img || img->frames.len <= 0) {
+        return false;
+    }
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
+    }
+    const WinImageFrame& frame = img->frames[frameIndex];
+    if (!frame.bgra || frame.w <= 0 || frame.h <= 0) {
         return false;
     }
     if (bgra) {
-        *bgra = img->bgra;
+        *bgra = frame.bgra;
     }
     if (w) {
-        *w = img->w;
+        *w = frame.w;
     }
     if (h) {
-        *h = img->h;
+        *h = frame.h;
     }
     return true;
 }
 
-Size ImageSizePx(const Image* img) {
-    if (!img) {
+Size RenderImageSizePx(const RenderImage* img, int frameIndex) {
+    if (!img || img->frames.len <= 0) {
         return {};
     }
-    return {(float)img->w, (float)img->h};
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
+    }
+    return {(float)img->frames[frameIndex].w, (float)img->frames[frameIndex].h};
 }
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
+int RenderImageFrameCount(const RenderImage* img) {
+    return img ? img->frames.len : 0;
+}
+
+int RenderImageFrameDurationMs(const RenderImage* img, int frameIndex) {
+    if (!img || img->frames.len <= 0) {
+        return 0;
+    }
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
+    }
+    return img->frames[frameIndex].durationMs;
+}
+
+static ID2D1Bitmap* ImageBitmap(PaintCtx* ctx, WinImageFrame* frame,
+                                bool grayscale) {
+    if (frame->bmpTargetGeneration != ctx->rt->generation) {
+        gpui_paint_win_Rel(&frame->bmp);
+        gpui_paint_win_Rel(&frame->grayBmp);
+        frame->bmpTargetGeneration = 0;
+    }
+    ID2D1Bitmap** out = grayscale ? &frame->grayBmp : &frame->bmp;
+    if (*out) {
+        return *out;
+    }
+    uint8_t* pixels = frame->bgra;
+    uint8_t* gray = nullptr;
+    if (grayscale) {
+        size_t n = (size_t)frame->w * (size_t)frame->h * 4;
+        if (n > 0x7fffffffu) {
+            return nullptr;
+        }
+        gray = AllocArray<uint8_t>((int)n);
+        if (!gray) {
+            return nullptr;
+        }
+        memcpy(gray, pixels, n);
+        for (size_t i = 0; i < n; i += 4) {
+            uint8_t y = (uint8_t)(((uint32_t)gray[i + 2] * 54 +
+                                   (uint32_t)gray[i + 1] * 183 +
+                                   (uint32_t)gray[i] * 19) >>
+                                  8);
+            gray[i] = y;
+            gray[i + 1] = y;
+            gray[i + 2] = y;
+        }
+        pixels = gray;
+    }
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(
+        DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    D2D1_SIZE_U size = D2D1::SizeU((UINT32)frame->w, (UINT32)frame->h);
+    UINT32 pitch = (UINT32)frame->w * 4;
+    HRESULT hr = ctx->rt->rt->CreateBitmap(size, pixels, pitch, props, out);
+    Free(nullptr, gray);
+    if (FAILED(hr) || !*out) {
+        return nullptr;
+    }
+    frame->bmpTargetGeneration = ctx->rt->generation;
+    return *out;
+}
+
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius,
+                     bool grayscale) {
     if (scene::Recording()) {
-        scene::RecImageDraw(ctx, img, b, radius);
+        scene::RecImageDraw(ctx, img, bounds, imageBounds, frameIndex, radius,
+                            grayscale);
         return;
     }
     if (PaintGpuOn()) {
-        gpuw::ImageDraw(ctx, img, b, radius);
+        gpuw::RenderImageDraw(ctx, img, bounds, imageBounds, frameIndex, radius,
+                              grayscale);
         return;
     }
-    if (!ctx || !ctx->rt || !ctx->rt->rt || !img || (!img->bmp && !img->bgra) ||
-        b.w <= 0 || b.h <= 0) {
+    if (!ctx || !ctx->rt || !ctx->rt->rt || !img || img->frames.len <= 0 ||
+        bounds.w <= 0 || bounds.h <= 0 || imageBounds.w <= 0 ||
+        imageBounds.h <= 0) {
         return;
+    }
+    if (frameIndex < 0 || frameIndex >= img->frames.len) {
+        frameIndex = 0;
     }
     ID2D1RenderTarget* rt = ctx->rt->rt;
-    if (img->bmp && img->bmpRt != rt) {
-        gpui_paint_win_Rel(&img->bmp);
+    ID2D1Bitmap* bitmap = ImageBitmap(ctx, &img->frames[frameIndex], grayscale);
+    if (!bitmap) {
+        return;
     }
-    if (!img->bmp) {
-        if (!img->bgra) {
-            return;
-        }
-        D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(
-            DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-        D2D1_SIZE_U size = D2D1::SizeU((UINT32)img->w, (UINT32)img->h);
-        UINT32 pitch = (UINT32)img->w * 4;
-        HRESULT hr = rt->CreateBitmap(size, img->bgra, pitch, props, &img->bmp);
-        if (FAILED(hr) || !img->bmp) {
-            return;
-        }
-        img->bmpRt = rt;
-        Free(nullptr, img->bgra);
-        img->bgra = nullptr;
-    }
-    D2D1_RECT_F dst = D2D1::RectF(b.x, b.y, b.x + b.w, b.y + b.h);
-    float op = ctx->opacity < 0 ? 0.f : ctx->opacity;
+    D2D1_RECT_F outer = D2D1::RectF(bounds.x, bounds.y, bounds.x + bounds.w,
+                                    bounds.y + bounds.h);
+    D2D1_RECT_F dst =
+        D2D1::RectF(imageBounds.x, imageBounds.y, imageBounds.x + imageBounds.w,
+                    imageBounds.y + imageBounds.h);
+    float op = ctx->opacity < 0 ? 0.f : (ctx->opacity > 1 ? 1.f : ctx->opacity);
+    ID2D1Layer* layer = nullptr;
+    ID2D1RoundedRectangleGeometry* geometry = nullptr;
     if (radius > 0) {
-
-        D2D1_BITMAP_BRUSH_PROPERTIES bp = D2D1::BitmapBrushProperties(
-            D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP,
-            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-        D2D1_BRUSH_PROPERTIES brp = D2D1::BrushProperties(
-            op,
-            D2D1::Matrix3x2F::Scale(img->w > 0 ? b.w / (float)img->w : 1.f,
-                                    img->h > 0 ? b.h / (float)img->h : 1.f) *
-                D2D1::Matrix3x2F::Translation(b.x, b.y));
-        ID2D1BitmapBrush* brush = nullptr;
-        if (SUCCEEDED(rt->CreateBitmapBrush(img->bmp, bp, brp, &brush)) &&
-            brush) {
-            float r = radius;
-            float half = (b.w < b.h ? b.w : b.h) * 0.5f;
-            if (r > half) {
-                r = half;
-            }
-            rt->FillRoundedRectangle(D2D1::RoundedRect(dst, r, r), brush);
-            gpui_paint_win_Rel(&brush);
-            return;
+        float half = (bounds.w < bounds.h ? bounds.w : bounds.h) * 0.5f;
+        float r = radius > half ? half : radius;
+        HRESULT hr = ctx->pa->d2d->CreateRoundedRectangleGeometry(
+            D2D1::RoundedRect(outer, r, r), &geometry);
+        if (SUCCEEDED(hr) && geometry && SUCCEEDED(rt->CreateLayer(&layer)) &&
+            layer) {
+            D2D1_LAYER_PARAMETERS params = {};
+            params.contentBounds = D2D1::InfiniteRect();
+            params.geometricMask = geometry;
+            params.maskAntialiasMode = D2D1_ANTIALIAS_MODE_PER_PRIMITIVE;
+            params.maskTransform = D2D1::IdentityMatrix();
+            params.opacity = 1.f;
+            params.layerOptions = D2D1_LAYER_OPTIONS_NONE;
+            rt->PushLayer(params, layer);
+        } else {
+            rt->PushAxisAlignedClip(outer, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         }
+    } else {
+        rt->PushAxisAlignedClip(outer, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     }
-    rt->DrawBitmap(img->bmp, dst, op, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    rt->DrawBitmap(bitmap, dst, op, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    if (layer) {
+        rt->PopLayer();
+    } else {
+        rt->PopAxisAlignedClip();
+    }
+    gpui_paint_win_Rel(&geometry);
+    gpui_paint_win_Rel(&layer);
 }
 
 static void ApplyLineHeight(IDWriteTextLayout* layout, float fontSize,
@@ -157401,8 +158281,8 @@ extern const int kShaderVSQuadSize = 2536;
 uint8_t kShaderVSQuadBytes[2536] = {};
 
 extern const char kShaderPSQuad95[] = R"GPUI95(
-.Ea8fIYe2]Y}oL3GEk")"/,Z<$   &fA U5!   2"  ((# 6vb    ,  Y90 U5!7u0^\  b"    V   0   HH    ww5vm*Q!qQ
-.* 6v"N^|&%  @@    (   a!  88  6v!       ?_  @@                      (   A!  +KP   (   C#  +K    4v5v
+.Ea8f(XP*W6{.XQ+o^ZEk)bk`5     l +K"   D$  00,   l"   P  PPi 6v"NkA'C! E%    -!  @   pp    C#5v\5##M-
+.5   %|^|&%  @@    (   a!  88  6v!       ?_  @@                      (   A!  +KP   (   C#  +K    4v5v
 .a"  U5    T   1Q! +K    4   b"  Kk5v5v7   A!  U5#   h(                        +K    (   TT;.pD1!+//G
 .&zq$L\!]To.Br2ki=bdbI3U5# 6v!   **  ``            ``#       0       U5?       &v5vi*    4v5v@!    c
 .   0   b"        \"      tt5v5v    &v5vi*    E+  j*    "   $   00"       5v5v_   Kk5v5v'   z:)   (
@@ -157414,47 +158294,53 @@ extern const char kShaderPSQuad95[] = R"GPUI95(
 .   "       00    !   ""# #C(           $$  +K    (l! Q1$ +K        $$  ``    (l! E%" +K        ""  +
 .K    $F  b"! @@        !!  z:    WH  Ww  U5        P   00  6v%$  u5  M-        8   ((  6v%$  M%  ""
 .      6v!   X   44\ +K'>!$r]pW`/RE/!IYe=,IkQ"N00A-Z4L#wg!:`c 7  U5    0   r2            P       +K'
-.   d$  A!        &   @   pp    /\8~j@&4i~DvoZgy_+"6O   4   o?  XXA ;KL U5k+rK      #   //  & (("
+.   d$  A!        &   @   pp    /\8~j@&4i~DvoZgy_+BVW   4   ME  XXA ;KL U5k+rK      #   //  & (("
 .     G'# " XxU5    MY* @@"!` Kk@ 0   <<X#6v#+00H(n*E%    '6@@Aa;KU5    ,$,KDcc 7v    ,$,KDcc ,K!   8
 .(8vDca ! !   ,$,KDcc ,K"   8(8vDc` 7v!   ,$,KyxWv+K!   ,$,KDcc ,K#   P(6vDcD!!     8$+KDcD!,K    h(
 .  )(  U5, r24$E%    +K+2@ P   >~VvU5!   &"+K{x7v      znc"C#  ``>*0 8   HH  cK$ 0     <<6v      4 A!
 .    ``# d$2 `     &f  "     p E%    6v' I)h b"    U5' (     C#U5      - P@C#U5        Kk&&U5      UK
 .A!A!  E%E%    ppW$  UP  "     p E%      $ I)I!b"    U5! (     @ @ z:    ? P@h(U5      e @@Ra  eEd<5
-. 2*E%A!  +K{*@ P   >~tx+K      h"    6v# d$T"` 0   003!8v    Euq*j*    = KkK++K      " "     uU# $ !
-.   2"b")f  "     T$6vEcD!!     [cF%A!  +K- M-D4r*E%    P5` 0   pp! Vv* E%b"  rM! !     8 b"    U5U5
-.          j*        44  q5$ (     ..+K      T A!    pp! #": `     3S! B"1 @     .n` ,K    S#G%A!  ``
-., r2r"E%    +K& 0     f&;K6v      U5NL7v      znc",L  U5    CKG%""! U5      +K{x7v      h<b"    ``x$
-.(     Q1  q5" ( "   S3+K      t A!    00# d$2 ` 0   z:  8v    ( (     6v& M-0(b"    ``x$(     ` @
-.                   ``# r2U%E%    +K@'0     ddKv      W!U5ML6v      t A!        B"A @     XX  !     H
-. b"`       E%B `     &f  -Ka       z:! "       $ |x6v      T A!&6        ! !     _   Gw( 0     Q16v
-.      jvA!A!    b"b"1 @     #C  a`@       A!A!    tt    x66v      T A!&6        J `     }]! ##1 @
-.     M-  !     )!b"    U5% (     22  i5> ( "   W7IK+K    h +K+K  wwP 0     $$+K      $ "           !
-.   8   pp  Gw@ 0     'G6v      t A!    pp! #"Z `     uU! C#9 @ 0   3S,!,K    0 ( ~>N2-35^^1.
-.         . KkAa+K+K    CKG%A!  +Kc"0 (   **  cK@ 0     ddKv+K    7?F%b"  ``2 M-z*j*      = @
-.         cK@ 0     'G6v      " "     34# d$2 ` @   &f  " !   p E%b"  +Ka5uUe%j*j*    Z ` #+        %
-. @ 0   A!A!    tt*"+Kf"7v      5!A!    uU  $ "   D$n*U5    6v6vu5U5      Z ` #+      6v6v    6v?   k
-.K@ 0     'G6v@@0       Q16v+K    >"+KqM  !     i!b"    U5# ( $   S3+K      -!U5ml7vU5    [cH%b"  +K$
-. b"A!+K{x6v      4 A!    E%E%  "   Z"WwYX  !     v"+K^y! KkIYJ Y)j*j*    qKA!""  @@95( "     &6
-.      0 U576+K      4(A!`   j*j*    uU/   \"  JJ        z*' $ "   {;Z500(       W7-K+K    *"6vnl6v+K
-.    QYz*    6v    P8E%b"  +K0'0     j*  {K0 0     /OZv+K    ( $ Q1fSDkk-| ThoL#(    6vKk66+K      t
-. A!    E%E%    A!f$  f"7v      t A!    uUU50     `   j*# f&b `     z:j*(     @   z:! "     ( (     A
-.%' I)l$b"""  ``W#(     W7-K+K    *"  ol6v+K    P8E%b"  +Kg*@     b"A!    Uu  ``?   A%    < ``ml6v+K
-.    P8E%$$  +KR!0 (       "6. ( &   W7-K@@0   (   A!`     jJ  Kk/   `"    X KkFF+K``    P8E%b"  +KR!
-.0 ,   aA  $L< 0 0   $$Ww      !   k+^5U5    h<M%    j*    %!``nl6vU5!   T<{*    +K    !Qn*j*    !Kf"
-.    E%    9 PP33U5+K    8,b"b"  ``h ( $   W7-KU5!   *"+KGc! 7v    P8E%$$  +KR!0 0   /O:v+K    B"+KFc
-.! 7v    P8E%b"  +KR5@ 0   &f  Gw0 0     <<6v+K    )!b"A!  +K& I)j"b"    U5% (     C#U5U5    Z ``Xw+K
-.      " "     uU" $     2"b")f! "     d$6vFcB!!     P8E%b"  +K=,@ 0   hh  'wu5@     XX  !     :"+Kd"
-.wvU5    i!b"    ``& f&F"B!@   @@D $ "   J*  l*! ` @ Kk&&U5      * `     b"b"6v!       NL7v      a5c"
-.,L  ``!   _gH%I)      U54$E%b"  +K+2@ P   >~Vv@@0   <   **  cK$ 0 (   /O6v+K    7?F%    ``# r2U%E%
-.    +K@'0     ddKv      )!``ML6v      t A!    E%E%6v)kS[j$0 x*$ $     a!j*j*    J `         Ww\ 0 (
-.   /Orv@@0   (   /Orv``    *"+KGc# 7v    T<F%    +KZ)@ 0   >~rv+K    >"+KGc# ,K    P E%    +KZ)@ 0
-.   >~rv+K    t +Khh  'w( 0     ` `     jJJ U5..  ( ' I)2*E%    +KX#0     OoUvU5    5!+Ke"7vU5    $ $
-.     U5' (     D$E%{U# $ !   I)  x*L%$     Tt\5      ,&` 0   ;[! a!lK`     &f! "     T$6vEcD!,K    !
-.Qm*      ? E%5} 6jV$   U   P       ``"   Z"  C#  uU    ,   A!                          $
-.                     M-  +K!   (
+. 2*E%A!  +K{*@ P   >~tx+K      h"    6v# d$T"` 0   003!8v    Euq*j*    Q U5"A+K      $ "         55
+.        ;[c!" "   A!  g"7v      8,b"`   U5U5  )I4>"d\bWJ9i!d>   ``- 88Y)j*E%    2'@     hh_ !     P8
+.E%A!  ``, r2r"E%    +Kx*@ (   XX` ,K    <$6vpM  !     )!b"    U5F%( (       |*# $ "   fFb500(   "
+.   W7;K@@@   $       q5& ( $   |<0K      M!A!`   U5# d$C!`     &f  " !   p E%b"  ``, r2z*j*      = @
+.     A!A!      )!+KcA6v+K    z"b"A!  U5U5                    R"  WP  " !   u%E%b"  +K1 0 (   RR  SK$
+. 0 (   f&+K+K      +Ke"7v      5!A!    uU  $ "       c{  !     )!b",L        5!A!      b"b"1 @     #
+.C  a`@       A!A!    ttB"+KFc# 7v    QYE%    +KZ)@ (   *j  gw\ 0 $   Y9Kv      xlb"A!  ``l$( "   i)
+.  q5$ (     @ @       = @ (   Q1+K!!- @     hh  'w26@     >~RvU5    :"+KEcD!,K    Eum*E%    ? E%i!6v
+.+K  ww8 0     $$+K      $ "         6v        pp  Gw( 0     <<6v      T A!    pp! #": `     3S! B"1
+. @     .n` ,K    S#G%A!  ``, r2r"E%    +K& 0     f&;K6v      U5NL7v      znc",L  U5    CKG%""! U5
+.      +K{x7v      h<b"    ``x$(     Q1  q5" ( "   S3+K      t A!    00# d$2 ` 0   z:  8v    ( (
+.     6v& M-0(b"    ``x$(     ` @                   ``# r2U%E%    +K@'0     ddKv      W!U5ML6v      t
+. A!        B"A @     XX  !     H b"`       E%B `     &f  -Ka       z:! "       $ |x6v      T A!&6
+.        ! !     _   Gw( 0     Q16v      jvA!A!    b"b"1 @     #C  a`@       A!A!    tt    x66v
+.      T A!&6        J `     }]! ##1 @     M-  !     )!b"    U5% (     22  i5> ( "   W7IK+K    h +K+K
+.  wwP 0     $$+K      $ "           !   8   pp  Gw@ 0     'G6v      t A!    pp! #"Z `     uU! C#9 @
+. 0   3S,!,K    0 ( ~>N2-35^^1.         . KkAa+K+K    CKG%A!  +Kc"0 (   **  cK@ 0     ddKv+K    7?F%b
+."  ``2 M-z*j*      = @         cK@ 0     'G6v      " "     34# d$2 ` @   &f  " !   p E%b"  +Ka5uUe%j
+.*j*    Z ` #+        % @ 0   A!A!    tt*"+Kf"7v      5!A!    uU  $ "   D$n*U5    6v6vu5U5      Z ` #
+.+      6v6v    6v?   kK@ 0     'G6v@@0       Q16v+K    >"+KqM  !     i!b"    U5# ( $   S3+K      -!U
+.5ml7vU5    [cH%b"  +K$ b"A!+K{x6v      4 A!    E%E%  "   Z"WwYX  !     v"+K^y! KkIYJ Y)j*j*    qKA!"
+."  @@95( "     &6      0 U576+K      4(A!`   j*j*    uU/   \"  JJ        z*' $ "   {;Z500(       W7-
+.K+K    *"6vnl6v+K    QYz*    6v    P8E%b"  +K0'0     j*  {K0 0     /OZv+K    ( $ Q1fSDkk-| ThoL#(
+.    6vKk66+K      t A!    E%E%    A!f$  f"7v      t A!    uUU50     `   j*# f&b `     z:j*(     @
+.   z:! "     ( (     A%' I)l$b"""  ``W#(     W7-K+K    *"  ol6v+K    P8E%b"  +Kg*@     b"A!    Uu  `
+.`?   A%    < ``ml6v+K    P8E%$$  +KR!0 (       "6. ( &   W7-K@@0   (   A!`     jJ  Kk/   `"    X KkF
+.F+K``    P8E%b"  +KR!0 ,   aA  $L< 0 0   $$Ww      !   k+^5U5    h<M%    j*    %!``nl6vU5!   T<{*
+.    +K    !Qn*j*    !Kf"    E%    9 PP33U5+K    8,b"b"  ``h ( $   W7-KU5!   *"+KGc! 7v    P8E%$$  +K
+.R!0 0   /O:v+K    B"+KFc! 7v    P8E%b"  +KR5@ 0   &f  Gw0 0     <<6v+K    )!b"A!  +K& I)j"b"    U5%
+. (     C#U5U5    Z ``Xw+K      " "     uU" $     2"b")f! "     d$6vFcB!!     P8E%b"  +K=,@ 0   hh  '
+.wu5@     XX  !     :"+Kd"wvU5    i!b"    ``& f&F"B!@   @@D $ "   J*  l*! ` @ Kk&&U5      * `     b"b
+."6v!       NL7v      a5c",L  ``!   _gH%I)      U54$E%b"  +K+2@ P   >~Vv@@0   <   **  cK$ 0 (   /O6v+
+.K    7?F%    ``# r2U%E%    +K@'0     ddKv      )!``ML6v      t A!    E%E%6v)kS[j$0 x*$ $     a!j*j*
+.    J `         Ww\ 0 (   /Orv@@0   (   /Orv``    *"+KGc# 7v    T<F%    +KZ)@ 0   >~rv+K    >"+KGc#
+. ,K    P E%    +KZ)@ 0   >~rv+K    t +Khh  'w( 0     ` `     jJJ U5..  ( ' I)2*E%    +KX#0     OoUvU
+.5    5!+Ke"7vU5    $ $     U5' (     D$E%{U# $ !   I)  x*L%$     Tt\5      ,&` 0   ;[! a!lK`     &f!
+. "     T$6vEcD!,K    !Qm*      ? E%5} 6jV$ 6v]   P       ``"   7#  C#  uU    ,   A!
+.                          $                     M-  +K"   (
 .                                                                         )GPUI95";
-extern const int kShaderPSQuadSize = 4328;
-uint8_t kShaderPSQuadBytes[4328] = {};
+extern const int kShaderPSQuadSize = 4864;
+uint8_t kShaderPSQuadBytes[4864] = {};
 
 extern const char kShaderVSTri95[] = R"GPUI95(
 .Ea8fCSyEPsc6SEvQy20tOd!64     6 +K"   D$  @@*   $"  VF  PP3 6v"NkAS/! E%    R   (   pp    C#4v\5##mM
@@ -157817,9 +158703,14 @@ struct D12Pipelines {
 };
 
 struct D12ImageSlot {
-    const Image* img = nullptr;
+    uint64_t imageGeneration = 0;
+    int frameIndex = 0;
     ID3D12Resource* tex = nullptr;
     int descriptor = -1;
+    uint64_t usedInCommands = 0;
+
+    UINT64 retireFence = 0;
+    bool retireOnSubmit = false;
 };
 
 struct D12Gpu {
@@ -157837,7 +158728,8 @@ struct D12Gpu {
     D3D12_RESOURCE_STATES atlasState = D3D12_RESOURCE_STATE_COPY_DEST;
     D12Pipelines pipes[4] = {};
     D12ImageSlot images[kD12ImageSlots] = {};
-    int imageCount = 0;
+    int imageNext = 0;
+    uint64_t commandGeneration = 0;
     IDWriteFactory* dwrite = nullptr;
     bool ready = false;
 };
@@ -158514,6 +159406,19 @@ static void D12Wait(UINT64 value) {
     }
 }
 
+static void D12CollectImageEvictions() {
+    UINT64 completed = gD12.fence ? gD12.fence->GetCompletedValue() : 0;
+    for (int i = 0; i < kD12ImageSlots; i++) {
+        D12ImageSlot* slot = &gD12.images[i];
+        if (slot->retireFence && completed >= slot->retireFence) {
+            gpui_paintgpu_win_Rel(&slot->tex);
+            slot->retireFence = 0;
+            slot->usedInCommands = 0;
+            slot->frameIndex = 0;
+        }
+    }
+}
+
 static void D12WaitTarget(D12Target* t) {
     if (!t) {
         return;
@@ -158723,7 +159628,12 @@ static bool D12MakeOffscreenSurfaces(D12Target* t) {
     return D12MakePipelines(1);
 }
 
-static bool D12BeginCommands(D12Target* t) {
+static bool D12BeginCommands(D12Target* t, bool continuing = false) {
+    D12CollectImageEvictions();
+    gD12.commandGeneration++;
+    if (gD12.commandGeneration == 0) {
+        gD12.commandGeneration++;
+    }
     t->frameIx = t->offscreen ? 0 : (int)t->swap->GetCurrentBackBufferIndex();
     D12Frame* f = &t->frames[t->frameIx];
     D12Wait(f->fenceValue);
@@ -158767,7 +159677,7 @@ static bool D12BeginCommands(D12Target* t) {
     D3D12_CPU_DESCRIPTOR_HANDLE rtv =
         t->offscreen ? D12Rtv(t, 3)
                      : (t->msaa ? D12Rtv(t, 3) : D12Rtv(t, t->frameIx));
-    if (!t->offscreen && !t->msaa) {
+    if (!continuing && !t->offscreen && !t->msaa) {
         D12Barrier(gD12.list, t->back[t->frameIx], D3D12_RESOURCE_STATE_PRESENT,
                    D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
@@ -158791,12 +159701,14 @@ static bool D12BeginCommands(D12Target* t) {
     gB.offscreen = t->offscreen;
     gB.insts.len = 0;
     gB.tris.len = 0;
-    gB.clipStack.len = 0;
-    gB.clip[0] = 0;
-    gB.clip[1] = 0;
-    gB.clip[2] = (float)t->pxW;
-    gB.clip[3] = (float)t->pxH;
-    gB.stats = FrameStats{};
+    if (!continuing) {
+        gB.clipStack.len = 0;
+        gB.clip[0] = 0;
+        gB.clip[1] = 0;
+        gB.clip[2] = (float)t->pxW;
+        gB.clip[3] = (float)t->pxH;
+        gB.stats = FrameStats{};
+    }
     return true;
 }
 
@@ -158812,9 +159724,17 @@ static bool D12FinishCommands(D12Target* t, bool wait) {
         return false;
     }
     f->fenceValue = value;
+    for (int i = 0; i < kD12ImageSlots; i++) {
+        D12ImageSlot* slot = &gD12.images[i];
+        if (slot->retireOnSubmit) {
+            slot->retireOnSubmit = false;
+            slot->retireFence = value;
+        }
+    }
     if (wait) {
         D12Wait(value);
         f->fenceValue = 0;
+        D12CollectImageEvictions();
     }
     return true;
 }
@@ -160065,7 +160985,8 @@ void PathStroke(PaintCtx* ctx, Path* path, float stroke, Rgba c, bool roundCaps,
 constexpr int kImageSlots = 32;
 
 struct ImageSlot {
-    const Image* img = nullptr;
+    uint64_t imageGeneration = 0;
+    int frameIndex = 0;
     ID3D11ShaderResourceView* srv = nullptr;
 };
 
@@ -160080,7 +161001,8 @@ static void FreeD3d11Gpu(bool removed) {
     }
     for (int i = 0; i < kImageSlots; i++) {
         gpui_paintgpu_win_Rel(&gImages[i].srv);
-        gImages[i].img = nullptr;
+        gImages[i].imageGeneration = 0;
+        gImages[i].frameIndex = 0;
     }
     gImageNext = 0;
     gpui_paintgpu_win_Rel(&g->white);
@@ -160116,7 +161038,7 @@ static void FreeD3d12Gpu(bool removed) {
             D12Wait(value);
         }
     }
-    for (int i = 0; i < g->imageCount; i++) {
+    for (int i = 0; i < kD12ImageSlots; i++) {
         gpui_paintgpu_win_Rel(&g->images[i].tex);
     }
     for (int i = 0; i < 4; i++) {
@@ -160142,6 +161064,32 @@ static void FreeD3d12Gpu(bool removed) {
 
     memset(&gGpu, 0, sizeof(gGpu));
     gGpu.clearTypeLevel = 1.f;
+}
+
+void PaintAppFree() {
+
+    FreeD3d11Gpu(false);
+    FreeD3d12Gpu(false);
+    VecReset(gB.insts);
+    VecReset(gB.tris);
+    VecReset(gB.clipStack);
+    gB.image = nullptr;
+    gB.image12 = -1;
+    gB.target = nullptr;
+    gB.pxW = 0;
+    gB.pxH = 0;
+    gB.offscreen = false;
+    gB.clip[0] = 0;
+    gB.clip[1] = 0;
+    gB.clip[2] = 1e6f;
+    gB.clip[3] = 1e6f;
+    gB.stats = {};
+    gLastStats = {};
+    gPresentedFrames = 0;
+    gDeviceGeneration++;
+    if (gDeviceGeneration == 0) {
+        gDeviceGeneration++;
+    }
 }
 
 static void RecoverDevice(PaintCtx* ctx, bool removed) {
@@ -160180,21 +161128,64 @@ static void RecoverDevice(PaintCtx* ctx, bool removed) {
     }
 }
 
-static int D12ImageDescriptor(const Image* img) {
-    for (int i = 0; i < gD12.imageCount; i++) {
-        if (gD12.images[i].img == img) {
+static int D12ImageDescriptor(const RenderImage* img, int frameIndex) {
+    uint64_t generation = RenderImageGeneration(img);
+    for (int i = 0; i < kD12ImageSlots; i++) {
+        if (gD12.images[i].imageGeneration == generation &&
+            gD12.images[i].frameIndex == frameIndex) {
+            gD12.images[i].usedInCommands = gD12.commandGeneration;
             return gD12.images[i].descriptor;
         }
     }
-    if (gD12.imageCount >= kD12ImageSlots) {
-        return -1;
-    }
     const uint8_t* bgra = nullptr;
     int w = 0, h = 0;
-    if (!PaintImagePixels(img, &bgra, &w, &h) || !bgra || w <= 0 || h <= 0) {
+    if (!PaintImagePixels(img, &bgra, &w, &h, frameIndex) || !bgra || w <= 0 ||
+        h <= 0) {
         return -1;
     }
-    D12ImageSlot* slot = &gD12.images[gD12.imageCount];
+    D12ImageSlot* slot = nullptr;
+    int slotIx = -1;
+    for (int i = 0; i < kD12ImageSlots; i++) {
+        int ix = (gD12.imageNext + i) % kD12ImageSlots;
+        D12ImageSlot* candidate = &gD12.images[ix];
+        if (!candidate->tex ||
+            candidate->usedInCommands != gD12.commandGeneration) {
+            slot = candidate;
+            slotIx = ix;
+            break;
+        }
+    }
+
+    if (!slot) {
+        Flush();
+        D12Target* t = (D12Target*)gB.target;
+        if (!t || !D12FinishCommands(t, true) || !D12BeginCommands(t, true)) {
+            return -1;
+        }
+        for (int i = 0; i < kD12ImageSlots; i++) {
+            int ix = (gD12.imageNext + i) % kD12ImageSlots;
+            D12ImageSlot* candidate = &gD12.images[ix];
+            if (!candidate->tex ||
+                candidate->usedInCommands != gD12.commandGeneration) {
+                slot = candidate;
+                slotIx = ix;
+                break;
+            }
+        }
+        if (!slot) {
+            return -1;
+        }
+    }
+    if (slot->tex) {
+
+        D12Wait(gD12.nextFence > 1 ? gD12.nextFence - 1 : 0);
+        gpui_paintgpu_win_Rel(&slot->tex);
+    }
+    slot->imageGeneration = 0;
+    slot->frameIndex = 0;
+    slot->retireFence = 0;
+    slot->retireOnSubmit = false;
+    slot->descriptor = 1 + slotIx;
     D3D12_HEAP_PROPERTIES heap = D12Heap(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_RESOURCE_DESC td = D12Texture(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, 1,
                                         D3D12_RESOURCE_FLAG_NONE);
@@ -160209,8 +161200,9 @@ static int D12ImageDescriptor(const Image* img) {
         gpui_paintgpu_win_Rel(&slot->tex);
         return -1;
     }
-    slot->img = img;
-    slot->descriptor = 1 + gD12.imageCount;
+    slot->imageGeneration = generation;
+    slot->frameIndex = frameIndex;
+    slot->usedInCommands = gD12.commandGeneration;
     D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
     sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     sv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -160218,19 +161210,70 @@ static int D12ImageDescriptor(const Image* img) {
     sv.Texture2D.MipLevels = 1;
     gD12.dev
         ->CreateShaderResourceView(slot->tex, &sv, D12SrvCpu(slot->descriptor));
-    gD12.imageCount++;
+    gD12.imageNext = (slotIx + 1) % kD12ImageSlots;
     return slot->descriptor;
 }
 
-static ID3D11ShaderResourceView* ImageSrv(const Image* img) {
+void RenderImageFree(uint64_t imageGeneration) {
+    if (!imageGeneration) {
+        return;
+    }
     for (int i = 0; i < kImageSlots; i++) {
-        if (gImages[i].img == img) {
+        ImageSlot* slot = &gImages[i];
+        if (slot->imageGeneration == imageGeneration) {
+            if (gB.image == slot->srv) {
+                FlushQuads();
+                gB.image = nullptr;
+            }
+            gpui_paintgpu_win_Rel(&slot->srv);
+            slot->imageGeneration = 0;
+            slot->frameIndex = 0;
+        }
+    }
+    for (int i = 0; i < kD12ImageSlots; i++) {
+        D12ImageSlot* slot = &gD12.images[i];
+        if (slot->imageGeneration != imageGeneration) {
+            continue;
+        }
+        slot->imageGeneration = 0;
+        if (gB.target && slot->usedInCommands == gD12.commandGeneration) {
+            slot->retireOnSubmit = true;
+        } else {
+            slot->retireFence = gD12.nextFence > 1 ? gD12.nextFence - 1 : 0;
+            if (!slot->retireFence) {
+                gpui_paintgpu_win_Rel(&slot->tex);
+                slot->usedInCommands = 0;
+                slot->frameIndex = 0;
+            }
+        }
+    }
+    D12CollectImageEvictions();
+}
+
+int RenderImageCacheCountForTest(uint64_t imageGeneration) {
+    int count = 0;
+    for (int i = 0; i < kImageSlots; i++) {
+        count += gImages[i].imageGeneration == imageGeneration ? 1 : 0;
+    }
+    for (int i = 0; i < kD12ImageSlots; i++) {
+        count += gD12.images[i].imageGeneration == imageGeneration ? 1 : 0;
+    }
+    return count;
+}
+
+static ID3D11ShaderResourceView* ImageSrv(const RenderImage* img,
+                                          int frameIndex) {
+    uint64_t generation = RenderImageGeneration(img);
+    for (int i = 0; i < kImageSlots; i++) {
+        if (gImages[i].imageGeneration == generation &&
+            gImages[i].frameIndex == frameIndex) {
             return gImages[i].srv;
         }
     }
     const uint8_t* bgra = nullptr;
     int w = 0, h = 0;
-    if (!PaintImagePixels(img, &bgra, &w, &h) || !bgra || w <= 0 || h <= 0) {
+    if (!PaintImagePixels(img, &bgra, &w, &h, frameIndex) || !bgra || w <= 0 ||
+        h <= 0) {
         return nullptr;
     }
     D3D11_TEXTURE2D_DESC td = {};
@@ -160258,18 +161301,33 @@ static ID3D11ShaderResourceView* ImageSrv(const Image* img) {
     ImageSlot* s = &gImages[gImageNext];
     gImageNext = (gImageNext + 1) % kImageSlots;
     gpui_paintgpu_win_Rel(&s->srv);
-    s->img = img;
+    s->imageGeneration = generation;
+    s->frameIndex = frameIndex;
     s->srv = srv;
     return srv;
 }
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
-    if (!gB.target || !img || b.w <= 0 || b.h <= 0) {
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius,
+                     bool grayscale) {
+    if (!gB.target || !img || bounds.w <= 0 || bounds.h <= 0 ||
+        imageBounds.w <= 0 || imageBounds.h <= 0) {
+        return;
+    }
+    float x0 = imageBounds.x > bounds.x ? imageBounds.x : bounds.x;
+    float y0 = imageBounds.y > bounds.y ? imageBounds.y : bounds.y;
+    float x1 = imageBounds.x + imageBounds.w;
+    float y1 = imageBounds.y + imageBounds.h;
+    float bx1 = bounds.x + bounds.w;
+    float by1 = bounds.y + bounds.h;
+    x1 = x1 < bx1 ? x1 : bx1;
+    y1 = y1 < by1 ? y1 : by1;
+    if (x1 <= x0 || y1 <= y0) {
         return;
     }
     EnsureQuadPhase();
     if (PaintD3d12On()) {
-        int descriptor = D12ImageDescriptor(img);
+        int descriptor = D12ImageDescriptor(img, frameIndex);
         if (descriptor < 0) {
             return;
         }
@@ -160278,7 +161336,7 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
             gB.image12 = descriptor;
         }
     } else {
-        ID3D11ShaderResourceView* srv = ImageSrv(img);
+        ID3D11ShaderResourceView* srv = ImageSrv(img, frameIndex);
         if (!srv) {
             return;
         }
@@ -160289,19 +161347,28 @@ void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius) {
         }
     }
     Inst i = {};
-    i.rect[0] = b.x;
-    i.rect[1] = b.y;
-    i.rect[2] = b.w;
-    i.rect[3] = b.h;
+    i.rect[0] = x0;
+    i.rect[1] = y0;
+    i.rect[2] = x1 - x0;
+    i.rect[3] = y1 - y0;
     float op = ctx->opacity < 0 ? 0 : (ctx->opacity > 1 ? 1 : ctx->opacity);
     i.color[3] = op;
     i.misc[2] = (float)kQuadImage;
 
-    float half = (b.w < b.h ? b.w : b.h) * 0.5f;
-    i.misc[0] = radius > half ? half : (radius > 0 ? radius : 0.f);
-    i.uv[2] = 1.f;
-    i.uv[3] = 1.f;
+    bool covers = x0 == bounds.x && y0 == bounds.y && x1 == bx1 && y1 == by1;
+    float half = (bounds.w < bounds.h ? bounds.w : bounds.h) * 0.5f;
+    i.misc[0] =
+        covers ? (radius > half ? half : (radius > 0 ? radius : 0.f)) : 0.f;
+    i.misc[1] = grayscale ? 1.f : 0.f;
+    i.uv[0] = (x0 - imageBounds.x) / imageBounds.w;
+    i.uv[1] = (y0 - imageBounds.y) / imageBounds.h;
+    i.uv[2] = (x1 - imageBounds.x) / imageBounds.w;
+    i.uv[3] = (y1 - imageBounds.y) / imageBounds.h;
     memcpy(i.clip, gB.clip, sizeof(i.clip));
+    if (i.clip[0] < bounds.x) i.clip[0] = bounds.x;
+    if (i.clip[1] < bounds.y) i.clip[1] = bounds.y;
+    if (i.clip[2] > bx1) i.clip[2] = bx1;
+    if (i.clip[3] > by1) i.clip[3] = by1;
     gpui_paintgpu_win_Push(i);
     FlushQuads();
     gB.image = nullptr;
@@ -160616,6 +161683,7 @@ int PaintGpuSamples() {
 
 namespace gpuw {
 
+void PaintAppFree() {}
 bool PaintTargetBegin(PaintCtx*, void*, int, int) {
     return false;
 }
@@ -160653,7 +161721,12 @@ void PathFillGradient(PaintCtx*, Path*, float, float, float, float, Rgba, Rgba,
                       float, float) {}
 void PathStroke(PaintCtx*, Path*, float, Rgba, bool, float, float) {}
 void PathRealize(PaintCtx*, Path*) {}
-void ImageDraw(PaintCtx*, Image*, Bounds, float) {}
+void RenderImageDraw(PaintCtx*, RenderImage*, Bounds, Bounds, int, float,
+                     bool) {}
+void RenderImageFree(uint64_t) {}
+int RenderImageCacheCountForTest(uint64_t) {
+    return 0;
+}
 void TextLayoutDraw(PaintCtx*, TextLayout*, float, float, Rgba, bool, float) {}
 static FrameStats gEmptyStats;
 const FrameStats& LastFrameStats() {
@@ -163681,8 +164754,8 @@ static NSString* KeyEquivalent(Str key) {
         }
     }
 
-    if ((key.s[0] == 'f' || key.s[0] == 'F') && key.len >= 2 &&
-        key.s[1] >= '0' && key.s[1] <= '9') {
+    if (StrStartsWithAny(key, "fF") && key.len >= 2 && key.s[1] >= '0' &&
+        key.s[1] <= '9') {
         int n = key.s[1] - '0';
         if (key.len == 3 && key.s[2] >= '0' && key.s[2] <= '9') {
             n = n * 10 + (key.s[2] - '0');

@@ -1201,6 +1201,7 @@ inline bool StrEqI(Str s1, Str s2) {
 bool StrEqI(Str s1, const char* s2);
 bool StrStartsWith(Str s, Str prefix);
 bool StrStartsWith(Str s, const char* prefix);
+bool StrStartsWithAny(Str s, const char* chars);
 inline bool StrStartsWithI(Str s, Str prefix) {
     if (prefix.len > s.len) {
         return false;
@@ -1225,9 +1226,9 @@ Str StrReplaceAll(Str value, Str from, Str to);
 
 using SeqStrings = const char*;
 
-Str SeqStrAt(SeqStrings strs, int off);
+Str SeqStrFirst(SeqStrings strs);
 
-bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut = nullptr);
+Str SeqStrNext(Str s);
 
 int SeqStrIndex(SeqStrings strs, Str toFind);
 int SeqStrIndexIS(SeqStrings strs, Str toFind);
@@ -1241,8 +1242,12 @@ int SeqStrCount(SeqStrings strs);
 void StrLowerAscii(char* s);
 
 struct StrBuilder : Vec<char> {
-    void Reset(Str s = {});
+    Arena* a = nullptr;
 
+    explicit StrBuilder(Arena* arena = nullptr) : a(arena) {}
+
+    void Reset(Str s = {});
+    bool Reserve(int cap);
     bool AppendChar(char c);
     bool Append(Str src);
     char RemoveAt(int idx, int count = 1);
@@ -1252,11 +1257,6 @@ struct StrBuilder : Vec<char> {
 };
 
 void StrBuilderUseExternalBuffer(StrBuilder& b, Str buf);
-
-bool StrBuilderReserve(Arena* a, StrBuilder& b, int cap);
-bool StrBuilderAppendChar(Arena* a, StrBuilder& b, char c);
-bool StrBuilderAppend(Arena* a, StrBuilder& b, Str s);
-Str StrBuilderTakeStr(Arena* a, StrBuilder& b);
 
 struct FmtArg {
     enum class Kind : uint8_t {
@@ -3875,6 +3875,50 @@ enum class ElKind : uint8_t {
     Image
 };
 
+enum class ObjectFit : uint8_t {
+    Fill,
+    Contain,
+    Cover,
+    ScaleDown,
+    None,
+};
+
+enum class ImageLoadState : uint8_t {
+    Loading,
+    Ready,
+    Failed,
+};
+
+struct PaintApp;
+struct RenderImage;
+
+enum class ImageSourceKind : uint8_t {
+    Resource,
+    Render,
+    Image,
+    Custom,
+};
+
+using ImageSourceLoader = ImageLoadState (*)(PaintApp* paint, void* user,
+                                             RenderImage** image);
+
+struct ImageSource {
+    Str resource = {};
+    const uint8_t* bytes = nullptr;
+    RenderImage* render = nullptr;
+    ImageSourceLoader loader = nullptr;
+    void* user = nullptr;
+    int bytesLen = 0;
+    ImageSourceKind kind = ImageSourceKind::Resource;
+
+    static ImageSource FromResource(Str resource);
+    static ImageSource FromRender(RenderImage* image);
+    static ImageSource FromImage(const uint8_t* bytes, int len);
+    static ImageSource FromCustom(ImageSourceLoader loader, void* user);
+};
+
+Bounds ObjectFitBounds(ObjectFit fit, Bounds bounds, Size imageSize);
+
 enum class Display : uint8_t {
     Block,
     Flex
@@ -4742,7 +4786,7 @@ struct El {
     Str iconPath;
     AccessibilityInfo accessibility = {};
 
-    Str imgSrc;
+    ImageSource imageSource;
     Func0 onClick;
 
     Listener listener;
@@ -4791,6 +4835,10 @@ struct El {
     El* first = nullptr;
     El* last = nullptr;
     El* next = nullptr;
+
+    El* imageLoading = nullptr;
+    El* imageFallback = nullptr;
+    El* imageReplacement = nullptr;
 
     const TextSpan* spans = nullptr;
 
@@ -4900,12 +4948,17 @@ struct El {
     unsigned int selJoin : 1 = false;
     unsigned int caretLineEndAffinity : 1 = false;
 
+    unsigned int imageGrayscale : 1 = false;
+
     IconName icon = IconName::None;
     ElKind kind = ElKind::Div;
     CursorKind cursor = CursorKind::Arrow;
     DispatchPhase mouseDownPhase = DispatchPhase::Bubble;
     DispatchPhase mouseUpPhase = DispatchPhase::Bubble;
     Axis sliderAxis = Axis::Horizontal;
+
+    ObjectFit objectFit = ObjectFit::Contain;
+    ImageLoadState imageLoadState = ImageLoadState::Loading;
 
     ScrollbarMode scrollMode = ScrollbarMode::Always;
 
@@ -4943,6 +4996,10 @@ struct El {
     El* ScrollMask(Axis axis);
 
     El* Opacity(float f);
+    El* Grayscale(bool grayscale = true);
+    El* ObjectFitMode(gpui::ObjectFit fit);
+    El* WithLoading(El* loading);
+    El* WithFallback(El* fallback);
     El* H(float v);
     El* SizeFull();
     El* MinH(float v);
@@ -5176,6 +5233,7 @@ El* IconEl(Arena* a, IconName name);
 El* IconEl(Arena* a, IconName name, float size);
 
 El* ImageEl(Arena* a, Str src, Str alt = {});
+El* ImageEl(Arena* a, ImageSource source, Str alt = {});
 El* ProgressEl(Arena* a, float value01to100, float barW, float barH);
 El* ChartEl(Arena* a, const float* ys, int n, Rgba stroke, Rgba fillTop,
             Rgba fillBot, int tickMargin);
@@ -7560,6 +7618,7 @@ struct DrawOpsTarget {
 
     Rgba color = {};
     float turns = 0;
+    bool grayscale = false;
 };
 
 bool ExecuteDrawOps(PaintCtx* ctx, const void* data, int dataLen,
@@ -7602,7 +7661,8 @@ bool SvgDraw(PaintCtx* ctx, Str assetPath, float x, float y, float size,
              Rgba color, float turns = 0);
 
 bool SvgDrawOps(PaintCtx* ctx, const uint8_t* ops, int len, float x, float y,
-                float w, float h, Rgba color, float turns = 0);
+                float w, float h, Rgba color, float turns = 0,
+                bool grayscale = false);
 
 bool SvgRasterize(PaintApp* pa, Str assetPath, int px, Rgba color,
                   uint8_t* outBgra);
@@ -7610,6 +7670,8 @@ bool SvgRasterize(PaintApp* pa, Str assetPath, int px, Rgba color,
 bool SvgToDrawOps(Str xml, DrawOpsBuilder* out);
 
 const uint8_t* SvgDrawOpsFor(Str assetPath, int* lenOut);
+
+void SvgCacheClear();
 
 Str IconNamePath(IconName name);
 }
@@ -24555,11 +24617,22 @@ const uint8_t* AssetIconForPath(Str assetPath, int* lenOut);
 
 namespace gpui {
 
-struct Image;
+struct RenderImage;
 
-Image* ImageForSrc(PaintApp* pa, Str src);
+RenderImage* ImageForSrc(PaintApp* pa, Str src);
+RenderImage* ImageForSource(PaintApp* pa, const ImageSource& source);
+
+ImageLoadState ImageSrcState(PaintApp* pa, Str src,
+                             double* loadingSeconds = nullptr);
+ImageLoadState ImageSourceState(PaintApp* pa, const ImageSource& source,
+                                double* loadingSeconds = nullptr);
+
+int ImageFrameIndex(RenderImage* image, bool reducedMotion,
+                    bool* wantsAnimation);
 
 const uint8_t* ImageVectorForSrc(Str src, int* lenOut);
+const uint8_t* ImageVectorForSource(PaintApp* pa, const ImageSource& source,
+                                    int* lenOut);
 
 bool ImageSrcIsLocal(Str src);
 
@@ -24747,16 +24820,33 @@ void PathStroke(PaintCtx* ctx, Path* p, float stroke, Rgba c,
 
 void PathRealize(PaintCtx* ctx, Path* p);
 
-struct Image;
+struct RenderImage;
 
-Image* ImageDecode(PaintApp* pa, const uint8_t* bytes, int len);
-void ImageFree(Image* img);
+enum class RenderImageStatus : uint8_t {
+    Loading,
+    Ready,
+    Failed,
+};
 
-uint64_t ImageGeneration(const Image* img);
+RenderImage* RenderImageDecode(PaintApp* pa, const uint8_t* bytes, int len);
 
-Size ImageSizePx(const Image* img);
+void RenderImageRetain(RenderImage* img);
+void RenderImageRelease(RenderImage* img);
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius = 0);
+uint64_t RenderImageGeneration(const RenderImage* img);
+RenderImageStatus RenderImageStatusGet(const RenderImage* img);
+
+Size RenderImageSizePx(const RenderImage* img, int frameIndex = 0);
+int RenderImageFrameCount(const RenderImage* img);
+int RenderImageFrameDurationMs(const RenderImage* img, int frameIndex);
+
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius = 0,
+                     bool grayscale = false);
+inline void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                            float radius = 0) {
+    RenderImageDraw(ctx, img, bounds, bounds, 0, radius, false);
+}
 
 struct TextLayout;
 
@@ -24804,12 +24894,14 @@ void PaintSharedD3dDeviceReset(PaintApp* pa);
 
 void* PaintSharedDwrite(PaintApp* pa);
 
-bool PaintImagePixels(const Image* img, const uint8_t** bgra, int* w, int* h);
+bool PaintImagePixels(const RenderImage* img, const uint8_t** bgra, int* w,
+                      int* h, int frameIndex);
 
 void* PaintTextLayoutNative(TextLayout* tl);
 
 namespace gpuw {
 
+void PaintAppFree();
 bool PaintTargetBegin(PaintCtx* ctx, void* native, int pxW, int pxH);
 bool PaintTargetBeginOffscreen(PaintCtx* ctx, int pxW, int pxH);
 bool PaintTargetEndOffscreen(PaintCtx* ctx, uint8_t* outBgra);
@@ -24845,7 +24937,12 @@ void PathStroke(PaintCtx* ctx, Path* p, float stroke, Rgba c, bool roundCaps,
                 float dx, float dy);
 void PathRealize(PaintCtx* ctx, Path* p);
 
-void ImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius);
+void RenderImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                     Bounds imageBounds, int frameIndex, float radius,
+                     bool grayscale);
+
+void RenderImageFree(uint64_t imageGeneration);
+int RenderImageCacheCountForTest(uint64_t imageGeneration);
 void TextLayoutDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
                     bool clip, float clipW);
 
@@ -25033,7 +25130,13 @@ void RecPathFillGradient(PaintCtx* ctx, Path* p, float x0, float y0, float x1,
 void RecPathStroke(PaintCtx* ctx, Path* p, float stroke, Rgba c,
                    bool roundCaps);
 
-void RecImageDraw(PaintCtx* ctx, Image* img, Bounds b, float radius);
+void RecImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                  Bounds imageBounds, int frameIndex, float radius,
+                  bool grayscale);
+inline void RecImageDraw(PaintCtx* ctx, RenderImage* img, Bounds bounds,
+                         float radius) {
+    RecImageDraw(ctx, img, bounds, bounds, 0, radius, false);
+}
 void RecTextDraw(PaintCtx* ctx, TextLayout* tl, float x, float y, Rgba c,
                  bool clip, float clipW);
 
@@ -25245,9 +25348,9 @@ Str AttrValue(Arena* a, const Node* node, Str name);
 
 namespace markdown {
 
-using base::SeqStrAdvance;
-using base::SeqStrAt;
+using base::SeqStrFirst;
 using base::SeqStrings;
+using base::SeqStrNext;
 using base::Str;
 
 constexpr int kAutolinkSchemeSizeMax = 32;
@@ -27405,7 +27508,7 @@ class SpecArena {
     bool CheckLive(SpecId id, SpecError* error) const;
     Component CopyComponent(const Component& component);
     SpecOp CopyOp(const SpecOp& op);
-    void WriteTree(Arena* a, StrBuilder* out, SpecId id, int depth) const;
+    void WriteTree(StrBuilder* out, SpecId id, int depth) const;
 };
 
 }

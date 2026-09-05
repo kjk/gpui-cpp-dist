@@ -1193,6 +1193,7 @@ inline bool StrEqI(Str s1, Str s2) {
 bool StrEqI(Str s1, const char* s2);
 bool StrStartsWith(Str s, Str prefix);
 bool StrStartsWith(Str s, const char* prefix);
+bool StrStartsWithAny(Str s, const char* chars);
 inline bool StrStartsWithI(Str s, Str prefix) {
     if (prefix.len > s.len) {
         return false;
@@ -1217,9 +1218,9 @@ Str StrReplaceAll(Str value, Str from, Str to);
 
 using SeqStrings = const char*;
 
-Str SeqStrAt(SeqStrings strs, int off);
+Str SeqStrFirst(SeqStrings strs);
 
-bool SeqStrAdvance(SeqStrings strs, int& off, int* idxInOut = nullptr);
+Str SeqStrNext(Str s);
 
 int SeqStrIndex(SeqStrings strs, Str toFind);
 int SeqStrIndexIS(SeqStrings strs, Str toFind);
@@ -1233,8 +1234,12 @@ int SeqStrCount(SeqStrings strs);
 void StrLowerAscii(char* s);
 
 struct StrBuilder : Vec<char> {
-    void Reset(Str s = {});
+    Arena* a = nullptr;
 
+    explicit StrBuilder(Arena* arena = nullptr) : a(arena) {}
+
+    void Reset(Str s = {});
+    bool Reserve(int cap);
     bool AppendChar(char c);
     bool Append(Str src);
     char RemoveAt(int idx, int count = 1);
@@ -1244,11 +1249,6 @@ struct StrBuilder : Vec<char> {
 };
 
 void StrBuilderUseExternalBuffer(StrBuilder& b, Str buf);
-
-bool StrBuilderReserve(Arena* a, StrBuilder& b, int cap);
-bool StrBuilderAppendChar(Arena* a, StrBuilder& b, char c);
-bool StrBuilderAppend(Arena* a, StrBuilder& b, Str s);
-Str StrBuilderTakeStr(Arena* a, StrBuilder& b);
 
 struct FmtArg {
     enum class Kind : uint8_t {
@@ -1326,9 +1326,9 @@ inline void logf(const char* format, const TArgs&... args) {
 
 namespace markdown {
 
-using base::SeqStrAdvance;
-using base::SeqStrAt;
+using base::SeqStrFirst;
 using base::SeqStrings;
+using base::SeqStrNext;
 using base::Str;
 
 constexpr int kAutolinkSchemeSizeMax = 32;
