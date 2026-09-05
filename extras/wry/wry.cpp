@@ -1329,7 +1329,9 @@ static void StrBuilderTerminate(StrBuilder& b) {
 }
 
 static char* StrBuilderEnsureCap(StrBuilder& b, int needed) {
-    char* els = VecReserve(b.a, b, needed);
+
+    Vec<char>& storage = b;
+    char* els = VecReserve(b.a, storage, needed);
     if (!els) {
         return nullptr;
     }
