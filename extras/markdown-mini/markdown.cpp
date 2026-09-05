@@ -13,6 +13,7 @@
 namespace base {
 
 static int VsnprintfUtf8(Str buf, const char* fmt, va_list args);
+static int VscprintfUtf8(const char* fmt, va_list args);
 
 float StrToFloatUnchecked(Str s) {
     if (!s.s || s.len <= 0) {
@@ -107,6 +108,20 @@ static void ArenaRelease(Arena* arena) {
     PlatMemRelease(arena, arena->reserved);
 }
 
+static bool ArenaPushWouldChainLocked(Arena* arena, uint64_t size,
+                                      uint64_t align) {
+    if (!arena || (arena->flags & ArenaFlagNoChain)) {
+
+        return false;
+    }
+    if (align == 0) {
+        align = 1;
+    }
+    Arena* current = arena->current;
+    uint64_t posPost = ArenaAlignPow2(current->pos, align) + size;
+    return current->reserved < posPost;
+}
+
 static void* ArenaPushLocked(Arena* arena, uint64_t size, uint64_t align,
                              bool zero) {
     if (!arena) {
@@ -126,8 +141,9 @@ static void* ArenaPushLocked(Arena* arena, uint64_t size, uint64_t align,
     }
 
     if (current->reserved < posPost && !(arena->flags & ArenaFlagNoChain)) {
-        uint64_t reserveChunkSize = current->reserveChunkSize;
-        uint64_t commitChunkSize = current->commitChunkSize;
+
+        uint64_t reserveChunkSize = arena->reserveChunkSize;
+        uint64_t commitChunkSize = arena->commitChunkSize;
         if (size + kArenaHeaderSize > reserveChunkSize) {
             reserveChunkSize = ArenaAlignPow2(size + kArenaHeaderSize,
                                               ArenaMax(align, PlatPageSize()));
@@ -400,6 +416,10 @@ ArenaStr ArenaStrDup(Arena* a, Str src) {
     VarintPut(dst, len);
     memcpy(dst + vlen, src.s, (size_t)len);
     dst[vlen + len] = 0;
+    if (at > UINT32_MAX) {
+
+        return kArenaStrNone;
+    }
     return (ArenaStr)at;
 }
 
@@ -435,8 +455,14 @@ ArenaStr ArenaStrAppend(Arena* a, ArenaStr s, Str more) {
     uint32_t nlen = len + (uint32_t)more.len;
     int nvlen = VarintSize(nlen);
 
-    uint64_t want = newest ? (uint64_t)(nvlen - vlen) + (uint64_t)more.len
-                           : (uint64_t)nvlen + nlen + 1;
+    uint64_t want = (uint64_t)nvlen + nlen + 1;
+
+    if (newest && !ArenaPushWouldChainLocked(
+                      a, (uint64_t)(nvlen - vlen) + (uint64_t)more.len, 1)) {
+        want = (uint64_t)(nvlen - vlen) + (uint64_t)more.len;
+    } else {
+        newest = false;
+    }
     char* dst = (char*)ArenaPushLocked(a, want, 1, false);
     uint64_t at = 0;
     if (dst) {
@@ -448,7 +474,7 @@ ArenaStr ArenaStrAppend(Arena* a, ArenaStr s, Str more) {
         return s;
     }
 
-    if (newest && at == used) {
+    if (newest) {
         if (nvlen != vlen) {
             memmove(p + nvlen, p + vlen, (size_t)len);
         }
@@ -464,6 +490,10 @@ ArenaStr ArenaStrAppend(Arena* a, ArenaStr s, Str more) {
     }
     memcpy(dst + nvlen + len, more.s, (size_t)more.len);
     dst[nvlen + nlen] = 0;
+    if (at > UINT32_MAX) {
+
+        return s;
+    }
     return (ArenaStr)at;
 }
 
@@ -490,7 +520,12 @@ uint32_t ArenaOffsetOf(Arena* a, const void* p) {
         if (at < lo || at >= lo + node->pos) {
             continue;
         }
-        return (uint32_t)(node->basePos + (uint64_t)(at - lo));
+        uint64_t off = node->basePos + (uint64_t)(at - lo);
+        if (off > UINT32_MAX) {
+
+            return kArenaPtrNone;
+        }
+        return (uint32_t)off;
     }
     return kArenaPtrNone;
 }
@@ -589,11 +624,15 @@ void DestroyTempArena() {
 }
 
 TempStr AllocStrTemp(int size) {
-    if (size == 0) {
+
+    if (size <= 0) {
         return {};
     }
     Arena* arena = GetTempArena();
     char* res = (char*)arena->Push((uint64_t)size + 1, 1, false);
+    if (!res) {
+        return {};
+    }
     res[size] = 0;
     return Str(res, size);
 }
@@ -1219,7 +1258,13 @@ Str StrReplaceAll(Str value, Str from, Str to) {
     if (count == 0) {
         return value;
     }
-    int resultLen = value.len + count * (to.len - from.len);
+
+    int64_t grown = (int64_t)value.len +
+                    (int64_t)count * ((int64_t)to.len - (int64_t)from.len);
+    if (grown < 0 || grown > (int64_t)INT_MAX - 1) {
+        return value;
+    }
+    int resultLen = (int)grown;
     Str result = AllocStrTemp(resultLen + 1);
     if (!result.s) {
         return value;
@@ -1463,6 +1508,10 @@ static void addRawStr(Fmt& fmt, int off, size_t n) {
     if (n == 0) {
         return;
     }
+    if (fmt.nInst >= (int)dimof(fmt.instructions)) {
+        fmt.isOk = false;
+        return;
+    }
     auto& i = fmt.instructions[fmt.nInst++];
     i.t = FmtArg::Kind::RawStr;
     i.rawOff = off;
@@ -1601,6 +1650,10 @@ static int parseArgDefPerc(Fmt& fmt, int off) {
     char conv = (off < f.len) ? f.s[off] : 0;
     off++;
 
+    if (fmt.nInst >= (int)dimof(fmt.instructions)) {
+        fmt.isOk = false;
+        return off;
+    }
     auto& i = fmt.instructions[fmt.nInst++];
     i.t = typeFromConv(conv);
     i.argNo = fmt.currPercArgNo++;
@@ -1697,43 +1750,56 @@ static bool ParseFormat(Fmt& o, Str fmtStr) {
     return true;
 }
 
-static Str bufFmt(Str buf, const char* fmt, ...) {
+static bool appendConv(Fmt& fmt, const char* spec, ...) {
     va_list args;
-    va_start(args, fmt);
-    int n = VsnprintfUtf8(buf, fmt, args);
+    va_start(args, spec);
+    va_list retry;
+    va_copy(retry, args);
+    Str bufS(fmt.buf, (int)dimof(fmt.buf));
+    int n = VsnprintfUtf8(bufS, spec, args);
     va_end(args);
-    buf.s[buf.len - 1] = 0;
-
-    if (n < 0 || n >= buf.len) {
-        n = (int)strlen(buf.s);
+    fmt.buf[dimof(fmt.buf) - 1] = 0;
+    if (n >= 0 && n < bufS.len) {
+        va_end(retry);
+        return fmt.res.Append(Str(fmt.buf, n));
     }
-    return Str(buf.s, n);
+
+    va_list write;
+    va_copy(write, retry);
+    int need = VscprintfUtf8(spec, retry);
+    va_end(retry);
+    bool ok = false;
+    StrBuilder& res = fmt.res;
+    int at = res.len;
+    if (need >= 0 && need < INT_MAX - at - 1 && res.Reserve(at + need + 1)) {
+        Str dst(res.els + at, need + 1);
+        if (VsnprintfUtf8(dst, spec, write) == need) {
+            res.len = at + need;
+            StrBuilderTerminate(res);
+            ok = true;
+        }
+    }
+    va_end(write);
+    return ok;
 }
 
-static void evalDefault(Fmt& fmt, const FmtArg& arg) {
-    Str buf(fmt.buf, (int)dimof(fmt.buf));
+static bool evalDefault(Fmt& fmt, const FmtArg& arg) {
     switch (arg.t) {
         case FmtArg::Kind::Char:
-            fmt.res.AppendChar(arg.c);
-            break;
+            return fmt.res.AppendChar(arg.c);
         case FmtArg::Kind::Int:
-            fmt.res.Append(bufFmt(buf, "%lld", (long long)arg.i));
-            break;
+            return appendConv(fmt, "%lld", (long long)arg.i);
         case FmtArg::Kind::Ptr:
-            fmt.res.Append(bufFmt(buf, "%p", arg.ptr));
-            break;
+            return appendConv(fmt, "%p", arg.ptr);
         case FmtArg::Kind::Float:
 
-            fmt.res.Append(bufFmt(buf, "%G", (double)arg.f));
-            break;
+            return appendConv(fmt, "%G", (double)arg.f);
         case FmtArg::Kind::Double:
-            fmt.res.Append(bufFmt(buf, "%G", arg.d));
-            break;
+            return appendConv(fmt, "%G", arg.d);
         case FmtArg::Kind::Str:
-            fmt.res.Append(arg.str);
-            break;
+            return fmt.res.Append(arg.str);
         default:
-            break;
+            return true;
     }
 }
 
@@ -1748,9 +1814,7 @@ static int64_t argToI64(const FmtArg& arg) {
     }
 }
 
-static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
-    Str bufS(fmt.buf, (int)dimof(fmt.buf));
-
+static bool evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
     if (inst.conv == 's' || inst.conv == 'S') {
         Str sv = arg.str;
         int slen = sv.len;
@@ -1761,16 +1825,22 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
         pad = std::max(pad, 0);
         if (!inst.leftJust) {
             for (int j = 0; j < pad; j++) {
-                fmt.res.AppendChar(' ');
+                if (!fmt.res.AppendChar(' ')) {
+                    return false;
+                }
             }
         }
-        fmt.res.Append(Str(sv.s, slen));
+        if (!fmt.res.Append(Str(sv.s, slen))) {
+            return false;
+        }
         if (inst.leftJust) {
             for (int j = 0; j < pad; j++) {
-                fmt.res.AppendChar(' ');
+                if (!fmt.res.AppendChar(' ')) {
+                    return false;
+                }
             }
         }
-        return;
+        return true;
     }
 
     char fbuf[64];
@@ -1781,8 +1851,7 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
     }
     char conv = inst.conv;
     int64_t ival = argToI64(arg);
-
-    Str out;
+    bool ok = true;
     switch (conv) {
         case 'd':
         case 'i':
@@ -1791,13 +1860,12 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
                 fbuf[k++] = 'l';
                 fbuf[k++] = 'd';
                 fbuf[k] = 0;
-                out = bufFmt(bufS, fbuf, (long long)ival);
+                ok = appendConv(fmt, fbuf, (long long)ival);
             } else {
                 fbuf[k++] = 'd';
                 fbuf[k] = 0;
-                out = bufFmt(bufS, fbuf, (int)ival);
+                ok = appendConv(fmt, fbuf, (int)ival);
             }
-            fmt.res.Append(out);
             break;
         case 'u':
         case 'o':
@@ -1808,19 +1876,18 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
                 fbuf[k++] = 'l';
                 fbuf[k++] = conv;
                 fbuf[k] = 0;
-                out = bufFmt(bufS, fbuf, (unsigned long long)ival);
+                ok = appendConv(fmt, fbuf, (unsigned long long)ival);
             } else {
                 fbuf[k++] = conv;
                 fbuf[k] = 0;
-                out =
-                    bufFmt(bufS, fbuf, (unsigned int)(unsigned long long)ival);
+                ok = appendConv(fmt, fbuf,
+                                (unsigned int)(unsigned long long)ival);
             }
-            fmt.res.Append(out);
             break;
         case 'c':
             fbuf[k++] = 'c';
             fbuf[k] = 0;
-            fmt.res.Append(bufFmt(bufS, fbuf, (int)ival));
+            ok = appendConv(fmt, fbuf, (int)ival);
             break;
         case 'f':
         case 'F':
@@ -1833,18 +1900,19 @@ static void evalPercInst(Fmt& fmt, const Inst& inst, const FmtArg& arg) {
             fbuf[k++] = conv;
             fbuf[k] = 0;
             double dv = (arg.t == FmtArg::Kind::Double) ? arg.d : (double)arg.f;
-            fmt.res.Append(bufFmt(bufS, fbuf, dv));
+            ok = appendConv(fmt, fbuf, dv);
         } break;
         case 'p': {
 
             const void* pv = (arg.t == FmtArg::Kind::Ptr)
                                  ? arg.ptr
                                  : (const void*)(intptr_t)ival;
-            fmt.res.Append(bufFmt(bufS, "%p", pv));
+            ok = appendConv(fmt, "%p", pv);
         } break;
         default:
             break;
     }
+    return ok;
 }
 
 bool Fmt::Eval(const FmtArg** args, int nArgs) {
@@ -1857,7 +1925,10 @@ bool Fmt::Eval(const FmtArg** args, int nArgs) {
         auto& inst = instructions[n];
 
         if (inst.t == FmtArg::Kind::RawStr) {
-            res.Append(Str(format.s + inst.rawOff, inst.sLen));
+            if (!res.Append(Str(format.s + inst.rawOff, inst.sLen))) {
+                isOk = false;
+                return false;
+            }
             continue;
         }
 
@@ -1873,10 +1944,12 @@ bool Fmt::Eval(const FmtArg** args, int nArgs) {
             return false;
         }
 
-        if (inst.t == FmtArg::Kind::Any) {
-            evalDefault(*this, arg);
-        } else {
-            evalPercInst(*this, inst, arg);
+        bool appended = (inst.t == FmtArg::Kind::Any)
+                            ? evalDefault(*this, arg)
+                            : evalPercInst(*this, inst, arg);
+        if (!appended) {
+            isOk = false;
+            return false;
         }
     }
     return true;
@@ -1936,6 +2009,18 @@ static _locale_t GetUtf8FormatLocale() {
     return l.loc;
 }
 #endif
+
+static int VscprintfUtf8(const char* fmt, va_list args) {
+#if defined(_MSC_VER)
+    _locale_t loc = GetUtf8FormatLocale();
+    if (loc) {
+        return _vscprintf_l(fmt, loc, args);
+    }
+    return _vscprintf(fmt, args);
+#else
+    return vsnprintf(nullptr, 0, fmt, args);
+#endif
+}
 
 static int VsnprintfUtf8(Str buf, const char* fmt, va_list args) {
 #if defined(_MSC_VER)
